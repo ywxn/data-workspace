@@ -1,0 +1,17 @@
+# Ignore data folder
+data/
+
+# Ignore logs folder
+logs/
+
+# Ignore config file
+config.json
+
+# Ignore virtual environment
+.venv/
+
+# Ignore pychache files
+__pycache__/
+
+# Ignore projects
+projects/
