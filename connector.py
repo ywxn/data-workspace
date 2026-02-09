@@ -354,6 +354,27 @@ class DatabaseConnector:
 
         inspector = inspect(self.engine)
         return inspector.get_table_names()
+    
+    def get_columns(self, table_name: str) -> list:
+        """
+        Get list of columns for a given table.
+
+        Args:
+            table_name: Name of the table
+        Returns:
+            List of column names
+        """
+        if not self.connection:
+            raise RuntimeError("No active database connection")
+
+        if not self.engine:
+            raise RuntimeError("No active SQLAlchemy engine. Call connect() first.")
+
+        from sqlalchemy import inspect
+
+        inspector = inspect(self.engine)
+        columns_info = inspector.get_columns(table_name)
+        return [col["name"] for col in columns_info]
 
     def close(self):
         """Close the database connection."""
