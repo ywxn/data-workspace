@@ -24,7 +24,7 @@ d:\Projects\
 ├── agents.py              # Multi-agent AI orchestration (Planner, CodeGen, Analyzer)
 ├── connector.py           # Database connectivity (SQLite, MySQL, PostgreSQL, etc.)
 ├── config.py              # Configuration and API key management
-├── config.json            # Persisted API keys and settings
+├── config.json            # Persisted API keys and settings (created on first run)
 ├── constants.py           # Application-wide constants
 ├── gui_backend.py         # Backend logic for GUI (projects, chat sessions)
 ├── gui_frontend.py        # PyQt6 GUI implementation
