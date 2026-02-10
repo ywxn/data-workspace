@@ -16,5 +16,5 @@ __pycache__/
 # Ignore projects
 projects/
 
-# Ignore testing.py
+# Ignore testing.py (contains sensitive information)
 testing.py
