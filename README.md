@@ -34,10 +34,10 @@ d:\Projects\
 ├── logger.py              # Centralized logging configuration
 ├── projects/              # Saved projects (JSON)
 ├── docs/                  # Documentation
-│   ├── README.md
 │   ├── INSTALLATION.md
 │   ├── API_SETUP.md
 │   └── DATABASE_SETUP.md
+├── README.md              # Project overview and documentation
 └── logs/                  # Application logs
 ```
 
