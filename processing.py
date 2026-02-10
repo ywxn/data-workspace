@@ -75,30 +75,78 @@ def _merge_on_keys(
         )
         merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
         return merged_df, "Merge failed, using vertical concatenation"
+    
+def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
+    """
+    Standardize data types across dataframes before merging.
+    Handles both object types and numeric type conflicts.
+    """
+    if not dataframes:
+        return dataframes
+    
+    standardized = []
+    
+    # First pass: identify target types for each column
+    column_types = {}
+    for df in dataframes:
+        for col in df.columns:
+            if col not in column_types:
+                column_types[col] = df[col].dtype
+            else:
+                # If types differ, prefer the more general type
+                existing_type = column_types[col]
+                current_type = df[col].dtype
+                if existing_type != current_type:
+                    # float64 ≻ int64 ≻ object
+                    if existing_type == 'object' or current_type == 'object':
+                        column_types[col] = 'object'
+                    elif 'float' in str(current_type) or 'float' in str(existing_type):
+                        column_types[col] = 'float64'
+    
+    # Second pass: convert all dataframes to use standardized types
+    for df in dataframes:
+        df_copy = df.copy()
+        for col in df_copy.columns:
+            target_type = column_types.get(col)
+            if target_type and df_copy[col].dtype != target_type:
+                try:
+                    if target_type == 'object':
+                        df_copy[col] = df_copy[col].astype('object')
+                    elif 'float' in str(target_type):
+                        df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+                    else:
+                        df_copy[col] = df_copy[col].astype(target_type)
+                except Exception as e:
+                    logger.warning(f"Could not convert {col} to {target_type}: {str(e)}")
+        standardized.append(df_copy)
+    
+    return standardized
 
 
 def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]:
     """
     Intelligently merge multiple dataframes using optimal strategy.
-
-    Strategy selection (in order of preference):
-    1. Vertical concatenation if schemas are identical
-    2. Vertical concatenation if column overlap is >70%
-    3. Horizontal merge on key columns if detected
-    4. Horizontal concatenation if no common columns
-    5. Vertical concatenation with mixed columns as fallback
+    
+    For tables with no universal common columns, performs sequential merges
+    on pairwise shared key columns.
 
     Args:
-        dataframes: List of DataFrames to merge
-
+        dataframes: List of pandas DataFrames to merge
     Returns:
         Tuple of (merged_dataframe, strategy_description)
+
+    Strategies:
+    1. Identical schemas: vertical concatenation
+    2. High overlap of columns: vertical concatenation
+    3. All tables share common key columns: horizontal merge on those keys
+    4. No universal common columns: sequential/chain merges on pairwise keys
+    5. No common columns at all: horizontal concatenation
     """
     if not dataframes:
         return pd.DataFrame(), "No dataframes provided"
 
-    # Filter out empty dataframes
     dataframes = [df for df in dataframes if not df.empty]
+    dataframes = _standardize_dtypes(dataframes)
 
     if not dataframes:
         return pd.DataFrame(), "All dataframes were empty"
@@ -106,14 +154,13 @@ def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]
     if len(dataframes) == 1:
         return dataframes[0], ""
 
-    # Analyze column structure
     all_column_sets = [set(df.columns) for df in dataframes]
     common_cols = set.intersection(*all_column_sets)
     all_cols_union = set.union(*all_column_sets)
 
     identical_schemas = all(cols == all_column_sets[0] for cols in all_column_sets)
 
-    # Strategy 1: Identical schemas - simple vertical concatenation
+    # Strategy 1: Identical schemas: simple vertical concatenation
     if identical_schemas:
         merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
         return merged_df, "Vertical concatenation (identical columns)"
@@ -125,22 +172,88 @@ def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]
         strategy = f"Vertical concatenation ({len(common_cols)} common columns, {overlap_ratio:.1%} overlap)"
         return merged_df, strategy
 
-    # Strategy 3: Has common columns and potential key columns - try horizontal merge
+    # Strategy 3: All tables share common key columns: horizontal merge
     if common_cols:
         key_candidates = _identify_key_columns(common_cols, all_cols_union)
+        
+        # Also include common ID columns that weren't caught
+        for col in common_cols:
+            if ('_id' in col.lower() or col.lower() in ['id']) and col not in key_candidates:
+                key_candidates.append(col)
+        
         if key_candidates:
-            logger.info(f"Attempting horizontal merge on keys: {key_candidates}")
+            logger.info(f"Attempting horizontal merge on universal keys: {key_candidates}")
             return _merge_on_keys(dataframes, key_candidates)
 
-    # Strategy 4: No common columns - horizontal concatenation
-    if not common_cols:
-        merged_df = pd.concat(dataframes, axis=1, ignore_index=False)
-        return merged_df, "Horizontal concatenation (no common columns)"
+    # Strategy 4: No universal common columns: try sequential/chain merges on pairwise keys
+    logger.info("No universal common columns detected. Attempting sequential merge strategy.")
+    merged_df = _sequential_merge(dataframes)
+    if merged_df is not None:
+        return merged_df, "Sequential merge on pairwise key columns"
 
-    # Strategy 5: Mixed columns - fallback to vertical concat
-    merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
-    cols_description = f"{len(common_cols)} common, {len(all_cols_union)} total"
-    return merged_df, f"Vertical concatenation with mixed columns ({cols_description})"
+    # Strategy 5: No common columns at all: horizontal concatenation
+    merged_df = pd.concat(dataframes, axis=1, ignore_index=False)
+    return merged_df, "Horizontal concatenation (no common columns)"
+
+
+def _sequential_merge(dataframes: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """
+    Merge multiple dataframes sequentially when they don't share universal keys.
+    
+    Example: If table1-table2 share key_a, and table2-table3 share key_b,
+    merge (table1 on key_a with table2) then (result on key_b with table3).
+    
+    Args:
+        dataframes: List of dataframes to merge
+        
+    Returns:
+        Merged dataframe or None if sequential merge fails
+    """
+    if not dataframes or len(dataframes) < 2:
+        return None
+    
+    try:
+        merged_df = dataframes[0]
+        merge_log = []
+        
+        for idx, right_df in enumerate(dataframes[1:], 1):
+            # Find shared key columns between current merged_df and next table
+            left_cols = set(merged_df.columns)
+            right_cols = set(right_df.columns)
+            
+            # Find potential key columns in both
+            shared_cols = left_cols & right_cols
+            key_candidates = [
+                col for col in shared_cols
+                if '_id' in col.lower() or col.lower() in ['id']
+            ]
+            
+            if not key_candidates:
+                # No ID columns shared, look for any common columns
+                key_candidates = list(shared_cols)
+            
+            if key_candidates:
+                logger.info(f"Merging table {idx} on keys: {key_candidates}")
+                merged_df = pd.merge(
+                    merged_df,
+                    right_df,
+                    on=key_candidates,
+                    how="outer",
+                    suffixes=("", f"_table{idx+1}"),
+                )
+                merge_log.append(f"Table {idx} merged on {', '.join(key_candidates)}")
+            else:
+                # No common columns with this table, skip merge
+                logger.warning(f"No common key columns found to merge table {idx}, using concatenation")
+                merged_df = pd.concat([merged_df, right_df], axis=1, ignore_index=False)
+                merge_log.append(f"Table {idx} concatenated (no common keys)")
+        
+        logger.info(f"Sequential merge completed: {'; '.join(merge_log)}")
+        return merged_df
+        
+    except Exception as e:
+        logger.error(f"Sequential merge failed: {str(e)}")
+        return None
 
 
 def load_data(
