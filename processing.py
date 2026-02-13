@@ -6,10 +6,17 @@ and merging of multiple dataframes using intelligent strategies.
 """
 
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 from connector import DatabaseConnector
 from logger import get_logger
 from typing import Any, Dict, List, Tuple, Optional
-from constants import MERGE_COMMON_COLS_THRESHOLD, MERGE_KEY_PATTERNS
+from constants import (
+    MERGE_COMMON_COLS_THRESHOLD,
+    MERGE_KEY_PATTERNS,
+    MERGE_MAX_ESTIMATED_ROWS,
+    MERGE_MAX_ROW_MULTIPLIER,
+    MERGE_WARN_DUPLICATE_RATE,
+)
 
 logger = get_logger(__name__)
 
@@ -57,8 +64,19 @@ def _merge_on_keys(
         Tuple of (merged_dataframe, strategy_description)
     """
     try:
+        dataframes = _normalize_key_dtypes(dataframes, key_columns)
         merged_df = dataframes[0]
         for idx, df in enumerate(dataframes[1:], 1):
+            safe_to_merge, reason = _preflight_merge(merged_df, df, key_columns)
+            if not safe_to_merge:
+                logger.warning(
+                    f"Preflight merge check failed on {key_columns}: {reason}. Using concatenation."
+                )
+                merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
+                return (
+                    merged_df,
+                    f"Merge skipped ({reason}), using vertical concatenation",
+                )
             merged_df = pd.merge(
                 merged_df,
                 df,
@@ -75,6 +93,102 @@ def _merge_on_keys(
         )
         merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
         return merged_df, "Merge failed, using vertical concatenation"
+
+
+def _normalize_key_dtypes(
+    dataframes: List[pd.DataFrame], key_columns: List[str]
+) -> List[pd.DataFrame]:
+    """
+    Normalize key column dtypes across dataframes to improve merge behavior.
+    """
+    if not dataframes:
+        return dataframes
+
+    normalized = []
+    for df in dataframes:
+        df_copy = df.copy()
+        for key in key_columns:
+            if key not in df_copy.columns:
+                continue
+            series_list = [d[key] for d in dataframes if key in d.columns]
+            if all(is_numeric_dtype(s) for s in series_list):
+                df_copy[key] = pd.to_numeric(df_copy[key], errors="coerce")
+            elif all(is_datetime64_any_dtype(s) for s in series_list):
+                df_copy[key] = pd.to_datetime(df_copy[key], errors="coerce")
+            else:
+                df_copy[key] = df_copy[key].astype("string")
+        normalized.append(df_copy)
+
+    return normalized
+
+
+def _estimate_outer_join_rows(
+    left: pd.DataFrame, right: pd.DataFrame, key_columns: List[str]
+) -> Optional[int]:
+    """
+    Estimate outer-join row count based on key frequency.
+    """
+    if not key_columns:
+        return None
+    try:
+        left_counts = left.groupby(key_columns, dropna=False).size().rename("left_count")
+        right_counts = right.groupby(key_columns, dropna=False).size().rename("right_count")
+
+        merged_counts = left_counts.to_frame().merge(
+            right_counts.to_frame(),
+            left_index=True,
+            right_index=True,
+            how="outer",
+        ).fillna(0)
+
+        left_count = merged_counts["left_count"].astype("int64")
+        right_count = merged_counts["right_count"].astype("int64")
+        both_mask = (left_count > 0) & (right_count > 0)
+
+        matched = (left_count[both_mask] * right_count[both_mask]).sum()
+        left_only = left_count[~both_mask].sum()
+        right_only = right_count[~both_mask].sum()
+        return int(matched + left_only + right_only)
+    except Exception as e:
+        logger.warning(f"Join size estimate failed: {str(e)}")
+        return None
+
+
+def _preflight_merge(
+    left: pd.DataFrame, right: pd.DataFrame, key_columns: List[str]
+) -> Tuple[bool, str]:
+    """
+    Validate merge safety with duplicate-rate and join-size checks.
+    """
+    left_rows = len(left)
+    right_rows = len(right)
+    if left_rows == 0 or right_rows == 0:
+        return True, "one side empty"
+
+    left_dup_rate = left.duplicated(subset=key_columns).mean()
+    right_dup_rate = right.duplicated(subset=key_columns).mean()
+
+    if left_dup_rate > MERGE_WARN_DUPLICATE_RATE or right_dup_rate > MERGE_WARN_DUPLICATE_RATE:
+        logger.warning(
+            "High duplicate rate on merge keys. "
+            f"Left: {left_dup_rate:.1%}, Right: {right_dup_rate:.1%}"
+        )
+
+    estimated_rows = _estimate_outer_join_rows(left, right, key_columns)
+    if estimated_rows is None:
+        return True, "no estimate"
+
+    max_side = max(left_rows, right_rows)
+    if (
+        estimated_rows > MERGE_MAX_ESTIMATED_ROWS
+        and estimated_rows > max_side * MERGE_MAX_ROW_MULTIPLIER
+    ):
+        return (
+            False,
+            f"estimated {estimated_rows} rows exceeds thresholds",
+        )
+
+    return True, "ok"
     
 def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
     """

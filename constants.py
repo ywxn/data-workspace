@@ -27,6 +27,9 @@ ODBC_DEFAULT_DRIVER = "ODBC Driver 17 for SQL Server"
 # Data Processing
 MERGE_COMMON_COLS_THRESHOLD = 0.7  # % of columns that must be common
 MERGE_KEY_PATTERNS = ["id", "key", "index", "name", "code"]
+MERGE_MAX_ESTIMATED_ROWS = 10_000_000
+MERGE_MAX_ROW_MULTIPLIER = 20
+MERGE_WARN_DUPLICATE_RATE = 0.1
 
 # DataFrame Preview
 SAMPLE_ROWS_DEFAULT = 5
