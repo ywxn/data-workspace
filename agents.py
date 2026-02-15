@@ -15,6 +15,7 @@ import os
 import json
 import re
 import altair as alt
+import numpy as np
 
 from config import ConfigManager
 from logger import get_logger
