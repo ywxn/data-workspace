@@ -114,7 +114,7 @@ Return ONLY executable Python code.
 No markdown.
 No explanations.
 """
-# TODO: check if this fixes image issue
+
 ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """You are a clear, practical data analyst explaining results from a DataFrame analysis to non-technical stakeholders.
 
 CONTEXT

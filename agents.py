@@ -501,7 +501,7 @@ class AIAgent:
         elif isinstance(result, str):
             return result
         elif isinstance(result, pd.DataFrame):
-            return result.to_markdown() or str(result) #TODO: Check
+            return result.to_markdown() or str(result)
         else:
             return str(result)
 
