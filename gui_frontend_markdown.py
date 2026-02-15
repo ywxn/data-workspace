@@ -1,8 +1,9 @@
 import sys
 import asyncio
 import pandas as pd
+import webbrowser
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QKeyEvent
+from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -28,11 +29,11 @@ from agents import AIAgent
 from processing import load_data
 from connector import DatabaseConnector
 from config import ConfigManager
+from PyQt6.QtGui import QPalette
 from typing import Optional, Dict, Any, List
 import random
 import os
-from constants import PLACEHOLDER_PROJECT_NAMES, PLACEHOLDER_PROJECT_DESCRIPTIONS
-
+from constants import PLACEHOLDER_PROJECT_NAMES, PLACEHOLDER_PROJECT_DESCRIPTIONS, DARK_THEME_STYLESHEET, LIGHT_THEME_STYLESHEET
 
 class MessageTextEdit(QTextEdit):
     """Custom QTextEdit that submits on Enter and adds newline on Shift+Enter"""
@@ -783,25 +784,97 @@ class DataWorkspaceGUI(QMainWindow):
         # Create menu bar
         menu_bar = self.menuBar()
 
-        # File menu
+        # ===== File Menu =====
         file_menu = menu_bar.addMenu("File")
 
-        # TODO: Add actions for New Project, Load Project, Save Project, Connect Additional Data Sources, Change API Host/Keys, etc. in the File menu
+        new_project_action = QAction("New Project", self)
+        new_project_action.setShortcut("Ctrl+N")
+        new_project_action.triggered.connect(self.new_project)
+        file_menu.addAction(new_project_action)
 
-        # Edit menu
+        load_project_action = QAction("Load Project...", self)
+        load_project_action.setShortcut("Ctrl+O")
+        load_project_action.triggered.connect(self.load_project_menu)
+        file_menu.addAction(load_project_action)
+
+        save_project_action = QAction("Save Project", self)
+        save_project_action.setShortcut("Ctrl+S")
+        save_project_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_project_action)
+
+        file_menu.addSeparator()
+
+        connect_data_action = QAction("Connect Data Source...", self)
+        connect_data_action.triggered.connect(self.connect_data_source)
+        file_menu.addAction(connect_data_action)
+
+        api_settings_action = QAction("API Settings...", self)
+        api_settings_action.triggered.connect(self.change_api_settings)
+        file_menu.addAction(api_settings_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # ===== Edit Menu =====
         edit_menu = menu_bar.addMenu("Edit")
 
-        # TODO: Add actions for Clear Conversation, Reset Workspace, etc. in the Edit menu
+        clear_conv_action = QAction("Clear Conversation", self)
+        clear_conv_action.triggered.connect(self.clear_conversation)
+        edit_menu.addAction(clear_conv_action)
 
-        # View menu
+        reset_ws_action = QAction("Reset Workspace", self)
+        reset_ws_action.triggered.connect(self.reset_workspace)
+        edit_menu.addAction(reset_ws_action)
+
+        # ===== View Menu =====
         view_menu = menu_bar.addMenu("View")
 
-        # TODO: Theme toggle (dark,light,system), font size, layout options, etc. in the View menu
+        # Theme selection with exclusive group
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
 
-        # Help menu
+        self.dark_theme_action = QAction("Dark Theme", self, checkable=True)
+        self.dark_theme_action.triggered.connect(lambda: self.set_theme("dark"))
+        self.theme_group.addAction(self.dark_theme_action)
+        view_menu.addAction(self.dark_theme_action)
+
+        self.light_theme_action = QAction("Light Theme", self, checkable=True)
+        self.light_theme_action.triggered.connect(lambda: self.set_theme("light"))
+        self.theme_group.addAction(self.light_theme_action)
+        view_menu.addAction(self.light_theme_action)
+
+        self.system_theme_action = QAction("System Theme", self, checkable=True)
+        self.system_theme_action.setChecked(True)
+        self.system_theme_action.triggered.connect(lambda: self.set_theme("system"))
+        self.theme_group.addAction(self.system_theme_action)
+        view_menu.addAction(self.system_theme_action)
+
+        view_menu.addSeparator()
+
+        inc_font_action = QAction("Increase Font Size", self)
+        inc_font_action.setShortcut("Ctrl++")
+        inc_font_action.triggered.connect(lambda: self.adjust_font(1))
+        view_menu.addAction(inc_font_action)
+
+        dec_font_action = QAction("Decrease Font Size", self)
+        dec_font_action.setShortcut("Ctrl+-")
+        dec_font_action.triggered.connect(lambda: self.adjust_font(-1))
+        view_menu.addAction(dec_font_action)
+
+        # ===== Help Menu =====
         help_menu = menu_bar.addMenu("Help")
 
-        # TODO: Add actions for Documentation (link to online docs)
+        docs_action = QAction("Documentation", self)
+        docs_action.triggered.connect(self.open_docs)
+        help_menu.addAction(docs_action)
+
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
 
         # Create central widget and main layout
         central_widget = QWidget()
@@ -905,6 +978,16 @@ class DataWorkspaceGUI(QMainWindow):
         self.dataframe: Optional[pd.DataFrame] = None
         self.is_running = False
         self.processing_marker = "**Assistant:** _Processing..._"
+        self.current_theme = "system"
+        
+        # Load saved theme preference or use system theme
+        config = ConfigManager.load_config()
+        saved_theme = config.get("theme", "system")
+        if saved_theme in ["dark", "light", "system"]:
+            self.current_theme = saved_theme
+        
+        # Apply theme on startup
+        self._apply_theme(self.current_theme)
 
     def on_chat_selected(self, item: QListWidgetItem):
         """Handle chat selection"""
@@ -1132,9 +1215,214 @@ class DataWorkspaceGUI(QMainWindow):
         if self.chat_id and self.backend.active_chat:
             self.backend.add_message_to_session(role, content)
 
+    # ========================
+    # Menu Action Handlers
+    # ========================
 
-def main():
-    """Main application entry point."""
+    def new_project(self):
+        """TODO: check functionality - Open dialog to create a new project"""
+        reply = QMessageBox.question(
+            self,
+            "New Project",
+            "Start a new project? Unsaved work in the current project will be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # Open the create project dialog
+            project_dialog = CreateProjectDialog(self)
+            if project_dialog.exec() == QDialog.DialogCode.Accepted:
+                self.backend = project_dialog.backend
+                self.project_id = project_dialog.project_id
+                
+                if self.project_id is not None:
+                    self.backend.load_project(self.project_id)
+                    if self.backend.active_project:
+                        chats = self.backend.active_project.get_all_chats()
+                        if chats:
+                            self.backend.active_chat = chats[0]
+                            self.chat_id = chats[0].session_id
+                
+                self.refresh_project_list()
+                QMessageBox.information(self, "New Project", "Project created successfully.")
+
+    def load_project_menu(self):
+        """TODO: check functionality - Load an existing project from disk"""
+        project_dialog = CreateProjectDialog(self)
+        # Simulate clicking the "Load Existing Project" button
+        project_dialog.open_load_dialog()
+        if project_dialog.exec() == QDialog.DialogCode.Accepted:
+            self.backend = project_dialog.backend
+            self.project_id = project_dialog.project_id
+            
+            if self.project_id is not None:
+                self.backend.load_project(self.project_id)
+                if self.backend.active_project:
+                    chats = self.backend.active_project.get_all_chats()
+                    if chats:
+                        self.backend.active_chat = chats[0]
+                        self.chat_id = chats[0].session_id
+            
+            self.refresh_project_list()
+
+    def connect_data_source(self):
+        """TODO: check functionality - Open dialog to connect to a data source"""
+        source_dialog = DataSourceDialog(self)
+        if source_dialog.exec() == QDialog.DialogCode.Accepted:
+            source_type = source_dialog.data_source_type
+            source_config = source_dialog.data_source_config
+            
+            if source_type and source_config:
+                try:
+                    if source_type == "database":
+                        # Database connection flow
+                        db_type = source_config.get("db_type")
+                        credentials = source_config.get("credentials", {})
+                        connector = DatabaseConnector()
+                        success, message = connector.connect(db_type, credentials)
+                        
+                        if success:
+                            tables = connector.get_tables()
+                            if tables:
+                                table_dialog = TableSelectionDialog(tables, self)
+                                if table_dialog.exec() == QDialog.DialogCode.Accepted:
+                                    selected_tables = table_dialog.get_selected_tables()
+                                    if selected_tables:
+                                        df, status = connector.get_table_data(selected_tables[0])
+                                        if df is not None:
+                                            self.backend.loaded_dataframe = df
+                                            self.dataframe = df
+                                            welcome_msg = self.backend.format_database_welcome_message(
+                                                db_type, selected_tables, df, status
+                                            )
+                                            self.conversation_display.setMarkdown(welcome_msg)
+                                            QMessageBox.information(self, "Data Loaded", "Database data loaded successfully.")
+                                        else:
+                                            QMessageBox.warning(self, "Load Failed", status)
+                        else:
+                            QMessageBox.warning(self, "Connection Failed", message)
+                    
+                    elif source_type == "file":
+                        # File load flow
+                        file_paths = source_config.get("file_paths", [])
+                        if file_paths:
+                            df, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
+                            if df is not None:
+                                self.dataframe = df
+                                self.conversation_display.setMarkdown(welcome_msg)
+                                QMessageBox.information(self, "Data Loaded", "Files loaded successfully.")
+                            else:
+                                QMessageBox.warning(self, "Load Failed", welcome_msg)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to load data: {str(e)}")
+
+    def change_api_settings(self):
+        """TODO: check functionality - Open API settings dialog"""
+        api_dialog = APIKeyConfigDialog(self)
+        if api_dialog.exec() == QDialog.DialogCode.Accepted:
+            QMessageBox.information(self, "API Settings", "API settings updated successfully.")
+
+    def clear_conversation(self):
+        """TODO: check functionality - Clear current conversation"""
+        reply = QMessageBox.question(
+            self,
+            "Clear Conversation",
+            "Clear all messages in the current chat?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.conversation_display.clear()
+            self.backend.clear_session()
+
+    def reset_workspace(self):
+        """TODO: check functionality - Reset the entire workspace"""
+        reply = QMessageBox.question(
+            self,
+            "Reset Workspace",
+            "Reset the entire workspace? This will clear all chats, projects, and data.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.backend = DataWorkspaceBackend()
+            self.project_id = None
+            self.chat_id = None
+            self.dataframe = None
+            self.conversation_display.clear()
+            self.query_input.clear()
+            self.chat_list.clear()
+            self.project_name_label.setText("No Project Loaded")
+            QMessageBox.information(self, "Workspace Reset", "Workspace has been reset.")
+
+    def set_theme(self, theme: str):
+        """TODO: check functionality - Set application theme"""
+        if theme in ["dark", "light", "system"]:
+            self.current_theme = theme
+            self._apply_theme(theme)
+            # Save theme preference
+            config = ConfigManager.load_config()
+            config["theme"] = theme
+            ConfigManager.save_config(config)
+            
+            theme_names = {"dark": "Dark", "light": "Light", "system": "System"}
+            QMessageBox.information(
+                self,
+                "Theme Changed",
+                f"{theme_names.get(theme, theme)} theme applied."
+            )
+
+    def _apply_theme(self, theme: str) -> None:
+        """Apply the selected theme to the application"""
+        if theme == "dark":
+            QApplication.instance().setStyleSheet(DARK_THEME_STYLESHEET)
+            self.dark_theme_action.setChecked(True)
+        elif theme == "light":
+            QApplication.instance().setStyleSheet(LIGHT_THEME_STYLESHEET)
+            self.light_theme_action.setChecked(True)
+        elif theme == "system":
+            # Reset to system theme (empty stylesheet)
+            QApplication.instance().setStyleSheet("")
+            self.system_theme_action.setChecked(True)
+
+    def adjust_font(self, delta: int):
+        """TODO: check functionality - Adjust font size"""
+        font = self.font()
+        current_size = font.pointSize()
+        new_size = max(6, current_size + delta)
+        font.setPointSize(new_size)
+        self.setFont(font)
+        QApplication.instance().setFont(font)
+
+    def open_docs(self):
+        """TODO: check functionality - Open documentation in default browser"""
+        docs_url = "https://github.com/ywxn/data-workspace/blob/main/README.md"
+        try:
+            webbrowser.open(docs_url)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Documentation",
+                f"Could not open browser. Please visit: {docs_url}\n\nError: {str(e)}",
+            )
+
+    def show_about(self):
+        """TODO: check functionality - Show about dialog"""
+        about_text = (
+            "<h2>AI Data Workspace</h2>"
+            "<p>Version 1.0.0</p>"
+            "<p>An intelligent application for data analysis and visualization with AI assistance.</p>"
+            "<p><b>Features:</b></p>"
+            "<ul>"
+            "<li>Multi-source data loading (CSV, Excel, Database)</li>"
+            "<li>AI-powered data analysis and insights</li>"
+            "<li>Project and chat session management</li>"
+            "<li>Multi-database support</li>"
+            "</ul>"
+            "<p>© 2026 AI Data Workspace. All rights reserved.</p>"
+        )
+        QMessageBox.about(self, "About AI Data Workspace", about_text)
+
+
+def start_application():
+    """Start the AI Data Workspace application."""
     app = QApplication(sys.argv)
 
     # Check if API keys are configured, if not prompt user to set them up
@@ -1331,5 +1619,6 @@ def main():
     sys.exit(app.exec())
 
 
-if __name__ == "__main__":
-    main()
+"""if __name__ == "__main__":
+    start_application()
+"""

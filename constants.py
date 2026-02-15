@@ -211,3 +211,287 @@ API_KEY_PATTERNS = {"openai": "sk-", "claude": "sk-ant-"}
 LOG_LEVEL_DEFAULT = "INFO"
 LOG_FILE_NAME = "app.log"
 LOG_DIR_NAME = "logs"
+
+
+
+
+# ============================================================================
+# Theme Stylesheets
+# ============================================================================
+
+DARK_THEME_STYLESHEET = """
+    QMainWindow, QDialog, QWidget {
+        background-color: #1e1e1e;
+        color: #e0e0e0;
+    }
+    
+    QLabel {
+        color: #e0e0e0;
+    }
+    
+    QTextEdit, QLineEdit {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        border: 1px solid #3d3d3d;
+        border-radius: 4px;
+        padding: 5px;
+    }
+    
+    QTextEdit:focus, QLineEdit:focus {
+        border: 1px solid #0d47a1;
+    }
+    
+    QPushButton {
+        background-color: #0d47a1;
+        color: #ffffff;
+        border: none;
+        border-radius: 4px;
+        padding: 5px 15px;
+        font-weight: bold;
+    }
+    
+    QPushButton:hover {
+        background-color: #1565c0;
+    }
+    
+    QPushButton:pressed {
+        background-color: #0d3f8f;
+    }
+    
+    QPushButton:disabled {
+        background-color: #424242;
+        color: #666666;
+    }
+    
+    QComboBox {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        border: 1px solid #3d3d3d;
+        border-radius: 4px;
+        padding: 5px;
+    }
+    
+    QComboBox::drop-down {
+        border: none;
+    }
+    
+    QComboBox QAbstractItemView {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        selection-background-color: #0d47a1;
+    }
+    
+    QListWidget {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        border: 1px solid #3d3d3d;
+        border-radius: 4px;
+    }
+    
+    QListWidget::item:selected {
+        background-color: #0d47a1;
+    }
+    
+    QListWidget::item:hover {
+        background-color: #383838;
+    }
+    
+    QScrollBar:vertical {
+        background-color: #2d2d2d;
+        width: 12px;
+        border: none;
+    }
+    
+    QScrollBar::handle:vertical {
+        background-color: #505050;
+        border-radius: 6px;
+        min-height: 20px;
+    }
+    
+    QScrollBar::handle:vertical:hover {
+        background-color: #606060;
+    }
+    
+    QScrollBar:horizontal {
+        background-color: #2d2d2d;
+        height: 12px;
+        border: none;
+    }
+    
+    QScrollBar::handle:horizontal {
+        background-color: #505050;
+        border-radius: 6px;
+        min-width: 20px;
+    }
+    
+    QScrollBar::handle:horizontal:hover {
+        background-color: #606060;
+    }
+    
+    QMenuBar {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        border-bottom: 1px solid #3d3d3d;
+    }
+    
+    QMenuBar::item:selected {
+        background-color: #0d47a1;
+    }
+    
+    QMenu {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        border: 1px solid #3d3d3d;
+    }
+    
+    QMenu::item:selected {
+        background-color: #0d47a1;
+    }
+    
+    QHeaderView::section {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        padding: 5px;
+        border: 1px solid #3d3d3d;
+    }
+"""
+
+LIGHT_THEME_STYLESHEET = """
+    QMainWindow, QDialog, QWidget {
+        background-color: #ffffff;
+        color: #000000;
+    }
+    
+    QLabel {
+        color: #000000;
+    }
+    
+    QTextEdit, QLineEdit {
+        background-color: #f5f5f5;
+        color: #000000;
+        border: 1px solid #d0d0d0;
+        border-radius: 4px;
+        padding: 5px;
+    }
+    
+    QTextEdit:focus, QLineEdit:focus {
+        border: 1px solid #1976d2;
+    }
+    
+    QPushButton {
+        background-color: #1976d2;
+        color: #ffffff;
+        border: none;
+        border-radius: 4px;
+        padding: 5px 15px;
+        font-weight: bold;
+    }
+    
+    QPushButton:hover {
+        background-color: #1565c0;
+    }
+    
+    QPushButton:pressed {
+        background-color: #0d47a1;
+    }
+    
+    QPushButton:disabled {
+        background-color: #e0e0e0;
+        color: #999999;
+    }
+    
+    QComboBox {
+        background-color: #f5f5f5;
+        color: #000000;
+        border: 1px solid #d0d0d0;
+        border-radius: 4px;
+        padding: 5px;
+    }
+    
+    QComboBox::drop-down {
+        border: none;
+    }
+    
+    QComboBox QAbstractItemView {
+        background-color: #ffffff;
+        color: #000000;
+        selection-background-color: #1976d2;
+    }
+    
+    QListWidget {
+        background-color: #f5f5f5;
+        color: #000000;
+        border: 1px solid #d0d0d0;
+        border-radius: 4px;
+    }
+    
+    QListWidget::item:selected {
+        background-color: #1976d2;
+        color: #ffffff;
+    }
+    
+    QListWidget::item:hover {
+        background-color: #eeeeee;
+    }
+    
+    QScrollBar:vertical {
+        background-color: #f5f5f5;
+        width: 12px;
+        border: none;
+    }
+    
+    QScrollBar::handle:vertical {
+        background-color: #c0c0c0;
+        border-radius: 6px;
+        min-height: 20px;
+    }
+    
+    QScrollBar::handle:vertical:hover {
+        background-color: #a0a0a0;
+    }
+    
+    QScrollBar:horizontal {
+        background-color: #f5f5f5;
+        height: 12px;
+        border: none;
+    }
+    
+    QScrollBar::handle:horizontal {
+        background-color: #c0c0c0;
+        border-radius: 6px;
+        min-width: 20px;
+    }
+    
+    QScrollBar::handle:horizontal:hover {
+        background-color: #a0a0a0;
+    }
+    
+    QMenuBar {
+        background-color: #f5f5f5;
+        color: #000000;
+        border-bottom: 1px solid #d0d0d0;
+    }
+    
+    QMenuBar::item:selected {
+        background-color: #1976d2;
+        color: #ffffff;
+    }
+    
+    QMenu {
+        background-color: #ffffff;
+        color: #000000;
+        border: 1px solid #d0d0d0;
+    }
+    
+    QMenu::item:selected {
+        background-color: #1976d2;
+        color: #ffffff;
+    }
+    
+    QHeaderView::section {
+        background-color: #f5f5f5;
+        color: #000000;
+        padding: 5px;
+        border: 1px solid #d0d0d0;
+    }
+"""
