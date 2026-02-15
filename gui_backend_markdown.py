@@ -632,13 +632,13 @@ class DataWorkspaceBackend:
             welcome_msg = self._join_markdown_blocks(
                 [
                     "### Data Loaded Successfully",
-                    f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n{tables_detail}",
+                    f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n\n{tables_detail}",
                     merge_info.strip(),
                     f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
                     f"**Columns:** {columns_list}",
-                    "Ready to analyze your data! Try asking questions like:\n"
-                    "- What insights can you find in this data?\n"
-                    "- Show me a summary of the data\n"
+                    "Ready to analyze your data! Try asking questions like:\n\n"
+                    "- What insights can you find in this data?\n\n"
+                    "- Show me a summary of the data\n\n"
                     "- What trends are visible?",
                 ]
             )
@@ -650,11 +650,54 @@ class DataWorkspaceBackend:
                     f"**Table:** {selected_tables}",
                     f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
                     f"**Columns:** {columns_list}",
-                    "Ready to analyze your data! Try asking questions like:\n"
-                    "- What insights can you find in this data?\n"
-                    "- Show me a summary of the data\n"
+                    "Ready to analyze your data! Try asking questions like:\n\n"
+                    "- What insights can you find in this data?\n\n"
+                    "- Show me a summary of the data\n\n"
                     "- What trends are visible?",
                 ]
             )
+
+        return welcome_msg
+
+
+    def format_file_welcome_message(
+        self,
+        file_paths: List[str],
+        merged_dataframe: pd.DataFrame,
+        status: str,
+    ) -> str:
+        """Format welcome message for file data loading."""
+        all_columns = merged_dataframe.columns.tolist()
+        if len(all_columns) <= 50:
+            columns_list = ", ".join(all_columns)
+        else:
+            first_cols = ", ".join(all_columns[:30])
+            last_cols = ", ".join(all_columns[-20:])
+            columns_list = (
+                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+            )
+
+        file_count = len(file_paths)
+        file_word = "file" if file_count == 1 else "files"
+        files_detail = "\n".join([f"- {fp.split('/')[-1].split(chr(92))[-1]}" for fp in file_paths])
+        
+        merge_info = ""
+        if file_count > 1 and "Merge strategy:" in status:
+            merge_strategy = status.split("Merge strategy:")[1].strip()
+            merge_info = f"**Merge Strategy:** {merge_strategy}\n"
+
+        welcome_msg = self._join_markdown_blocks(
+            [
+                "### Data Loaded Successfully",
+                f"**Loaded {file_count} {file_word}:**\n\n{files_detail}",
+                merge_info.strip(),
+                f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                f"**Columns:** {columns_list}",
+                "Ready to analyze your data! Try asking questions like:\n\n"
+                "- What insights can you find in this data?\n"
+                "- Show me a summary of the data\n"
+                "- What trends are visible?",
+            ]
+        )
 
         return welcome_msg

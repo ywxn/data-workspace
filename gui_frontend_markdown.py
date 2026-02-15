@@ -23,12 +23,14 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QDialogButtonBox,
     QMessageBox,
+    QMenu,
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
 from processing import load_data
 from connector import DatabaseConnector
 from config import ConfigManager
+from markdown_converter import markdown_to_html
 from PyQt6.QtGui import QPalette
 from typing import Optional, Dict, Any, List
 import random
@@ -908,6 +910,8 @@ class DataWorkspaceGUI(QMainWindow):
         # Chat list
         self.chat_list = QListWidget()
         self.chat_list.itemClicked.connect(self.on_chat_selected)
+        self.chat_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_list.customContextMenuRequested.connect(self.show_chat_context_menu)
         sidebar_layout.addWidget(self.chat_list)
 
         # New chat button
@@ -993,6 +997,107 @@ class DataWorkspaceGUI(QMainWindow):
         # Apply theme on startup
         self._apply_theme(self.current_theme)
 
+    def show_chat_context_menu(self, position):
+        """Show context menu for chat item on right-click"""
+        item = self.chat_list.itemAt(position)
+        if not item:
+            return
+
+        menu = QMenu(self)
+        
+        clear_action = menu.addAction("Clear Chat")
+        delete_action = menu.addAction("Delete Chat")
+        
+        action = menu.exec(self.chat_list.mapToGlobal(position))
+        
+        if action == clear_action:
+            self.clear_chat_action(item)
+        elif action == delete_action:
+            self.delete_chat_action(item)
+
+    def clear_chat_action(self, item: QListWidgetItem):
+        """Clear messages from a chat"""
+        chat_id = item.data(Qt.ItemDataRole.UserRole)
+        logger.info(f"User requested to clear chat (chat_id: {chat_id})")
+        
+        reply = QMessageBox.question(
+            self,
+            "Clear Chat",
+            "Clear all messages in this chat?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                success, msg = self.backend.delete_chat_session(chat_id)
+                if not success:
+                    logger.error(f"Failed to clear chat: {msg}")
+                    QMessageBox.warning(self, "Error", f"Failed to clear chat: {msg}")
+                    return
+                
+                # Create a new chat with the same name to replace it
+                chat_session = self.backend.active_project.get_chat(chat_id) if self.backend.active_project else None
+                if chat_session:
+                    original_title = chat_session.title
+                else:
+                    original_title = item.text()
+                
+                success, msg, new_chat_id = self.backend.create_chat_session(original_title)
+                if success:
+                    self.refresh_chat_list()
+                    logger.info(f"Chat cleared successfully. New chat_id: {new_chat_id}")
+                    
+                    # If the cleared chat was the currently selected one, update the display
+                    if self.chat_id == chat_id:
+                        logger.debug(f"Clearing display for current chat, updating to new chat_id: {new_chat_id}")
+                        self.chat_id = new_chat_id
+                        self.backend.load_chat_session(new_chat_id)
+                        self.conversation_display.clear()
+                        self.conversation_display.setHtml(markdown_to_html(
+                            "Chat cleared. Start typing to begin a new conversation."
+                        ))
+                else:
+                    logger.error(f"Failed to create replacement chat: {msg}")
+                    QMessageBox.warning(self, "Error", f"Failed to create replacement chat: {msg}")
+            except Exception as e:
+                logger.error(f"Error clearing chat: {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to clear chat: {str(e)}")
+        else:
+            logger.info("User cancelled chat clear")
+
+    def delete_chat_action(self, item: QListWidgetItem):
+        """Delete a chat entirely"""
+        chat_id = item.data(Qt.ItemDataRole.UserRole)
+        chat_title = item.text()
+        logger.info(f"User requested to delete chat (chat_id: {chat_id})")
+        
+        reply = QMessageBox.question(
+            self,
+            "Delete Chat",
+            f"Are you sure you want to delete '{chat_title}'? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                success, msg = self.backend.delete_chat_session(chat_id)
+                if not success:
+                    logger.error(f"Failed to delete chat: {msg}")
+                    QMessageBox.warning(self, "Error", f"Failed to delete chat: {msg}")
+                    return
+                
+                # Clear the conversation display if this was the active chat
+                if self.chat_id == chat_id:
+                    self.chat_id = None
+                    self.conversation_display.clear()
+                
+                # Refresh the chat list
+                self.refresh_chat_list()
+                logger.info(f"Chat deleted successfully: {chat_id}")
+            except Exception as e:
+                logger.error(f"Error deleting chat: {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to delete chat: {str(e)}")
+        else:
+            logger.info("User cancelled chat delete")
+
     def on_chat_selected(self, item: QListWidgetItem):
         """Handle chat selection"""
         self.chat_id = item.data(Qt.ItemDataRole.UserRole)
@@ -1004,14 +1109,14 @@ class DataWorkspaceGUI(QMainWindow):
                 history = self.backend.get_chat_history()
                 if history:
                     chat_history = self._format_chat_history(history)
-                    self.conversation_display.setMarkdown(chat_history)
+                    self.conversation_display.setHtml(markdown_to_html(chat_history))
                 else:
-                    self.conversation_display.setMarkdown(
+                    self.conversation_display.setHtml(markdown_to_html(
                         "No chat history yet. Start typing to begin the conversation."
-                    )
+                    ))
             else:
                 logger.warning(f"Failed to load chat session: {self.chat_id}")
-                self.conversation_display.setMarkdown("Failed to load chat.")
+                self.conversation_display.setHtml(markdown_to_html("Failed to load chat."))
 
         # Highlight the selected chat
         try:
@@ -1046,9 +1151,9 @@ class DataWorkspaceGUI(QMainWindow):
         if chat_id:
             self.chat_id = chat_id
             self.conversation_display.clear()
-            self.conversation_display.setMarkdown(
+            self.conversation_display.setHtml(markdown_to_html(
                 "New chat created. Start typing to begin the conversation."
-            )
+            ))
 
     def _format_chat_history(self, messages: List[Dict[str, str]]) -> str:
         """Format chat messages as Markdown"""
@@ -1098,7 +1203,7 @@ class DataWorkspaceGUI(QMainWindow):
                 if segment
             ]
         )
-        self.conversation_display.setMarkdown(combined)
+        self.conversation_display.setHtml(markdown_to_html(combined))
 
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
@@ -1132,7 +1237,7 @@ class DataWorkspaceGUI(QMainWindow):
             cancelled_md = "**Status:** _Query cancelled by user._"
             if self.processing_marker in current_md:
                 current_md = current_md.replace(self.processing_marker, cancelled_md)
-                self.conversation_display.setMarkdown(current_md)
+                self.conversation_display.setHtml(markdown_to_html(current_md))
 
         self.is_running = False
         self.submit_button.setText("Send")
@@ -1149,16 +1254,16 @@ class DataWorkspaceGUI(QMainWindow):
 
         # Replace the "Processing..." message with the actual result
         current_md = self.conversation_display.toMarkdown()
-        result_md = f"**Assistant:** {formatted_result}"
+        result_md = f"**Assistant:**\n{formatted_result}"
 
         if self.processing_marker in current_md:
             current_md = current_md.replace(self.processing_marker, result_md)
-            self.conversation_display.setMarkdown(current_md)
+            self.conversation_display.setHtml(markdown_to_html(current_md))
         else:
             combined = "\n\n".join(
                 [segment for segment in [current_md.strip(), result_md] if segment]
             )
-            self.conversation_display.setMarkdown(combined)
+            self.conversation_display.setHtml(markdown_to_html(combined))
 
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
@@ -1171,17 +1276,17 @@ class DataWorkspaceGUI(QMainWindow):
     def display_error(self, error: str):
         """Display error message"""
         logger.error(f"Query error: {error}")
-        error_md = f"**Error:** {error}"
+        error_md = f"**Error:**\n{error}"
         current_md = self.conversation_display.toMarkdown()
 
         if self.processing_marker in current_md:
             current_md = current_md.replace(self.processing_marker, error_md)
-            self.conversation_display.setMarkdown(current_md)
+            self.conversation_display.setHtml(markdown_to_html(current_md))
         else:
             combined = "\n\n".join(
                 [segment for segment in [current_md.strip(), error_md] if segment]
             )
-            self.conversation_display.setMarkdown(combined)
+            self.conversation_display.setHtml(markdown_to_html(combined))
 
     def clear_fields(self):
         """Clear conversation"""
@@ -1280,11 +1385,11 @@ class DataWorkspaceGUI(QMainWindow):
                                     history = self.backend.get_chat_history()
                                     if history:
                                         chat_history = self._format_chat_history(history)
-                                        self.conversation_display.setMarkdown(chat_history)
+                                        self.conversation_display.setHtml(markdown_to_html(chat_history))
                                     else:
-                                        self.conversation_display.setMarkdown(
+                                        self.conversation_display.setHtml(markdown_to_html(
                                             "No chat history yet. Start typing to begin the conversation."
-                                        )
+                                        ))
                     
                     self.refresh_project_list()
                     # Select the first chat in the list
@@ -1324,11 +1429,11 @@ class DataWorkspaceGUI(QMainWindow):
                                 history = self.backend.get_chat_history()
                                 if history:
                                     chat_history = self._format_chat_history(history)
-                                    self.conversation_display.setMarkdown(chat_history)
+                                    self.conversation_display.setHtml(markdown_to_html(chat_history))
                                 else:
-                                    self.conversation_display.setMarkdown(
+                                    self.conversation_display.setHtml(markdown_to_html(
                                         "No chat history yet. Start typing to begin the conversation."
-                                    )
+                                    ))
                 
                 self.refresh_project_list()
                 # Select the first chat in the list
@@ -1384,7 +1489,7 @@ class DataWorkspaceGUI(QMainWindow):
                                             welcome_msg = self.backend.format_database_welcome_message(
                                                 db_type, selected_tables, df, status
                                             )
-                                            self.conversation_display.setMarkdown(welcome_msg)
+                                            self.conversation_display.setHtml(markdown_to_html(welcome_msg))
                                             QMessageBox.information(self, "Data Loaded", "Database data loaded successfully.")
                                         else:
                                             logger.warning(f"Failed to load data from database: {status}")
@@ -1402,7 +1507,7 @@ class DataWorkspaceGUI(QMainWindow):
                             if df is not None:
                                 self.dataframe = df
                                 logger.info(f"Successfully loaded {len(file_paths)} file(s), data shape: {df.shape}")
-                                self.conversation_display.setMarkdown(welcome_msg)
+                                self.conversation_display.setHtml(markdown_to_html(welcome_msg))
                                 QMessageBox.information(self, "Data Loaded", "Files loaded successfully.")
                             else:
                                 logger.warning(f"Failed to load files: {welcome_msg}")
@@ -1614,7 +1719,7 @@ def start_application():
                     history = window.backend.get_chat_history()
                     if history:
                         chat_history = window._format_chat_history(history)
-                        window.conversation_display.setMarkdown(chat_history)
+                        window.conversation_display.setHtml(markdown_to_html(chat_history))
 
     # Refresh the UI with project and chat info
     window.refresh_project_list()
@@ -1651,13 +1756,13 @@ def start_application():
                         df,
                         "Data loaded from project",
                     )
-                    window.conversation_display.setMarkdown(welcome_msg)
+                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                 elif ds.get("file_paths"):
                     # File source
                     welcome_msg = window.backend.load_file_data_with_ui(
                         ds.get("file_paths", [])
                     )[1]
-                    window.conversation_display.setMarkdown(welcome_msg)
+                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                     window.dataframe = df
             window.dataframe = df
     else:
@@ -1753,12 +1858,12 @@ def start_application():
                     welcome_msg = window.backend.format_database_welcome_message(
                         db_type, selected_tables, merged_dataframe, status
                     )
-                    window.conversation_display.setMarkdown(welcome_msg)
+                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                 else:
-                    window.conversation_display.setMarkdown(
+                    window.conversation_display.setHtml(markdown_to_html(
                         f"Connected to {db_type} database, but no data loaded.\n"
                         f"{status}\nYou can still ask questions!"
-                    )
+                    ))
 
             elif source_type == "file":
                 file_paths = source_config["file_paths"]
@@ -1774,10 +1879,10 @@ def start_application():
                         window.backend.active_project.data_source = {
                             "file_paths": file_paths
                         }
-                    window.conversation_display.setMarkdown(welcome_msg)
+                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                 else:
                     logger.error(f"Failed to load file data: {welcome_msg}")
-                    window.conversation_display.setMarkdown(welcome_msg)
+                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                     QMessageBox.critical(
                         window, "Data Loading Error", "Failed to load any files."
                     )
@@ -1794,7 +1899,7 @@ def start_application():
             error_msg = (
                 "### Error Loading Data\n" f"{str(e)}\n" "Please restart and try again."
             )
-            window.conversation_display.setMarkdown(error_msg)
+            window.conversation_display.setHtml(markdown_to_html(error_msg))
 
     logger.info("Displaying main application window")
     window.show()
