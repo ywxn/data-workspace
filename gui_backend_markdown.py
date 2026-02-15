@@ -536,7 +536,11 @@ class DataWorkspaceBackend:
                 errors.append(f"Error loading {file_path}: {str(e)}")
 
         if not dataframes:
-            error_detail = "\n".join([f"- {err}" for err in errors]) if errors else "- Unknown error"
+            error_detail = (
+                "\n".join([f"- {err}" for err in errors])
+                if errors
+                else "- Unknown error"
+            )
             return (
                 None,
                 f"Failed to load any files:\n{error_detail}",
@@ -562,9 +566,7 @@ class DataWorkspaceBackend:
             ]
         )
 
-        merge_info = (
-            f"**Merge Strategy:** {merge_strategy}\n" if merge_strategy else ""
-        )
+        merge_info = f"**Merge Strategy:** {merge_strategy}\n" if merge_strategy else ""
         file_word = "file" if len(file_info) == 1 else "files"
 
         welcome_msg = (

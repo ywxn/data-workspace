@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class NLPTableSelector:
     """
     Production-grade NLP-based table selector using semantic embeddings.
-    
+
     Architecture:
     - Builds semantic table documents (table name + columns + synonyms)
     - Embeds tables once at init (cached)
@@ -18,7 +18,7 @@ class NLPTableSelector:
     - Scores via cosine similarity + softmax
     - Applies confidence thresholds and tie detection
     """
-    
+
     def __init__(
         self,
         db_connector: DatabaseConnector,
@@ -30,7 +30,7 @@ class NLPTableSelector:
     ):
         """
         Initialize the NLP table selector.
-        
+
         Args:
             db_connector: DatabaseConnector instance
             model_name: SentenceTransformer model (default: all-MiniLM-L6-v2)
@@ -46,7 +46,7 @@ class NLPTableSelector:
                 "sentence-transformers not installed. "
                 "Install with: pip install sentence-transformers"
             )
-        
+
         self.db_connector = db_connector
         self.model = SentenceTransformer(model_name)
         self.model_name = model_name
@@ -54,68 +54,68 @@ class NLPTableSelector:
         self.tie_threshold = tie_threshold
         self.table_synonyms = table_synonyms or {}
         self.column_comments = column_comments or {}
-        
+
         # Build and embed table documents
         self.table_docs = self._build_table_documents()
         self.table_embeddings: Dict[str, np.ndarray] = {}
         self.schema_hash = ""
         self._embed_tables()
-        
+
         logger.info(
             f"NLPTableSelector initialized with {len(self.table_docs)} tables. "
             f"Model: {model_name}, Threshold: {confidence_threshold}"
         )
-    
+
     def _build_table_documents(self) -> Dict[str, str]:
         """
         Build semantic documents for each table.
-        
+
         Document includes:
         - Table name
         - Column names
         - Column comments (if available)
         - Business synonyms (if provided)
-        
+
         Returns:
             Dict mapping table_name → semantic document string
         """
         table_docs = {}
         tables = self.db_connector.get_tables()
-        
+
         for table in tables:
             doc_parts = [table]  # Start with table name
-            
+
             # Add business synonyms if available
             if table in self.table_synonyms:
                 doc_parts.extend(self.table_synonyms[table])
-            
+
             # Add column names and comments
             columns = self.db_connector.get_columns(table)
             doc_parts.extend(columns)
-            
+
             if table in self.column_comments:
                 for col in columns:
                     if col in self.column_comments[table]:
                         doc_parts.append(self.column_comments[table][col])
-            
+
             # Join into single document string
             document = " ".join(doc_parts)
             table_docs[table] = document
             logger.debug(f"Built document for table '{table}': {document[:100]}...")
-        
+
         return table_docs
-    
+
     def _embed_tables(self):
         """Embed all table documents and compute schema hash."""
         try:
             for table_name, doc in self.table_docs.items():
                 embedding = self.model.encode(doc, normalize_embeddings=True)
                 self.table_embeddings[table_name] = embedding
-            
+
             # Compute schema hash for versioning
             schema_str = "|".join(sorted(self.table_docs.keys()))
             self.schema_hash = hashlib.sha256(schema_str.encode()).hexdigest()[:16]
-            
+
             logger.info(
                 f"Embedded {len(self.table_embeddings)} tables. "
                 f"Schema hash: {self.schema_hash}"
@@ -123,20 +123,20 @@ class NLPTableSelector:
         except Exception as e:
             logger.error(f"Failed to embed tables: {str(e)}")
             raise
-    
+
     def _softmax(self, scores: np.ndarray) -> np.ndarray:
         """
         Compute softmax probabilities from scores.
-        
+
         Args:
             scores: Array of similarity scores
-            
+
         Returns:
             Softmax probabilities (sum to 1.0)
         """
         e = np.exp(scores - np.max(scores))
         return e / e.sum()
-    
+
     def select_tables(
         self,
         prompt: str,
@@ -145,12 +145,12 @@ class NLPTableSelector:
     ) -> Dict[str, Any]:
         """
         Select the most relevant table(s) for a user prompt.
-        
+
         Args:
             prompt: User's natural language prompt
             top_k: Number of top candidates to return if ambiguous
             return_all_scores: If True, return scores for all tables
-            
+
         Returns:
             Dict with keys:
             - status: "success", "ambiguous", or "no_match"
@@ -161,29 +161,33 @@ class NLPTableSelector:
             - metadata: Debug info (prompt, embeddings shapes, schema_hash)
         """
         logger.debug(f"Processing prompt: {prompt}")
-        
+
         try:
             # Encode prompt
             prompt_embedding = self.model.encode(prompt, normalize_embeddings=True)
-            
+
             # Compute cosine similarity scores
             scores = []
             tables = list(self.table_embeddings.keys())
-            
+
             for table in tables:
                 score = float(np.dot(prompt_embedding, self.table_embeddings[table]))
                 scores.append(score)
-            
+
             scores = np.array(scores)
             confidences_raw = self._softmax(scores)
-            
+
             # Map to table names
-            confidence_dict = {table: float(conf) for table, conf in zip(tables, confidences_raw)}
-            
+            confidence_dict = {
+                table: float(conf) for table, conf in zip(tables, confidences_raw)
+            }
+
             # Sort by confidence
-            sorted_results = sorted(confidence_dict.items(), key=lambda x: x[1], reverse=True)
+            sorted_results = sorted(
+                confidence_dict.items(), key=lambda x: x[1], reverse=True
+            )
             top_table, top_confidence = sorted_results[0]
-            
+
             # Decision logic with guardrails
             result = {
                 "metadata": {
@@ -193,28 +197,30 @@ class NLPTableSelector:
                     "embedding_shape": prompt_embedding.shape,
                 }
             }
-            
+
             if return_all_scores:
                 result["all_confidences"] = confidence_dict
-            
+
             # Check: confidence threshold
             if top_confidence < self.confidence_threshold:
                 logger.warning(
                     f"Low confidence: {top_table}={top_confidence:.3f} < {self.confidence_threshold}"
                 )
-                result.update({
-                    "status": "ambiguous",
-                    "reason": "low_confidence",
-                    "confidences": confidence_dict,
-                    "top_candidates": [t for t, _ in sorted_results[:top_k]],
-                })
+                result.update(
+                    {
+                        "status": "ambiguous",
+                        "reason": "low_confidence",
+                        "confidences": confidence_dict,
+                        "top_candidates": [t for t, _ in sorted_results[:top_k]],
+                    }
+                )
                 return result
-            
+
             # Check: tie detection (multiple plausible tables)
             if len(sorted_results) > 1:
                 second_table, second_confidence = sorted_results[1]
                 margin = top_confidence - second_confidence
-                
+
                 if margin < self.tie_threshold:
                     logger.warning(
                         f"Tie detected: {top_table}={top_confidence:.3f} vs "
@@ -222,25 +228,29 @@ class NLPTableSelector:
                     )
                     # Return top k candidates
                     top_candidates = [t for t, _ in sorted_results[:top_k]]
-                    result.update({
-                        "status": "ambiguous",
-                        "reason": "multiple_tables",
-                        "confidences": confidence_dict,
-                        "top_candidates": top_candidates,
-                    })
+                    result.update(
+                        {
+                            "status": "ambiguous",
+                            "reason": "multiple_tables",
+                            "confidences": confidence_dict,
+                            "top_candidates": top_candidates,
+                        }
+                    )
                     return result
-            
+
             # Success: single clear winner
             logger.info(
                 f"Selected table: {top_table} (confidence={top_confidence:.3f})"
             )
-            result.update({
-                "status": "success",
-                "tables": top_table,
-                "confidences": confidence_dict,
-            })
+            result.update(
+                {
+                    "status": "success",
+                    "tables": top_table,
+                    "confidences": confidence_dict,
+                }
+            )
             return result
-            
+
         except Exception as e:
             logger.error(f"Error selecting tables: {str(e)}", exc_info=True)
             return {
@@ -249,11 +259,11 @@ class NLPTableSelector:
                 "tables": None,
                 "metadata": {"prompt": prompt},
             }
-    
+
     def set_synonyms(self, table_synonyms: Dict[str, List[str]]):
         """
         Update table synonyms and re-embed (schema changed).
-        
+
         Args:
             table_synonyms: Dict mapping table_name → list of business synonyms
         """
@@ -261,11 +271,11 @@ class NLPTableSelector:
         self.table_docs = self._build_table_documents()
         self._embed_tables()
         logger.info("Synonyms updated and tables re-embedded.")
-    
+
     def set_column_comments(self, column_comments: Dict[str, Dict[str, str]]):
         """
         Update column comments and re-embed (schema changed).
-        
+
         Args:
             column_comments: Dict mapping table_name → {column_name → comment}
         """
@@ -273,7 +283,7 @@ class NLPTableSelector:
         self.table_docs = self._build_table_documents()
         self._embed_tables()
         logger.info("Column comments updated and tables re-embedded.")
-    
+
     def refresh_schema(self):
         """Re-fetch schema and re-embed (call after schema changes in DB)."""
         logger.info("Refreshing schema from database...")

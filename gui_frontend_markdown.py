@@ -992,7 +992,11 @@ class DataWorkspaceGUI(QMainWindow):
         user_message_md = f"**You:** {query}"
         processing_md = self.processing_marker
         combined = "\n\n".join(
-            [segment for segment in [current_md.strip(), user_message_md, processing_md] if segment]
+            [
+                segment
+                for segment in [current_md.strip(), user_message_md, processing_md]
+                if segment
+            ]
         )
         self.conversation_display.setMarkdown(combined)
 
@@ -1319,9 +1323,7 @@ def main():
 
         except Exception as e:
             error_msg = (
-                "### Error Loading Data\n"
-                f"{str(e)}\n"
-                "Please restart and try again."
+                "### Error Loading Data\n" f"{str(e)}\n" "Please restart and try again."
             )
             window.conversation_display.setMarkdown(error_msg)
 

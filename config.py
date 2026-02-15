@@ -123,7 +123,7 @@ class ConfigManager:
 
         if p == "openai":
             # OpenAI keys commonly start with 'sk-' or 'openai-'
-            if re.match(r'^(sk-|openai-)[A-Za-z0-9\-_]{20,}$', api_key):
+            if re.match(r"^(sk-|openai-)[A-Za-z0-9\-_]{20,}$", api_key):
                 return True, ""
             return False, (
                 "OpenAI API key appears invalid — it should start with 'sk-' or 'openai-' "
@@ -132,7 +132,7 @@ class ConfigManager:
 
         if p == "claude":
             # Anthropic/Claude keys vary; accept common prefixes and reasonable length
-            if re.match(r'^(api-|claude-|sk-)[A-Za-z0-9\-_]{20,}$', api_key):
+            if re.match(r"^(api-|claude-|sk-)[A-Za-z0-9\-_]{20,}$", api_key):
                 return True, ""
             return False, (
                 "Claude API key appears invalid — it should start with 'api-' or 'claude-' "

@@ -433,7 +433,7 @@ class AIAgent:
                 "alt": alt,
                 "altair": alt,
             }
-            
+
             logger.info(f"Generated code:\n{code}")
 
             exec(code, global_vars, local_vars)

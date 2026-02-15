@@ -40,7 +40,7 @@ def convert_image_path_to_base64(image_path: str) -> str:
     Returns:
         Data URL or original path if conversion fails
     """
-    try:        # If already a data URL, return as-is
+    try:  # If already a data URL, return as-is
         if image_path.startswith("data:"):
             return image_path
         # Remove file:// URL scheme if present
@@ -97,6 +97,7 @@ def convert_image_paths_to_base64(html: str) -> str:
     )
     return html
 
+
 def plaintext_image_source_to_html(text: str) -> str:
     # TODO: Make this less shitty
     """
@@ -121,6 +122,7 @@ def plaintext_image_source_to_html(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
 
 def escape_html(text: str) -> str:
     """

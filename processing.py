@@ -131,15 +131,23 @@ def _estimate_outer_join_rows(
     if not key_columns:
         return None
     try:
-        left_counts = left.groupby(key_columns, dropna=False).size().rename("left_count")
-        right_counts = right.groupby(key_columns, dropna=False).size().rename("right_count")
+        left_counts = (
+            left.groupby(key_columns, dropna=False).size().rename("left_count")
+        )
+        right_counts = (
+            right.groupby(key_columns, dropna=False).size().rename("right_count")
+        )
 
-        merged_counts = left_counts.to_frame().merge(
-            right_counts.to_frame(),
-            left_index=True,
-            right_index=True,
-            how="outer",
-        ).fillna(0)
+        merged_counts = (
+            left_counts.to_frame()
+            .merge(
+                right_counts.to_frame(),
+                left_index=True,
+                right_index=True,
+                how="outer",
+            )
+            .fillna(0)
+        )
 
         left_count = merged_counts["left_count"].astype("int64")
         right_count = merged_counts["right_count"].astype("int64")
@@ -168,7 +176,10 @@ def _preflight_merge(
     left_dup_rate = left.duplicated(subset=key_columns).mean()
     right_dup_rate = right.duplicated(subset=key_columns).mean()
 
-    if left_dup_rate > MERGE_WARN_DUPLICATE_RATE or right_dup_rate > MERGE_WARN_DUPLICATE_RATE:
+    if (
+        left_dup_rate > MERGE_WARN_DUPLICATE_RATE
+        or right_dup_rate > MERGE_WARN_DUPLICATE_RATE
+    ):
         logger.warning(
             "High duplicate rate on merge keys. "
             f"Left: {left_dup_rate:.1%}, Right: {right_dup_rate:.1%}"
@@ -189,7 +200,8 @@ def _preflight_merge(
         )
 
     return True, "ok"
-    
+
+
 def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
     """
     Standardize data types across dataframes before merging.
@@ -197,9 +209,9 @@ def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
     """
     if not dataframes:
         return dataframes
-    
+
     standardized = []
-    
+
     # First pass: identify target types for each column
     column_types = {}
     for df in dataframes:
@@ -212,11 +224,11 @@ def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
                 current_type = df[col].dtype
                 if existing_type != current_type:
                     # float64 ≻ int64 ≻ object
-                    if existing_type == 'object' or current_type == 'object':
-                        column_types[col] = 'object'
-                    elif 'float' in str(current_type) or 'float' in str(existing_type):
-                        column_types[col] = 'float64'
-    
+                    if existing_type == "object" or current_type == "object":
+                        column_types[col] = "object"
+                    elif "float" in str(current_type) or "float" in str(existing_type):
+                        column_types[col] = "float64"
+
     # Second pass: convert all dataframes to use standardized types
     for df in dataframes:
         df_copy = df.copy()
@@ -224,23 +236,25 @@ def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
             target_type = column_types.get(col)
             if target_type and df_copy[col].dtype != target_type:
                 try:
-                    if target_type == 'object':
-                        df_copy[col] = df_copy[col].astype('object')
-                    elif 'float' in str(target_type):
-                        df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+                    if target_type == "object":
+                        df_copy[col] = df_copy[col].astype("object")
+                    elif "float" in str(target_type):
+                        df_copy[col] = pd.to_numeric(df_copy[col], errors="coerce")
                     else:
                         df_copy[col] = df_copy[col].astype(target_type)
                 except Exception as e:
-                    logger.warning(f"Could not convert {col} to {target_type}: {str(e)}")
+                    logger.warning(
+                        f"Could not convert {col} to {target_type}: {str(e)}"
+                    )
         standardized.append(df_copy)
-    
+
     return standardized
 
 
 def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]:
     """
     Intelligently merge multiple dataframes using optimal strategy.
-    
+
     For tables with no universal common columns, performs sequential merges
     on pairwise shared key columns.
 
@@ -289,18 +303,24 @@ def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]
     # Strategy 3: All tables share common key columns: horizontal merge
     if common_cols:
         key_candidates = _identify_key_columns(common_cols, all_cols_union)
-        
+
         # Also include common ID columns that weren't caught
         for col in common_cols:
-            if ('_id' in col.lower() or col.lower() in ['id']) and col not in key_candidates:
+            if (
+                "_id" in col.lower() or col.lower() in ["id"]
+            ) and col not in key_candidates:
                 key_candidates.append(col)
-        
+
         if key_candidates:
-            logger.info(f"Attempting horizontal merge on universal keys: {key_candidates}")
+            logger.info(
+                f"Attempting horizontal merge on universal keys: {key_candidates}"
+            )
             return _merge_on_keys(dataframes, key_candidates)
 
     # Strategy 4: No universal common columns: try sequential/chain merges on pairwise keys
-    logger.info("No universal common columns detected. Attempting sequential merge strategy.")
+    logger.info(
+        "No universal common columns detected. Attempting sequential merge strategy."
+    )
     merged_df = _sequential_merge(dataframes)
     if merged_df is not None:
         return merged_df, "Sequential merge on pairwise key columns"
@@ -313,39 +333,40 @@ def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]
 def _sequential_merge(dataframes: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Merge multiple dataframes sequentially when they don't share universal keys.
-    
+
     Example: If table1-table2 share key_a, and table2-table3 share key_b,
     merge (table1 on key_a with table2) then (result on key_b with table3).
-    
+
     Args:
         dataframes: List of dataframes to merge
-        
+
     Returns:
         Merged dataframe or None if sequential merge fails
     """
     if not dataframes or len(dataframes) < 2:
         return None
-    
+
     try:
         merged_df = dataframes[0]
         merge_log = []
-        
+
         for idx, right_df in enumerate(dataframes[1:], 1):
             # Find shared key columns between current merged_df and next table
             left_cols = set(merged_df.columns)
             right_cols = set(right_df.columns)
-            
+
             # Find potential key columns in both
             shared_cols = left_cols & right_cols
             key_candidates = [
-                col for col in shared_cols
-                if '_id' in col.lower() or col.lower() in ['id']
+                col
+                for col in shared_cols
+                if "_id" in col.lower() or col.lower() in ["id"]
             ]
-            
+
             if not key_candidates:
                 # No ID columns shared, look for any common columns
                 key_candidates = list(shared_cols)
-            
+
             if key_candidates:
                 logger.info(f"Merging table {idx} on keys: {key_candidates}")
                 merged_df = pd.merge(
@@ -358,13 +379,15 @@ def _sequential_merge(dataframes: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
                 merge_log.append(f"Table {idx} merged on {', '.join(key_candidates)}")
             else:
                 # No common columns with this table, skip merge
-                logger.warning(f"No common key columns found to merge table {idx}, using concatenation")
+                logger.warning(
+                    f"No common key columns found to merge table {idx}, using concatenation"
+                )
                 merged_df = pd.concat([merged_df, right_df], axis=1, ignore_index=False)
                 merge_log.append(f"Table {idx} concatenated (no common keys)")
-        
+
         logger.info(f"Sequential merge completed: {'; '.join(merge_log)}")
         return merged_df
-        
+
     except Exception as e:
         logger.error(f"Sequential merge failed: {str(e)}")
         return None

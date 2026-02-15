@@ -354,7 +354,7 @@ class DatabaseConnector:
 
         inspector = inspect(self.engine)
         return inspector.get_table_names()
-    
+
     def get_columns(self, table_name: str) -> list:
         """
         Get list of columns for a given table.
