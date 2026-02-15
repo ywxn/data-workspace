@@ -34,6 +34,10 @@ from typing import Optional, Dict, Any, List
 import random
 import os
 from constants import PLACEHOLDER_PROJECT_NAMES, PLACEHOLDER_PROJECT_DESCRIPTIONS, DARK_THEME_STYLESHEET, LIGHT_THEME_STYLESHEET
+from logger import get_logger
+
+# Initialize logger for this module
+logger = get_logger(__name__)
 
 class MessageTextEdit(QTextEdit):
     """Custom QTextEdit that submits on Enter and adds newline on Shift+Enter"""
@@ -992,9 +996,11 @@ class DataWorkspaceGUI(QMainWindow):
     def on_chat_selected(self, item: QListWidgetItem):
         """Handle chat selection"""
         self.chat_id = item.data(Qt.ItemDataRole.UserRole)
+        logger.debug(f"Chat selected: {self.chat_id}")
         if self.chat_id:
             success, _ = self.backend.load_chat_session(self.chat_id)
             if success:
+                logger.info(f"Chat session loaded: {self.chat_id}")
                 history = self.backend.get_chat_history()
                 if history:
                     chat_history = self._format_chat_history(history)
@@ -1004,6 +1010,7 @@ class DataWorkspaceGUI(QMainWindow):
                         "No chat history yet. Start typing to begin the conversation."
                     )
             else:
+                logger.warning(f"Failed to load chat session: {self.chat_id}")
                 self.conversation_display.setMarkdown("Failed to load chat.")
 
         # Highlight the selected chat
@@ -1015,18 +1022,23 @@ class DataWorkspaceGUI(QMainWindow):
 
     def create_new_chat(self):
         """Create a new chat in the active project"""
+        logger.info("User requested to create new chat")
         if self.backend.active_project is None:
+            logger.warning("New chat creation attempted but no project loaded")
             QMessageBox.warning(self, "No Project", "Please load a project first.")
             return
 
         # Auto-generate chat name
         chat_num = len(self.backend.active_project.chats) + 1
+        logger.debug(f"Creating new chat: Chat {chat_num}")
         success, msg, chat_id = self.backend.create_chat_session(f"Chat {chat_num}")
 
         if not success:
+            logger.error(f"Failed to create chat: {msg}")
             QMessageBox.warning(self, "Error", f"Failed to create chat: {msg}")
             return
 
+        logger.info(f"New chat created: {chat_id}")
         # Refresh chat list and select the new chat
         self.refresh_chat_list()
 
@@ -1052,19 +1064,24 @@ class DataWorkspaceGUI(QMainWindow):
         """Handle query submission or stop running query"""
         # If currently running, stop the query
         if self.is_running:
+            logger.info("User requested to stop running query")
             self.stop_query()
             return
 
         query = self.query_input.toPlainText().strip()
 
         if not query:
+            logger.debug("Empty query submitted, ignoring")
             return
 
         if self.dataframe is None:
+            logger.warning("Query submitted but no data loaded")
             QMessageBox.warning(
                 self, "No Data", "No data loaded. Please restart and load data first."
             )
             return
+
+        logger.info(f"Submitting query: {query[:100]}...")  # Log first 100 chars
 
         # Change button to Stop
         self.submit_button.setText("Stop")
@@ -1094,17 +1111,21 @@ class DataWorkspaceGUI(QMainWindow):
         self.add_message_to_chat("user", query)
 
         # Create and start worker thread
+        logger.debug(f"Creating query worker for dataframe with shape: {self.dataframe.shape}")
         self.worker = QueryWorker(query, self.dataframe)
         self.worker.result_signal.connect(self.display_result)
         self.worker.error_signal.connect(self.display_error)
         self.worker.finished.connect(self.on_query_finished)
+        logger.debug("Starting query worker thread")
         self.worker.start()
 
     def stop_query(self):
         """Stop the currently running query"""
+        logger.info("Stopping query worker thread")
         if self.worker and self.worker.isRunning():
             self.worker.terminate()
             self.worker.wait()
+            logger.info("Query worker thread terminated")
 
             # Display cancellation message
             current_md = self.conversation_display.toMarkdown()
@@ -1123,6 +1144,7 @@ class DataWorkspaceGUI(QMainWindow):
 
     def display_result(self, result: str):
         """Display query result with Markdown formatting"""
+        logger.info(f"Displaying query result (length: {len(result)} chars)")
         formatted_result = self.backend.markdown_to_qt(result)
 
         # Replace the "Processing..." message with the actual result
@@ -1148,6 +1170,7 @@ class DataWorkspaceGUI(QMainWindow):
 
     def display_error(self, error: str):
         """Display error message"""
+        logger.error(f"Query error: {error}")
         error_md = f"**Error:** {error}"
         current_md = self.conversation_display.toMarkdown()
 
@@ -1168,17 +1191,22 @@ class DataWorkspaceGUI(QMainWindow):
 
     def save_project(self):
         """Save current project with all chats"""
+        logger.info(f"Attempting to save project: {self.project_id}")
         if self.project_id is None:
+            logger.warning("Save attempted but no project loaded")
             QMessageBox.warning(self, "No Project", "No project is currently loaded.")
             return
 
         if self.project_id in self.backend.projects:
             success, msg = self.backend.save_project_to_disk(self.project_id)
             if success:
+                logger.info(f"Project saved successfully: {msg}")
                 QMessageBox.information(self, "Project Saved", msg)
             else:
+                logger.error(f"Failed to save project: {msg}")
                 QMessageBox.warning(self, "Save Failed", msg)
         else:
+            logger.error(f"Project ID {self.project_id} not found in backend")
             QMessageBox.warning(self, "No Project", "Project not found.")
             QMessageBox.warning(
                 self, "Project Not Found", "Could not find project to save."
@@ -1213,6 +1241,7 @@ class DataWorkspaceGUI(QMainWindow):
     def add_message_to_chat(self, role: str, content: str):
         """Add a message to the active chat"""
         if self.chat_id and self.backend.active_chat:
+            logger.debug(f"Adding {role} message to chat {self.chat_id} (length: {len(content)} chars)")
             self.backend.add_message_to_session(role, content)
 
     # ========================
@@ -1220,7 +1249,8 @@ class DataWorkspaceGUI(QMainWindow):
     # ========================
 
     def new_project(self):
-        """TODO: check functionality - Open dialog to create a new project"""
+        """Open dialog to create a new project"""
+        logger.info("User initiated new project creation")
         reply = QMessageBox.question(
             self,
             "New Project",
@@ -1228,48 +1258,71 @@ class DataWorkspaceGUI(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            logger.debug("User confirmed new project creation")
             # Open the create project dialog
+            try:
+                project_dialog = CreateProjectDialog(self)
+                if project_dialog.exec() == QDialog.DialogCode.Accepted:
+                    self.backend = project_dialog.backend
+                    self.project_id = project_dialog.project_id
+                    logger.info(f"New project created with ID: {self.project_id}")
+                    
+                    if self.project_id is not None:
+                        self.backend.load_project(self.project_id)
+                        if self.backend.active_project:
+                            chats = self.backend.active_project.get_all_chats()
+                            if chats:
+                                self.backend.active_chat = chats[0]
+                                self.chat_id = chats[0].session_id
+                                logger.debug(f"Loaded initial chat: {self.chat_id}")
+                    
+                    self.refresh_project_list()
+                    logger.info("Project creation successful, UI refreshed")
+                    QMessageBox.information(self, "New Project", "Project created successfully.")
+                else:
+                    logger.info("User cancelled new project creation")
+            except Exception as e:
+                logger.error(f"Error creating new project: {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to create new project: {str(e)}")
+
+    def load_project_menu(self):
+        """Load an existing project from disk"""
+        logger.info("User initiated project load from menu")
+        try:
             project_dialog = CreateProjectDialog(self)
+            # Simulate clicking the "Load Existing Project" button
+            project_dialog.open_load_dialog()
             if project_dialog.exec() == QDialog.DialogCode.Accepted:
                 self.backend = project_dialog.backend
                 self.project_id = project_dialog.project_id
+                logger.info(f"Project loaded with ID: {self.project_id}")
                 
                 if self.project_id is not None:
                     self.backend.load_project(self.project_id)
                     if self.backend.active_project:
+                        logger.debug(f"Loaded project: {self.backend.active_project.title}")
                         chats = self.backend.active_project.get_all_chats()
                         if chats:
                             self.backend.active_chat = chats[0]
                             self.chat_id = chats[0].session_id
+                            logger.debug(f"Loaded {len(chats)} chat(s), active chat: {self.chat_id}")
                 
                 self.refresh_project_list()
-                QMessageBox.information(self, "New Project", "Project created successfully.")
-
-    def load_project_menu(self):
-        """TODO: check functionality - Load an existing project from disk"""
-        project_dialog = CreateProjectDialog(self)
-        # Simulate clicking the "Load Existing Project" button
-        project_dialog.open_load_dialog()
-        if project_dialog.exec() == QDialog.DialogCode.Accepted:
-            self.backend = project_dialog.backend
-            self.project_id = project_dialog.project_id
-            
-            if self.project_id is not None:
-                self.backend.load_project(self.project_id)
-                if self.backend.active_project:
-                    chats = self.backend.active_project.get_all_chats()
-                    if chats:
-                        self.backend.active_chat = chats[0]
-                        self.chat_id = chats[0].session_id
-            
-            self.refresh_project_list()
+                logger.info("Project load successful, UI refreshed")
+            else:
+                logger.info("User cancelled project load")
+        except Exception as e:
+            logger.error(f"Error loading project: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to load project: {str(e)}")
 
     def connect_data_source(self):
-        """TODO: check functionality - Open dialog to connect to a data source"""
+        """Open dialog to connect to a data source"""
+        logger.info("User initiated data source connection")
         source_dialog = DataSourceDialog(self)
         if source_dialog.exec() == QDialog.DialogCode.Accepted:
             source_type = source_dialog.data_source_type
             source_config = source_dialog.data_source_config
+            logger.info(f"Data source type selected: {source_type}")
             
             if source_type and source_config:
                 try:
@@ -1277,10 +1330,12 @@ class DataWorkspaceGUI(QMainWindow):
                         # Database connection flow
                         db_type = source_config.get("db_type")
                         credentials = source_config.get("credentials", {})
+                        logger.debug(f"Attempting to connect to {db_type} database")
                         connector = DatabaseConnector()
                         success, message = connector.connect(db_type, credentials)
                         
                         if success:
+                            logger.info(f"Successfully connected to {db_type} database")
                             tables = connector.get_tables()
                             if tables:
                                 table_dialog = TableSelectionDialog(tables, self)
@@ -1291,38 +1346,56 @@ class DataWorkspaceGUI(QMainWindow):
                                         if df is not None:
                                             self.backend.loaded_dataframe = df
                                             self.dataframe = df
+                                            logger.info(f"Successfully loaded data from tables: {selected_tables}, shape: {df.shape}")
                                             welcome_msg = self.backend.format_database_welcome_message(
                                                 db_type, selected_tables, df, status
                                             )
                                             self.conversation_display.setMarkdown(welcome_msg)
                                             QMessageBox.information(self, "Data Loaded", "Database data loaded successfully.")
                                         else:
+                                            logger.warning(f"Failed to load data from database: {status}")
                                             QMessageBox.warning(self, "Load Failed", status)
                         else:
+                            logger.warning(f"Database connection failed: {message}")
                             QMessageBox.warning(self, "Connection Failed", message)
                     
                     elif source_type == "file":
                         # File load flow
                         file_paths = source_config.get("file_paths", [])
+                        logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
                         if file_paths:
                             df, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
                             if df is not None:
                                 self.dataframe = df
+                                logger.info(f"Successfully loaded {len(file_paths)} file(s), data shape: {df.shape}")
                                 self.conversation_display.setMarkdown(welcome_msg)
                                 QMessageBox.information(self, "Data Loaded", "Files loaded successfully.")
                             else:
+                                logger.warning(f"Failed to load files: {welcome_msg}")
                                 QMessageBox.warning(self, "Load Failed", welcome_msg)
                 except Exception as e:
+                    logger.error(f"Error loading data source: {str(e)}", exc_info=True)
                     QMessageBox.critical(self, "Error", f"Failed to load data: {str(e)}")
+        else:
+            logger.info("User cancelled data source connection")
 
     def change_api_settings(self):
-        """TODO: check functionality - Open API settings dialog"""
-        api_dialog = APIKeyConfigDialog(self)
-        if api_dialog.exec() == QDialog.DialogCode.Accepted:
-            QMessageBox.information(self, "API Settings", "API settings updated successfully.")
+        """Open API settings dialog"""
+        logger.info("User opened API settings dialog")
+        try:
+            api_dialog = APIKeyConfigDialog(self)
+            if api_dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("API settings updated successfully")
+                QMessageBox.information(self, "API Settings", "API settings updated successfully.")
+            else:
+                logger.info("User cancelled API settings change")
+        except Exception as e:
+            logger.error(f"Error changing API settings: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to update API settings: {str(e)}")
 
     def clear_conversation(self):
-        """TODO: check functionality - Clear current conversation"""
+        """Clear current conversation"""
+        logger.info(f"User requested to clear conversation (chat_id: {self.chat_id})")
         reply = QMessageBox.question(
             self,
             "Clear Conversation",
@@ -1330,11 +1403,19 @@ class DataWorkspaceGUI(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.conversation_display.clear()
-            self.backend.clear_session()
+            try:
+                self.conversation_display.clear()
+                self.backend.clear_session()
+                logger.info(f"Conversation cleared successfully (chat_id: {self.chat_id})")
+            except Exception as e:
+                logger.error(f"Error clearing conversation: {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to clear conversation: {str(e)}")
+        else:
+            logger.info("User cancelled conversation clear")
 
     def reset_workspace(self):
-        """TODO: check functionality - Reset the entire workspace"""
+        """Reset the entire workspace"""
+        logger.warning("User requested workspace reset")
         reply = QMessageBox.question(
             self,
             "Reset Workspace",
@@ -1342,32 +1423,50 @@ class DataWorkspaceGUI(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.backend = DataWorkspaceBackend()
-            self.project_id = None
-            self.chat_id = None
-            self.dataframe = None
-            self.conversation_display.clear()
-            self.query_input.clear()
-            self.chat_list.clear()
-            self.project_name_label.setText("No Project Loaded")
-            QMessageBox.information(self, "Workspace Reset", "Workspace has been reset.")
+            try:
+                logger.info("Resetting workspace...")
+                old_project_id = self.project_id
+                self.backend = DataWorkspaceBackend()
+                self.project_id = None
+                self.chat_id = None
+                self.dataframe = None
+                self.conversation_display.clear()
+                self.query_input.clear()
+                self.chat_list.clear()
+                self.project_name_label.setText("No Project Loaded")
+                logger.info(f"Workspace reset complete. Previous project: {old_project_id}")
+                QMessageBox.information(self, "Workspace Reset", "Workspace has been reset.")
+            except Exception as e:
+                logger.error(f"Error resetting workspace: {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to reset workspace: {str(e)}")
+        else:
+            logger.info("User cancelled workspace reset")
 
     def set_theme(self, theme: str):
-        """TODO: check functionality - Set application theme"""
+        """Set application theme"""
+        logger.info(f"User requested theme change to: {theme}")
         if theme in ["dark", "light", "system"]:
-            self.current_theme = theme
-            self._apply_theme(theme)
-            # Save theme preference
-            config = ConfigManager.load_config()
-            config["theme"] = theme
-            ConfigManager.save_config(config)
-            
-            theme_names = {"dark": "Dark", "light": "Light", "system": "System"}
-            QMessageBox.information(
-                self,
-                "Theme Changed",
-                f"{theme_names.get(theme, theme)} theme applied."
-            )
+            try:
+                old_theme = self.current_theme
+                self.current_theme = theme
+                self._apply_theme(theme)
+                # Save theme preference
+                config = ConfigManager.load_config()
+                config["theme"] = theme
+                ConfigManager.save_config(config)
+                logger.info(f"Theme changed from '{old_theme}' to '{theme}' and saved to config")
+                
+                theme_names = {"dark": "Dark", "light": "Light", "system": "System"}
+                QMessageBox.information(
+                    self,
+                    "Theme Changed",
+                    f"{theme_names.get(theme, theme)} theme applied."
+                )
+            except Exception as e:
+                logger.error(f"Error setting theme to '{theme}': {str(e)}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to apply theme: {str(e)}")
+        else:
+            logger.warning(f"Invalid theme requested: {theme}")
 
     def _apply_theme(self, theme: str) -> None:
         """Apply the selected theme to the application"""
@@ -1383,20 +1482,28 @@ class DataWorkspaceGUI(QMainWindow):
             self.system_theme_action.setChecked(True)
 
     def adjust_font(self, delta: int):
-        """TODO: check functionality - Adjust font size"""
-        font = self.font()
-        current_size = font.pointSize()
-        new_size = max(6, current_size + delta)
-        font.setPointSize(new_size)
-        self.setFont(font)
-        QApplication.instance().setFont(font)
+        """Adjust font size"""
+        try:
+            font = self.font()
+            current_size = font.pointSize()
+            new_size = max(6, current_size + delta)
+            logger.info(f"Adjusting font size from {current_size} to {new_size} (delta: {delta})")
+            font.setPointSize(new_size)
+            self.setFont(font)
+            QApplication.instance().setFont(font)
+            logger.debug("Font size adjusted successfully")
+        except Exception as e:
+            logger.error(f"Error adjusting font size: {str(e)}", exc_info=True)
 
     def open_docs(self):
-        """TODO: check functionality - Open documentation in default browser"""
+        """Open documentation in default browser"""
         docs_url = "https://github.com/ywxn/data-workspace/blob/main/README.md"
+        logger.info(f"User requested to open documentation: {docs_url}")
         try:
             webbrowser.open(docs_url)
+            logger.info("Documentation opened in browser successfully")
         except Exception as e:
+            logger.error(f"Failed to open documentation in browser: {str(e)}", exc_info=True)
             QMessageBox.warning(
                 self,
                 "Documentation",
@@ -1404,7 +1511,8 @@ class DataWorkspaceGUI(QMainWindow):
             )
 
     def show_about(self):
-        """TODO: check functionality - Show about dialog"""
+        """Show about dialog"""
+        logger.info("User opened About dialog")
         about_text = (
             "<h2>AI Data Workspace</h2>"
             "<p>Version 1.0.0</p>"
@@ -1423,14 +1531,19 @@ class DataWorkspaceGUI(QMainWindow):
 
 def start_application():
     """Start the AI Data Workspace application."""
+    logger.info("="*60)
+    logger.info("Starting AI Data Workspace application")
+    logger.info("="*60)
     app = QApplication(sys.argv)
 
     # Check if API keys are configured, if not prompt user to set them up
     if not ConfigManager.has_any_api_key():
+        logger.warning("No API keys configured, prompting user for setup")
         # Show API key configuration dialog
         api_config_dialog = APIKeyConfigDialog()
         if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
             # User cancelled API key setup
+            logger.error("API key setup cancelled by user, application cannot start")
             QMessageBox.warning(
                 None,
                 "API Key Required",
@@ -1438,36 +1551,45 @@ def start_application():
                 "Please configure your API key and try again.",
             )
             return
+        logger.info("API key configured successfully")
 
     project_dialog = CreateProjectDialog()
     if project_dialog.exec() != QDialog.DialogCode.Accepted:
+        logger.info("Project dialog cancelled, exiting application")
         return
 
+    logger.debug("Creating main application window")
     window = DataWorkspaceGUI()
     window.backend = project_dialog.backend
     window.project_id = project_dialog.project_id
+    logger.info(f"Main window created with project ID: {window.project_id}")
 
     # Load the project and setup the UI
     if window.project_id is not None:
         window.backend.load_project(window.project_id)
         # Load the first chat from the project
         if window.backend.active_project:
+            logger.debug(f"Active project: {window.backend.active_project.title}")
             chats = window.backend.active_project.get_all_chats()
             if chats:
                 window.backend.load_chat_session(chats[0].session_id)
                 window.chat_id = chats[0].session_id
+                logger.info(f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}")
 
     # Refresh the UI with project and chat info
     window.refresh_project_list()
 
     # Check if data is already loaded from project (e.g., loading saved project with data source)
     data_already_loaded = window.backend.loaded_dataframe is not None
+    logger.info(f"Data already loaded from project: {data_already_loaded}")
 
     # Only ask for data source if no data is already loaded
     if data_already_loaded:
+        logger.info("Using data already loaded from project")
         # Data was already loaded from project, generate welcome message
         if window.backend.loaded_dataframe is not None:
             df = window.backend.loaded_dataframe
+            logger.debug(f"Loaded dataframe shape: {df.shape}")
             # Check what type of source was used
             if (
                 window.backend.active_project
@@ -1495,24 +1617,31 @@ def start_application():
                     window.dataframe = df
             window.dataframe = df
     else:
+        logger.info("No data loaded, prompting for data source")
         # No data loaded yet, ask for data source
         source_dialog = DataSourceDialog()
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
+            logger.info("User cancelled data source selection")
             return
 
         source_type = source_dialog.data_source_type
         source_config = source_dialog.data_source_config
+        logger.info(f"Data source selected: {source_type}")
 
         try:
             if source_type == "database":
                 db_type: str = source_config["db_type"]
                 credentials: Dict[str, Any] = source_config["credentials"]
+                logger.info(f"Connecting to {db_type} database...")
 
                 connector = DatabaseConnector()
                 while True:
                     success, message = connector.connect(db_type, credentials)
                     if success:
+                        logger.info(f"Successfully connected to {db_type} database")
                         break
+
+                    logger.warning(f"Database connection failed: {message}")
 
                     retry = QMessageBox.question(
                         None,
@@ -1530,11 +1659,14 @@ def start_application():
                         db_type = source_config["db_type"]
                         credentials = source_config["credentials"]
                     else:
+                        logger.info("User cancelled database connection retry")
                         return
 
                 try:
                     tables = connector.get_tables()
+                    logger.debug(f"Retrieved {len(tables) if tables else 0} tables from database")
                 except Exception as e:
+                    logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
                     QMessageBox.critical(None, "Table Discovery Failed", str(e))
                     return
                 finally:
@@ -1561,6 +1693,7 @@ def start_application():
                 merged_dataframe, status = load_data("database", source_config)
 
                 if merged_dataframe is not None:
+                    logger.info(f"Successfully loaded database data, shape: {merged_dataframe.shape}")
                     window.dataframe = merged_dataframe
                     window.backend.loaded_dataframe = merged_dataframe
                     # Store data source in the project
@@ -1585,6 +1718,7 @@ def start_application():
 
             elif source_type == "file":
                 file_paths = source_config["file_paths"]
+                logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
                 merged_dataframe, welcome_msg = window.backend.load_file_data_with_ui(
                     file_paths
                 )
@@ -1598,24 +1732,29 @@ def start_application():
                         }
                     window.conversation_display.setMarkdown(welcome_msg)
                 else:
+                    logger.error(f"Failed to load file data: {welcome_msg}")
                     window.conversation_display.setMarkdown(welcome_msg)
                     QMessageBox.critical(
                         window, "Data Loading Error", "Failed to load any files."
                     )
 
             else:
+                logger.error(f"Unknown data source type: {source_type}")
                 QMessageBox.critical(
                     window, "Error", f"Unknown source type: {source_type}"
                 )
                 return
 
         except Exception as e:
+            logger.error(f"Error loading data: {str(e)}", exc_info=True)
             error_msg = (
                 "### Error Loading Data\n" f"{str(e)}\n" "Please restart and try again."
             )
             window.conversation_display.setMarkdown(error_msg)
 
+    logger.info("Displaying main application window")
     window.show()
+    logger.info("Application started successfully")
     sys.exit(app.exec())
 
 
