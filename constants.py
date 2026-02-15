@@ -16,7 +16,7 @@ LLM_TEMPERATURE_CODE = 0.4
 LLM_TEMPERATURE_ANALYSIS = 0.6
 
 # Note that these may not be available, so changing them may be necessary. Users should check the latest model availability from OpenAI and Anthropic.
-LLM_MODELS = {"claude": "claude-3-5-sonnet-20241022", "openai": "gpt-4o-2024-08-06"}
+LLM_MODELS = {"claude": "claude-3-5-sonnet-20241022", "openai": "gpt-4o-2024-08-06"} #TODO: Add model management UI?
 
 # Database Configuration
 SQLITE_DEFAULT_PORT = 3306
