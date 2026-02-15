@@ -92,6 +92,12 @@ class DataWorkspaceBackend:
         """Return markdown text for Qt rendering."""
         return text
 
+    @staticmethod
+    def _join_markdown_blocks(blocks: List[str]) -> str:
+        """Join markdown blocks with blank lines to avoid list bleed-through."""
+        cleaned = [block.strip() for block in blocks if block and block.strip()]
+        return "\n\n".join(cleaned)
+
     # ==================== Project Management ====================
 
     def create_project(
@@ -569,23 +575,30 @@ class DataWorkspaceBackend:
         merge_info = f"**Merge Strategy:** {merge_strategy}\n" if merge_strategy else ""
         file_word = "file" if len(file_info) == 1 else "files"
 
-        welcome_msg = (
-            "### Data Loaded Successfully\n"
-            f"**Loaded {len(file_info)} {file_word}:**\n{files_detail}\n"
-            f"{merge_info}"
-            f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns\n"
-            f"**Columns:** {columns_list}\n"
+        welcome_msg = self._join_markdown_blocks(
+            [
+                "### Data Loaded Successfully",
+                f"**Loaded {len(file_info)} {file_word}:**\n{files_detail}",
+                merge_info.strip(),
+                f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                f"**Columns:** {columns_list}",
+            ]
         )
 
         if errors:
             error_detail = "\n".join([f"- {err}" for err in errors])
-            welcome_msg += f"\n**Warnings:**\n{error_detail}\n"
+            welcome_msg = self._join_markdown_blocks(
+                [welcome_msg, f"**Warnings:**\n{error_detail}"]
+            )
 
-        welcome_msg += (
-            "\nReady to analyze your data! Try asking questions like:\n"
-            "- What insights can you find in this data?\n"
-            "- Show me a summary of the data\n"
-            "- What trends are visible?"
+        welcome_msg = self._join_markdown_blocks(
+            [
+                welcome_msg,
+                "Ready to analyze your data! Try asking questions like:\n"
+                "- What insights can you find in this data?\n"
+                "- Show me a summary of the data\n"
+                "- What trends are visible?",
+            ]
         )
 
         return merged_dataframe, welcome_msg
@@ -616,28 +629,32 @@ class DataWorkspaceBackend:
                 merge_info = f"**Merge Strategy:** {merge_strategy}\n"
 
             table_word = "table" if len(selected_tables) == 1 else "tables"
-            welcome_msg = (
-                "### Data Loaded Successfully\n"
-                f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n{tables_detail}\n"
-                f"{merge_info}"
-                f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns\n"
-                f"**Columns:** {columns_list}\n"
-                "\nReady to analyze your data! Try asking questions like:\n"
-                "- What insights can you find in this data?\n"
-                "- Show me a summary of the data\n"
-                "- What trends are visible?"
+            welcome_msg = self._join_markdown_blocks(
+                [
+                    "### Data Loaded Successfully",
+                    f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n{tables_detail}",
+                    merge_info.strip(),
+                    f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                    f"**Columns:** {columns_list}",
+                    "Ready to analyze your data! Try asking questions like:\n"
+                    "- What insights can you find in this data?\n"
+                    "- Show me a summary of the data\n"
+                    "- What trends are visible?",
+                ]
             )
         else:
-            welcome_msg = (
-                "### Data Loaded Successfully\n"
-                f"**Loaded from {db_type} database**\n"
-                f"**Table:** {selected_tables}\n"
-                f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns\n"
-                f"**Columns:** {columns_list}\n"
-                "\nReady to analyze your data! Try asking questions like:\n"
-                "- What insights can you find in this data?\n"
-                "- Show me a summary of the data\n"
-                "- What trends are visible?"
+            welcome_msg = self._join_markdown_blocks(
+                [
+                    "### Data Loaded Successfully",
+                    f"**Loaded from {db_type} database**",
+                    f"**Table:** {selected_tables}",
+                    f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                    f"**Columns:** {columns_list}",
+                    "Ready to analyze your data! Try asking questions like:\n"
+                    "- What insights can you find in this data?\n"
+                    "- Show me a summary of the data\n"
+                    "- What trends are visible?",
+                ]
             )
 
         return welcome_msg

@@ -16,6 +16,7 @@ import json
 import re
 import altair as alt
 import numpy as np
+from string import Template
 
 from config import ConfigManager
 from logger import get_logger
@@ -218,11 +219,12 @@ class AIAgent:
         """
         dataframe_metadata = self._get_dataframe_info(df)
 
-        system_message = PLANNER_SYSTEM_PROMPT_TEMPLATE.format(
+        system_message = Template(PLANNER_SYSTEM_PROMPT_TEMPLATE).substitute(
             columns=dataframe_metadata["columns"],
             shape=dataframe_metadata["shape"],
             dtypes=dataframe_metadata["dtypes"],
             sample=dataframe_metadata["sample"],
+            user_query=user_query,
         )
 
         messages: List[Dict[str, str]] = [
@@ -262,7 +264,7 @@ class AIAgent:
         """
         dataframe_metadata = self._get_dataframe_info(df)
 
-        system_message = CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE.format(
+        system_message = Template(CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE).substitute(
             columns=dataframe_metadata["columns"],
             dtypes=dataframe_metadata["dtypes"],
             shape=dataframe_metadata["shape"],
@@ -321,7 +323,7 @@ class AIAgent:
         if code_output is not None:
             context_parts.append(f"\nCode Execution Result: {code_output}")
 
-        system_message = ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(
+        system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
             context="\n".join(context_parts)
         )
 
@@ -461,7 +463,9 @@ class AIAgent:
         response_parts = []
 
         if code_result is not None:
+            response_parts.append("")
             response_parts.append("### Result:")
+            response_parts.append("")
             response_parts.append(self._format_code_result(code_result))
             response_parts.append("")
 
@@ -485,7 +489,7 @@ class AIAgent:
             # Handle dictionary results (e.g., with image paths)
             parts = []
             for key, value in result.items():
-                if key in ["image_path", "plot_path", "image_file"] and isinstance(
+                if key in ["chart_path"] and isinstance(
                     value, str
                 ):
                     parts.append(f"![Generated Visualization]({value})")
@@ -497,7 +501,7 @@ class AIAgent:
         elif isinstance(result, str):
             return result
         elif isinstance(result, pd.DataFrame):
-            return result.to_markdown() or str(result)
+            return result.to_markdown() or str(result) #TODO: Check
         else:
             return str(result)
 
