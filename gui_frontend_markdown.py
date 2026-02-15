@@ -462,7 +462,7 @@ class CreateProjectDialog(QDialog):
         try:
             # If parent has a refresh method (main window), call it; otherwise rely on main to refresh
             parent = self.parent()
-            if parent and hasattr(parent, "refresh_project_list"):
+            if parent and isinstance(parent, DataWorkspaceGUI) and hasattr(parent, "refresh_project_list"):
                 parent.refresh_project_list()
         except Exception:
             pass
@@ -1272,11 +1272,24 @@ class DataWorkspaceGUI(QMainWindow):
                         if self.backend.active_project:
                             chats = self.backend.active_project.get_all_chats()
                             if chats:
-                                self.backend.active_chat = chats[0]
                                 self.chat_id = chats[0].session_id
                                 logger.debug(f"Loaded initial chat: {self.chat_id}")
+                                # Load the first chat session and display its history
+                                success, _ = self.backend.load_chat_session(self.chat_id)
+                                if success:
+                                    history = self.backend.get_chat_history()
+                                    if history:
+                                        chat_history = self._format_chat_history(history)
+                                        self.conversation_display.setMarkdown(chat_history)
+                                    else:
+                                        self.conversation_display.setMarkdown(
+                                            "No chat history yet. Start typing to begin the conversation."
+                                        )
                     
                     self.refresh_project_list()
+                    # Select the first chat in the list
+                    if self.chat_list.count() > 0:
+                        self.chat_list.setCurrentRow(0)
                     logger.info("Project creation successful, UI refreshed")
                     QMessageBox.information(self, "New Project", "Project created successfully.")
                 else:
@@ -1292,7 +1305,7 @@ class DataWorkspaceGUI(QMainWindow):
             project_dialog = CreateProjectDialog(self)
             # Simulate clicking the "Load Existing Project" button
             project_dialog.open_load_dialog()
-            if project_dialog.exec() == QDialog.DialogCode.Accepted:
+            if project_dialog.result() == QDialog.DialogCode.Accepted:
                 self.backend = project_dialog.backend
                 self.project_id = project_dialog.project_id
                 logger.info(f"Project loaded with ID: {self.project_id}")
@@ -1303,11 +1316,24 @@ class DataWorkspaceGUI(QMainWindow):
                         logger.debug(f"Loaded project: {self.backend.active_project.title}")
                         chats = self.backend.active_project.get_all_chats()
                         if chats:
-                            self.backend.active_chat = chats[0]
                             self.chat_id = chats[0].session_id
                             logger.debug(f"Loaded {len(chats)} chat(s), active chat: {self.chat_id}")
+                            # Load the first chat session and display its history
+                            success, _ = self.backend.load_chat_session(self.chat_id)
+                            if success:
+                                history = self.backend.get_chat_history()
+                                if history:
+                                    chat_history = self._format_chat_history(history)
+                                    self.conversation_display.setMarkdown(chat_history)
+                                else:
+                                    self.conversation_display.setMarkdown(
+                                        "No chat history yet. Start typing to begin the conversation."
+                                    )
                 
                 self.refresh_project_list()
+                # Select the first chat in the list
+                if self.chat_list.count() > 0:
+                    self.chat_list.setCurrentRow(0)
                 logger.info("Project load successful, UI refreshed")
             else:
                 logger.info("User cancelled project load")
@@ -1337,12 +1363,20 @@ class DataWorkspaceGUI(QMainWindow):
                         if success:
                             logger.info(f"Successfully connected to {db_type} database")
                             tables = connector.get_tables()
+                            connector.close()  # Close connector before using load_data
+                            
                             if tables:
                                 table_dialog = TableSelectionDialog(tables, self)
                                 if table_dialog.exec() == QDialog.DialogCode.Accepted:
                                     selected_tables = table_dialog.get_selected_tables()
                                     if selected_tables:
-                                        df, status = connector.get_table_data(selected_tables[0])
+                                        # Use load_data from processing module
+                                        data_source_config = {
+                                            "db_type": db_type,
+                                            "credentials": credentials,
+                                            "table": selected_tables[0] if len(selected_tables) == 1 else selected_tables
+                                        }
+                                        df, status = load_data("database", data_source_config)
                                         if df is not None:
                                             self.backend.loaded_dataframe = df
                                             self.dataframe = df
@@ -1572,12 +1606,22 @@ def start_application():
             logger.debug(f"Active project: {window.backend.active_project.title}")
             chats = window.backend.active_project.get_all_chats()
             if chats:
-                window.backend.load_chat_session(chats[0].session_id)
                 window.chat_id = chats[0].session_id
+                success, _ = window.backend.load_chat_session(window.chat_id)
                 logger.info(f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}")
+                # Display the chat history
+                if success:
+                    history = window.backend.get_chat_history()
+                    if history:
+                        chat_history = window._format_chat_history(history)
+                        window.conversation_display.setMarkdown(chat_history)
 
     # Refresh the UI with project and chat info
     window.refresh_project_list()
+    
+    # Select the first chat in the list
+    if window.chat_list.count() > 0:
+        window.chat_list.setCurrentRow(0)
 
     # Check if data is already loaded from project (e.g., loading saved project with data source)
     data_already_loaded = window.backend.loaded_dataframe is not None
