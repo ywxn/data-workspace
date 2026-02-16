@@ -33,3 +33,7 @@ requests>=2.31.0
 
 # Type hints and validation
 typing-extensions>=4.0.0
+
+# NLP and Embeddings
+sentence-transformers>=2.2.0
+scipy>=1.10.0

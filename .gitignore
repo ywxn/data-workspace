@@ -19,6 +19,9 @@ projects/
 # Ignore testing.py (contains sensitive information)
 testing.py
 
+# vscode
+.vscode/
+
 # ignore compilation folders
 *.build/
 *.dist/
@@ -27,3 +30,10 @@ testing.py
 *.cmd
 *.exe
 *.dll
+
+# ignore docs for now
+docs/
+*.md
+
+# misc
+nlp_table_selector_examples.py

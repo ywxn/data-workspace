@@ -1,292 +1,1017 @@
-import logging
+"""
+Production-grade NLP table selector for large SQL schemas.
+
+Allows users to query SQL databases in natural language without manually selecting tables.
+Automatically infers relevant tables using semantic embeddings and supports optional semantic layers.
+
+Architecture:
+1. Schema normalization (acronym expansion + semantic layer)
+2. Column-level semantic embeddings
+3. Top-K column retrieval via cosine similarity
+4. Aggregation to table scores
+5. Foreign-key graph expansion
+6. Threshold-based final selection
+"""
+
 import hashlib
-from typing import Dict, List, Tuple, Optional, Any
+import logging
+import re
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import numpy as np
-from connector import DatabaseConnector
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+# =============================================================================
+# STEP 1: SCHEMA NORMALIZER
+# =============================================================================
+
+
+class SchemaNormalizer:
+    """
+    Normalizes schema identifiers and text for semantic understanding.
+
+    Handles:
+    - snake_case, camelCase, acronym splitting
+    - Common database acronym expansion
+    - Token lowercasing and cleaning
+    """
+
+    # Default acronym dictionary for database schemas
+    DEFAULT_ACRONYMS = {
+        # --- Quantities / numeric ---
+        "amt": "amount",
+        "qty": "quantity",
+        "num": "number",
+        "cnt": "count",
+        "val": "value",
+        "pct": "percent",
+        "avg": "average",
+        "sum": "total",
+        "tot": "total",
+        "max": "maximum",
+        "min": "minimum",
+        "ratio": "ratio",
+        "rate": "rate",
+        "diff": "difference",
+        "chg": "change",
+        "bal": "balance",
+        "calc": "calculated",
+        # --- Identifiers / keys ---
+        "id": "identifier",
+        "pk": "primary_key",
+        "fk": "foreign_key",
+        "uid": "unique_identifier",
+        "guid": "global_identifier",
+        "seq": "sequence",
+        "key": "key",
+        "ref": "reference",
+        "xref": "cross_reference",
+        # --- Dates / time ---
+        "dt": "date",
+        "ts": "timestamp",
+        "tm": "time",
+        "yr": "year",
+        "yrmo": "year_month",
+        "mo": "month",
+        "wk": "week",
+        "qtr": "quarter",
+        "fy": "fiscal_year",
+        "fym": "fiscal_month",
+        "dow": "day_of_week",
+        "doy": "day_of_year",
+        "start": "start",
+        "end": "end",
+        "dur": "duration",
+        "age": "age",
+        # --- Status / flags ---
+        "status": "status",
+        "stat": "status",
+        "st": "state",
+        "flag": "flag",
+        "ind": "indicator",
+        "active": "active",
+        "inactive": "inactive",
+        "pend": "pending",
+        "comp": "completed",
+        "fail": "failed",
+        "succ": "successful",
+        "valid": "valid",
+        "invalid": "invalid",
+        "req": "required",
+        "opt": "optional",
+        # --- Text / description ---
+        "desc": "description",
+        "msg": "message",
+        "note": "note",
+        "comment": "comment",
+        "title": "title",
+        "label": "label",
+        "name": "name",
+        "alias": "alias",
+        "abbr": "abbreviation",
+        "txt": "text",
+        # --- Categories / grouping ---
+        "type": "type",
+        "cat": "category",
+        "grp": "group",
+        "class": "classification",
+        "seg": "segment",
+        "dept": "department",
+        "div": "division",
+        "region": "region",
+        "zone": "zone",
+        # --- Financial / sales ---
+        "acct": "account",
+        "txn": "transaction",
+        "gl": "general_ledger",
+        "ar": "accounts_receivable",
+        "ap": "accounts_payable",
+        "rev": "revenue",
+        "exp": "expense",
+        "inc": "income",
+        "cost": "cost",
+        "price": "price",
+        "amt_due": "amount_due",
+        "disc": "discount",
+        "tax": "tax",
+        "fee": "fee",
+        "margin": "margin",
+        "profit": "profit",
+        "sale": "sale",
+        "sales": "sales",
+        "purchase": "purchase",
+        "purch": "purchase",
+        # --- Orders / inventory / logistics ---
+        "ord": "order",
+        "po": "purchase_order",
+        "so": "sales_order",
+        "inv": "invoice",
+        "ship": "shipment",
+        "rcv": "received",
+        "recv": "received",
+        "deliv": "delivered",
+        "qty_on_hand": "quantity_on_hand",
+        "qty_avail": "quantity_available",
+        "qty_alloc": "quantity_allocated",
+        "sku": "stock_keeping_unit",
+        "item": "item",
+        "prod": "product",
+        "inventory": "inventory",
+        "stock": "stock",
+        "wh": "warehouse",
+        "bin": "bin",
+        "lot": "lot",
+        "batch": "batch",
+        "uom": "unit_of_measure",
+        "pack": "package",
+        # --- People / org ---
+        "cust": "customer",
+        "client": "client",
+        "user": "user",
+        "usr": "user",
+        "emp": "employee",
+        "empl": "employee",
+        "mgr": "manager",
+        "sup": "supervisor",
+        "owner": "owner",
+        "vendor": "vendor",
+        "supp": "supplier",
+        "partner": "partner",
+        # --- Location / address ---
+        "addr": "address",
+        "street": "street",
+        "apt": "apartment",
+        "suite": "suite",
+        "bldg": "building",
+        "fl": "floor",
+        "rm": "room",
+        "loc": "location",
+        "city": "city",
+        "state": "state",
+        "prov": "province",
+        "region": "region",
+        "country": "country",
+        "zip": "zipcode",
+        "postal": "postal_code",
+        "lat": "latitude",
+        "lon": "longitude",
+        "lng": "longitude",
+        "geo": "geolocation",
+        # --- Contact ---
+        "phone": "phone",
+        "tel": "telephone",
+        "fax": "fax",
+        "mobile": "mobile",
+        "cell": "cellular",
+        "email": "email",
+        "ext": "extension",
+        "home": "home",
+        "work": "work",
+        "other": "other",
+        # --- File / system / metadata ---
+        "src": "source",
+        "dst": "destination",
+        "path": "path",
+        "url": "url",
+        "uri": "uri",
+        "file": "file",
+        "fname": "filename",
+        "fpath": "filepath",
+        "dir": "directory",
+        "size": "size",
+        "len": "length",
+        "hash": "hash",
+        "chk": "checksum",
+        "enc": "encoding",
+        "fmt": "format",
+        # --- Versioning / lifecycle ---
+        "ver": "version",
+        "rev": "revision",
+        "iter": "iteration",
+        "stage": "stage",
+        "step": "step",
+        "init": "initial",
+        "final": "final",
+        "curr": "current",
+        "prev": "previous",
+        "next": "next",
+        "crt": "created",
+        "upd": "updated",
+        "mod": "modified",
+        "del": "deleted",
+        "arch": "archive",
+        "hist": "history",
+        # --- Quality / metrics ---
+        "score": "score",
+        "metric": "metric",
+        "kpi": "key_performance_indicator",
+        "sla": "service_level_agreement",
+        "err": "error",
+        "warn": "warning",
+        "info": "information",
+        # --- Misc ---
+        "std": "standard",
+        "cfg": "configuration",
+        "param": "parameter",
+        "attr": "attribute",
+        "prop": "property",
+        "meta": "metadata",
+    }
+
+    def __init__(self, acronym_map: Optional[Dict[str, str]] = None):
+        """
+        Initialize the schema normalizer.
+
+        Args:
+            acronym_map: Optional custom acronym expansion dictionary.
+                        Merged with defaults.
+        """
+        self.acronyms = self.DEFAULT_ACRONYMS.copy()
+        if acronym_map:
+            self.acronyms.update(acronym_map)
+
+    def tokenize_identifier(self, name: str) -> List[str]:
+        """
+        Split identifier into tokens based on snake_case, camelCase, and acronyms.
+
+        Examples:
+            "cust_txn_amt" → ["cust", "txn", "amt"]
+            "OrderDT" → ["Order", "DT"]
+            "CustomerTransactionAmount" → ["Customer", "Transaction", "Amount"]
+
+        Args:
+            name: Identifier to tokenize
+
+        Returns:
+            List of tokens
+        """
+        if not name:
+            return []
+
+        # Handle snake_case
+        tokens = []
+        for part in name.split("_"):
+            if not part:
+                continue
+            # Handle camelCase within each part
+            tokens.extend(self._split_camel_case(part))
+
+        return tokens
+
+    def _split_camel_case(self, text: str) -> List[str]:
+        """Split camelCase/PascalCase text into tokens."""
+        if not text:
+            return []
+
+        # Insert space before uppercase letters that follow lowercase
+        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", text)
+        # Insert space before uppercase letters that follow lowercase/digits
+        result = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1)
+
+        return [t for t in result.split("_") if t]
+
+    def expand_tokens(self, tokens: List[str]) -> List[str]:
+        """
+        Expand acronym tokens to full words.
+
+        Args:
+            tokens: List of tokens
+
+        Returns:
+            List of tokens with acronyms expanded
+        """
+        expanded = []
+        for token in tokens:
+            lower = token.lower()
+            # Try exact match first
+            if lower in self.acronyms:
+                expanded.append(self.acronyms[lower])
+            else:
+                expanded.append(lower)
+        return expanded
+
+    def normalize_identifier(self, name: str) -> str:
+        """
+        Fully normalize identifier: tokenize, expand, lowercase.
+
+        Examples:
+            "cust_txn_amt" → "customer transaction amount"
+            "OrderDT" → "order date"
+
+        Args:
+            name: Identifier to normalize
+
+        Returns:
+            Normalized string with spaces
+        """
+        if not name:
+            return ""
+
+        tokens = self.tokenize_identifier(name)
+        expanded = self.expand_tokens(tokens)
+        return " ".join(expanded).lower().strip()
+
+    def normalize_text(self, text: str) -> str:
+        """
+        Normalize free-form text: lowercase, remove extra whitespace.
+
+        Args:
+            text: Text to normalize
+
+        Returns:
+            Normalized text
+        """
+        if not text:
+            return ""
+
+        # Lowercase
+        text = text.lower()
+        # Remove extra whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+        # Remove special characters except spaces and alphanumerics
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        # Collapse spaces again
+        text = re.sub(r"\s+", " ", text).strip()
+
+        return text
+
+
+# =============================================================================
+# STEP 2: DATA CLASSES
+# =============================================================================
+
+
+@dataclass
+class ColumnMetadata:
+    """Metadata for a single column."""
+
+    table_name: str
+    column_name: str
+    normalized_name: str
+    semantic_meaning: Optional[str] = None
+    comment: Optional[str] = None
+    data_type: Optional[str] = None
+
+
+@dataclass
+class TableMetadata:
+    """Metadata for a single table."""
+
+    table_name: str
+    normalized_name: str
+    semantic_meaning: Optional[str] = None
+    columns: Dict[str, ColumnMetadata] = field(default_factory=dict)
+    comment: Optional[str] = None
+
+
+@dataclass
+class TableSelectionResult:
+    """Result of table selection query."""
+
+    status: str  # "success", "ambiguous", "no_match"
+    tables: List[str]
+    confidences: Dict[str, float]
+    top_candidates: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# =============================================================================
+# STEP 3: NLP TABLE SELECTOR
+# =============================================================================
 
 
 class NLPTableSelector:
     """
-    Production-grade NLP-based table selector using semantic embeddings.
+    Production-grade semantic table selector for SQL databases.
 
-    Architecture:
-    - Builds semantic table documents (table name + columns + synonyms)
-    - Embeds tables once at init (cached)
-    - Encodes user prompts at runtime
-    - Scores via cosine similarity + softmax
-    - Applies confidence thresholds and tie detection
+    Selects relevant tables for natural language queries without manual selection.
+    Supports large schemas (100k+ columns) using column-level embeddings.
     """
 
     def __init__(
         self,
-        db_connector: DatabaseConnector,
+        db_connector: Any,
         model_name: str = "all-MiniLM-L6-v2",
         confidence_threshold: float = 0.55,
         tie_threshold: float = 0.10,
         table_synonyms: Optional[Dict[str, List[str]]] = None,
-        column_comments: Optional[Dict[str, Dict[str, str]]] = None,
+        column_comments: Optional[Dict[str, str]] = None,
+        acronym_map: Optional[Dict[str, str]] = None,
+        semantic_layer: Optional[Dict[str, Dict[str, str]]] = None,
     ):
         """
         Initialize the NLP table selector.
 
         Args:
-            db_connector: DatabaseConnector instance
-            model_name: SentenceTransformer model (default: all-MiniLM-L6-v2)
-            confidence_threshold: Min confidence to accept a selection (0-1)
-            tie_threshold: Max difference between top 2 scores to flag as ambiguous
-            table_synonyms: Dict mapping table_name → list of business synonyms
-            column_comments: Dict mapping table_name → {column_name → comment}
+            db_connector: DatabaseConnector instance (must be connected)
+            model_name: Sentence transformer model name
+            confidence_threshold: Minimum confidence for table selection (0-1)
+            tie_threshold: Threshold for tie detection (0-1)
+            table_synonyms: Optional dict mapping table names to synonym lists
+            column_comments: Optional dict mapping column names to comments
+            acronym_map: Optional custom acronym dictionary
+            semantic_layer: Optional dict with "tables" and "columns" meanings:
+                {
+                    "tables": {
+                        "CST_TXN_H": "customer transaction history"
+                    },
+                    "columns": {
+                        "CST_TXN_H.C_AMT": "transaction amount local currency"
+                    }
+                }
+
+        Raises:
+            RuntimeError: If db_connector is not connected
+            ImportError: If required libraries unavailable
         """
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers not installed. "
-                "Install with: pip install sentence-transformers"
+        if not db_connector.engine:
+            raise RuntimeError(
+                "Database connector must be connected before initializing selector"
             )
 
         self.db_connector = db_connector
-        self.model = SentenceTransformer(model_name)
-        self.model_name = model_name
         self.confidence_threshold = confidence_threshold
         self.tie_threshold = tie_threshold
         self.table_synonyms = table_synonyms or {}
         self.column_comments = column_comments or {}
+        self.semantic_layer = semantic_layer or {}
 
-        # Build and embed table documents
-        self.table_docs = self._build_table_documents()
-        self.table_embeddings: Dict[str, np.ndarray] = {}
-        self.schema_hash = ""
-        self._embed_tables()
+        # Initialize normalizer
+        self.normalizer = SchemaNormalizer(acronym_map=acronym_map)
+
+        # Load embedding model
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self.model = SentenceTransformer(model_name)
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers required. Install with: "
+                "pip install sentence-transformers"
+            )
+
+        logger.info(f"Initialized NLPTableSelector with model: {model_name}")
+
+        # Storage
+        self.schema_hash: Optional[str] = None
+        self.table_metadata: Dict[str, TableMetadata] = {}
+        self.column_embeddings: List[np.ndarray] = []
+        self.column_index: List[Tuple[str, str]] = []
+        self.fk_graph: Dict[str, Set[str]] = defaultdict(set)
+        self.table_docs: Dict[str, str] = {}
+
+        # Build initial schema
+        self._refresh_schema()
+
+    def _refresh_schema(self) -> None:
+        """Build or rebuild schema structure from database."""
+        logger.info("Building schema structure...")
+
+        # Clear existing data
+        self.table_metadata.clear()
+        self.column_embeddings.clear()
+        self.column_index.clear()
+        self.fk_graph.clear()
+        self.table_docs.clear()
+
+        # Get tables
+        tables = self.db_connector.get_tables()
+        logger.info(f"Found {len(tables)} tables")
+
+        if not tables:
+            logger.warning("No tables found in database")
+            return
+
+        # Build table metadata and documents
+        for table_name in tables:
+            self._build_table_metadata(table_name)
+
+        # Build foreign key graph
+        self._build_fk_graph()
+
+        # Build column embeddings
+        self._build_column_embeddings()
+
+        # Compute schema hash
+        self._compute_schema_hash(tables)
 
         logger.info(
-            f"NLPTableSelector initialized with {len(self.table_docs)} tables. "
-            f"Model: {model_name}, Threshold: {confidence_threshold}"
+            f"Schema built: {len(self.table_metadata)} tables, "
+            f"{len(self.column_index)} columns indexed"
         )
 
-    def _build_table_documents(self) -> Dict[str, str]:
-        """
-        Build semantic documents for each table.
+    def _build_table_metadata(self, table_name: str) -> None:
+        """Build metadata for a single table."""
+        # Get columns
+        columns = self.db_connector.get_columns(table_name)
 
-        Document includes:
-        - Table name
-        - Column names
-        - Column comments (if available)
-        - Business synonyms (if provided)
+        # Create table metadata
+        normalized_table_name = self.normalizer.normalize_identifier(table_name)
 
-        Returns:
-            Dict mapping table_name → semantic document string
-        """
-        table_docs = {}
-        tables = self.db_connector.get_tables()
+        # Get semantic table meaning
+        semantic_table = None
+        if self.semantic_layer.get("tables", {}).get(table_name):
+            semantic_table = self.semantic_layer["tables"][table_name]
 
-        for table in tables:
-            doc_parts = [table]  # Start with table name
+        table_meta = TableMetadata(
+            table_name=table_name,
+            normalized_name=normalized_table_name,
+            semantic_meaning=semantic_table,
+        )
 
-            # Add business synonyms if available
-            if table in self.table_synonyms:
-                doc_parts.extend(self.table_synonyms[table])
+        # Build column metadata
+        for col_name in columns:
+            normalized_col_name = self.normalizer.normalize_identifier(col_name)
 
-            # Add column names and comments
-            columns = self.db_connector.get_columns(table)
-            doc_parts.extend(columns)
+            # Get semantic column meaning
+            col_key = f"{table_name}.{col_name}"
+            semantic_col = None
+            if self.semantic_layer.get("columns", {}).get(col_key):
+                semantic_col = self.semantic_layer["columns"][col_key]
 
-            if table in self.column_comments:
-                for col in columns:
-                    if col in self.column_comments[table]:
-                        doc_parts.append(self.column_comments[table][col])
-
-            # Join into single document string
-            document = " ".join(doc_parts)
-            table_docs[table] = document
-            logger.debug(f"Built document for table '{table}': {document[:100]}...")
-
-        return table_docs
-
-    def _embed_tables(self):
-        """Embed all table documents and compute schema hash."""
-        try:
-            for table_name, doc in self.table_docs.items():
-                embedding = self.model.encode(doc, normalize_embeddings=True)
-                self.table_embeddings[table_name] = embedding
-
-            # Compute schema hash for versioning
-            schema_str = "|".join(sorted(self.table_docs.keys()))
-            self.schema_hash = hashlib.sha256(schema_str.encode()).hexdigest()[:16]
-
-            logger.info(
-                f"Embedded {len(self.table_embeddings)} tables. "
-                f"Schema hash: {self.schema_hash}"
+            col_meta = ColumnMetadata(
+                table_name=table_name,
+                column_name=col_name,
+                normalized_name=normalized_col_name,
+                semantic_meaning=semantic_col,
+                comment=self.column_comments.get(col_key),
             )
+            table_meta.columns[col_name] = col_meta
+
+        self.table_metadata[table_name] = table_meta
+
+        # Build table document for embeddings
+        self._build_table_document(table_name, table_meta)
+
+    def _build_table_document(self, table_name: str, table_meta: TableMetadata) -> None:
+        """Build semantic document for a table."""
+        doc_parts = [table_meta.normalized_name]
+
+        # Add semantic table meaning
+        if table_meta.semantic_meaning:
+            normalized_semantic = self.normalizer.normalize_text(
+                table_meta.semantic_meaning
+            )
+            doc_parts.append(normalized_semantic)
+
+        # Add table synonyms
+        if table_name in self.table_synonyms:
+            synonyms_text = " ".join(self.table_synonyms[table_name])
+            normalized_syns = self.normalizer.normalize_text(synonyms_text)
+            doc_parts.append(normalized_syns)
+
+        # Add column names and meanings
+        for col_meta in table_meta.columns.values():
+            doc_parts.append(col_meta.normalized_name)
+
+            # Add semantic column meaning
+            if col_meta.semantic_meaning:
+                normalized_semantic = self.normalizer.normalize_text(
+                    col_meta.semantic_meaning
+                )
+                doc_parts.append(normalized_semantic)
+
+            # Add column comment
+            if col_meta.comment:
+                normalized_comment = self.normalizer.normalize_text(col_meta.comment)
+                doc_parts.append(normalized_comment)
+
+        self.table_docs[table_name] = " ".join(doc_parts)
+
+    def _build_column_embeddings(self) -> None:
+        """Build embeddings for all columns."""
+        logger.info("Building column embeddings...")
+
+        # Create embedding text for each column
+        embedding_texts = []
+
+        for table_name, table_meta in self.table_metadata.items():
+            table_doc = self.table_docs[table_name]
+
+            for col_name, col_meta in table_meta.columns.items():
+                # Combine table doc with column info
+                col_text = f"{table_doc} {col_meta.normalized_name}"
+
+                # Add semantic meaning if available
+                if col_meta.semantic_meaning:
+                    normalized_semantic = self.normalizer.normalize_text(
+                        col_meta.semantic_meaning
+                    )
+                    col_text = f"{col_text} {normalized_semantic}"
+
+                embedding_texts.append(col_text)
+                self.column_index.append((table_name, col_name))
+
+        # Encode all at once for efficiency
+        if embedding_texts:
+            embeddings = self.model.encode(
+                embedding_texts,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            self.column_embeddings = embeddings.tolist()
+
+        logger.info(f"Created {len(self.column_embeddings)} column embeddings")
+
+    def _build_fk_graph(self) -> None:
+        """Build foreign key relationship graph."""
+        try:
+            from sqlalchemy import inspect
+
+            inspector = inspect(self.db_connector.engine)
+
+            # Get foreign key constraints for each table
+            tables = self.db_connector.get_tables()
+
+            for table_name in tables:
+                fks = inspector.get_foreign_keys(table_name)
+
+                for fk in fks:
+                    ref_table = fk.get("referred_table")
+                    if ref_table:
+                        self.fk_graph[table_name].add(ref_table)
+                        self.fk_graph[ref_table].add(table_name)
+
+            logger.info(f"Built FK graph with {len(self.fk_graph)} table relationships")
         except Exception as e:
-            logger.error(f"Failed to embed tables: {str(e)}")
-            raise
+            logger.warning(f"Could not build FK graph: {e}")
 
-    def _softmax(self, scores: np.ndarray) -> np.ndarray:
-        """
-        Compute softmax probabilities from scores.
-
-        Args:
-            scores: Array of similarity scores
-
-        Returns:
-            Softmax probabilities (sum to 1.0)
-        """
-        e = np.exp(scores - np.max(scores))
-        return e / e.sum()
+    def _compute_schema_hash(self, tables: List[str]) -> None:
+        """Compute hash of schema for change detection."""
+        schema_str = "|".join(sorted(tables))
+        self.schema_hash = hashlib.sha256(schema_str.encode()).hexdigest()
 
     def select_tables(
         self,
         prompt: str,
         top_k: int = 3,
-        return_all_scores: bool = False,
-    ) -> Dict[str, Any]:
+        fk_expand: bool = True,
+    ) -> TableSelectionResult:
         """
-        Select the most relevant table(s) for a user prompt.
+        Select tables relevant to a natural language query.
+
+        Process:
+        1. Normalize and embed the query
+        2. Find top-K matching columns via cosine similarity
+        3. Aggregate column matches to table scores
+        4. Apply thresholds for final selection
+        5. Expand via foreign key relationships
 
         Args:
-            prompt: User's natural language prompt
-            top_k: Number of top candidates to return if ambiguous
-            return_all_scores: If True, return scores for all tables
+            prompt: Natural language query
+            top_k: Number of top tables to return
+            fk_expand: Whether to expand selected tables via FK graph
 
         Returns:
-            Dict with keys:
-            - status: "success", "ambiguous", or "no_match"
-            - tables: Selected table name(s) (str or list)
-            - confidences: Dict mapping table_name → confidence (0-1)
-            - reason: Why this decision was made (for ambiguous/no_match)
-            - top_candidates: Top k alternatives (if ambiguous)
-            - metadata: Debug info (prompt, embeddings shapes, schema_hash)
+            TableSelectionResult with selected tables and confidences
         """
-        logger.debug(f"Processing prompt: {prompt}")
+        logger.info(f"Selecting tables for prompt: {prompt[:100]}")
 
-        try:
-            # Encode prompt
-            prompt_embedding = self.model.encode(prompt, normalize_embeddings=True)
-
-            # Compute cosine similarity scores
-            scores = []
-            tables = list(self.table_embeddings.keys())
-
-            for table in tables:
-                score = float(np.dot(prompt_embedding, self.table_embeddings[table]))
-                scores.append(score)
-
-            scores = np.array(scores)
-            confidences_raw = self._softmax(scores)
-
-            # Map to table names
-            confidence_dict = {
-                table: float(conf) for table, conf in zip(tables, confidences_raw)
-            }
-
-            # Sort by confidence
-            sorted_results = sorted(
-                confidence_dict.items(), key=lambda x: x[1], reverse=True
+        if not self.column_embeddings:
+            return TableSelectionResult(
+                status="no_match",
+                tables=[],
+                confidences={},
+                metadata={"error": "Schema not initialized"},
             )
-            top_table, top_confidence = sorted_results[0]
 
-            # Decision logic with guardrails
-            result = {
-                "metadata": {
-                    "prompt": prompt,
-                    "model": self.model_name,
-                    "schema_hash": self.schema_hash,
-                    "embedding_shape": prompt_embedding.shape,
-                }
-            }
+        # Normalize and embed query
+        normalized_prompt = self.normalizer.normalize_text(prompt)
+        prompt_embedding = self.model.encode(
+            normalized_prompt,
+            normalize_embeddings=True,
+        )
 
-            if return_all_scores:
-                result["all_confidences"] = confidence_dict
+        # Retrieve top columns via cosine similarity
+        top_columns = self._retrieve_top_columns(prompt_embedding, top_k * 5)
 
-            # Check: confidence threshold
-            if top_confidence < self.confidence_threshold:
-                logger.warning(
-                    f"Low confidence: {top_table}={top_confidence:.3f} < {self.confidence_threshold}"
-                )
-                result.update(
-                    {
-                        "status": "ambiguous",
-                        "reason": "low_confidence",
-                        "confidences": confidence_dict,
-                        "top_candidates": [t for t, _ in sorted_results[:top_k]],
-                    }
-                )
-                return result
+        # Aggregate to table scores
+        table_scores = self._aggregate_to_tables(top_columns)
 
-            # Check: tie detection (multiple plausible tables)
-            if len(sorted_results) > 1:
-                second_table, second_confidence = sorted_results[1]
-                margin = top_confidence - second_confidence
+        # Apply softmax to get confidences
+        confidences = self._softmax_scores(table_scores)
 
-                if margin < self.tie_threshold:
-                    logger.warning(
-                        f"Tie detected: {top_table}={top_confidence:.3f} vs "
-                        f"{second_table}={second_confidence:.3f}, margin={margin:.3f}"
-                    )
-                    # Return top k candidates
-                    top_candidates = [t for t, _ in sorted_results[:top_k]]
-                    result.update(
-                        {
-                            "status": "ambiguous",
-                            "reason": "multiple_tables",
-                            "confidences": confidence_dict,
-                            "top_candidates": top_candidates,
-                        }
-                    )
-                    return result
+        # Apply thresholds
+        selected_tables, top_candidates = self._apply_thresholds(confidences, top_k)
 
-            # Success: single clear winner
-            logger.info(
-                f"Selected table: {top_table} (confidence={top_confidence:.3f})"
-            )
-            result.update(
-                {
-                    "status": "success",
-                    "tables": top_table,
-                    "confidences": confidence_dict,
-                }
-            )
-            return result
+        # Expand via FK graph if requested
+        if fk_expand and selected_tables:
+            selected_tables = self._expand_via_fk(selected_tables)
 
-        except Exception as e:
-            logger.error(f"Error selecting tables: {str(e)}", exc_info=True)
-            return {
-                "status": "error",
-                "reason": str(e),
-                "tables": None,
-                "metadata": {"prompt": prompt},
-            }
+        # Determine status
+        if not selected_tables:
+            status = "no_match"
+        elif top_candidates:
+            status = "ambiguous"
+        else:
+            status = "success"
 
-    def set_synonyms(self, table_synonyms: Dict[str, List[str]]):
+        # Filter confidences to selected tables
+        result_confidences = {table: confidences[table] for table in selected_tables}
+
+        result = TableSelectionResult(
+            status=status,
+            tables=selected_tables,
+            confidences=result_confidences,
+            top_candidates=top_candidates,
+            metadata={
+                "prompt": prompt,
+                "normalized_prompt": normalized_prompt,
+                "all_table_scores": dict(confidences),
+            },
+        )
+
+        logger.info(
+            f"Selection result: status={status}, tables={selected_tables}, "
+            f"confidences={result_confidences}"
+        )
+
+        return result
+
+    def _retrieve_top_columns(
+        self, prompt_embedding: np.ndarray, k: int
+    ) -> List[Tuple[str, str, float]]:
         """
-        Update table synonyms and re-embed (schema changed).
+        Retrieve top-K columns by cosine similarity.
 
         Args:
-            table_synonyms: Dict mapping table_name → list of business synonyms
-        """
-        self.table_synonyms = table_synonyms
-        self.table_docs = self._build_table_documents()
-        self._embed_tables()
-        logger.info("Synonyms updated and tables re-embedded.")
+            prompt_embedding: Normalized embedding of query
+            k: Number of top columns to retrieve
 
-    def set_column_comments(self, column_comments: Dict[str, Dict[str, str]]):
+        Returns:
+            List of (table, column, score) tuples
         """
-        Update column comments and re-embed (schema changed).
+        if not self.column_embeddings:
+            return []
+
+        # Compute cosine similarities (dot product with normalized embeddings)
+        col_embeddings_array = np.array(self.column_embeddings)
+        scores = col_embeddings_array @ prompt_embedding
+
+        # Get top-K indices
+        top_indices = np.argsort(scores)[-k:][::-1]
+
+        # Collect results
+        results = []
+        for idx in top_indices:
+            if scores[idx] > 0:  # Only positive similarities
+                table_name, col_name = self.column_index[idx]
+                results.append((table_name, col_name, float(scores[idx])))
+
+        return results
+
+    def _aggregate_to_tables(
+        self, column_matches: List[Tuple[str, str, float]]
+    ) -> Dict[str, float]:
+        """
+        Aggregate column match scores to table scores.
 
         Args:
-            column_comments: Dict mapping table_name → {column_name → comment}
-        """
-        self.column_comments = column_comments
-        self.table_docs = self._build_table_documents()
-        self._embed_tables()
-        logger.info("Column comments updated and tables re-embedded.")
+            column_matches: List of (table, column, score) tuples
 
-    def refresh_schema(self):
-        """Re-fetch schema and re-embed (call after schema changes in DB)."""
+        Returns:
+            Dict mapping table names to aggregated scores
+        """
+        table_scores: Dict[str, float] = defaultdict(float)
+
+        for table_name, col_name, score in column_matches:
+            table_scores[table_name] += score
+
+        return dict(table_scores)
+
+    def _softmax_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
+        """
+        Apply softmax to scores to get probabilities.
+
+        Args:
+            scores: Dict of table scores
+
+        Returns:
+            Dict of normalized confidences (0-1)
+        """
+        if not scores:
+            return {}
+
+        # Convert to array
+        tables = sorted(scores.keys())
+        score_array = np.array([scores[t] for t in tables])
+
+        # Subtract max for numerical stability
+        score_array = score_array - np.max(score_array)
+
+        # Apply exp
+        exp_scores = np.exp(score_array)
+
+        # Compute softmax
+        softmax = exp_scores / np.sum(exp_scores)
+
+        return {table: float(prob) for table, prob in zip(tables, softmax)}
+
+    def _apply_thresholds(
+        self, confidences: Dict[str, float], top_k: int
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Apply confidence thresholds to select final tables.
+
+        Logic:
+        - Select tables with confidence >= confidence_threshold
+        - If no tables meet threshold, return empty
+        - Mark as ambiguous if runner-up within tie_threshold
+
+        Args:
+            confidences: Dict of table confidences
+            top_k: Maximum tables to return
+
+        Returns:
+            Tuple of (selected_tables, ambiguous_candidates)
+        """
+        if not confidences:
+            return [], []
+
+        # Sort by confidence descending
+        sorted_tables = sorted(confidences.items(), key=lambda x: x[1], reverse=True)
+
+        selected = []
+        ambiguous = []
+
+        if not sorted_tables:
+            return [], []
+
+        # Get top table(s)
+        top_score = sorted_tables[0][1]
+
+        # Select all tables within threshold
+        for table_name, score in sorted_tables:
+            if score >= self.confidence_threshold:
+                selected.append(table_name)
+                if len(selected) >= top_k:
+                    break
+
+        # Check for ambiguity
+        if selected:
+            top_selected_score = confidences[selected[0]]
+            for table_name, score in sorted_tables:
+                if table_name not in selected:
+                    if (top_selected_score - score) <= self.tie_threshold:
+                        ambiguous.append(table_name)
+                    else:
+                        break
+
+        return selected, ambiguous[:top_k]
+
+    def _expand_via_fk(self, tables: List[str], max_hops: int = 1) -> List[str]:
+        """
+        Expand selected tables via foreign key relationships.
+
+        Args:
+            tables: List of primary table selections
+            max_hops: Maximum hops in FK graph
+
+        Returns:
+            Expanded list of related tables
+        """
+        expanded = set(tables)
+        current_level = set(tables)
+
+        for _ in range(max_hops):
+            next_level = set()
+            for table in current_level:
+                related = self.fk_graph.get(table, set())
+                next_level.update(related - expanded)
+
+            if not next_level:
+                break
+
+            expanded.update(next_level)
+            current_level = next_level
+
+        return list(expanded)
+
+    def refresh_schema(self) -> None:
+        """
+        Refresh schema structure from database.
+
+        Call this after database schema changes.
+        Rebuilds all embeddings.
+        """
         logger.info("Refreshing schema from database...")
-        self.table_docs = self._build_table_documents()
-        self._embed_tables()
-        logger.info("Schema refreshed and tables re-embedded.")
+        self._refresh_schema()
+
+    def set_synonyms(self, table_synonyms: Dict[str, List[str]]) -> None:
+        """
+        Set or update table synonyms and rebuild embeddings.
+
+        Args:
+            table_synonyms: Dict mapping table names to synonym lists
+        """
+        logger.info(f"Setting {len(table_synonyms)} table synonyms")
+        self.table_synonyms.update(table_synonyms)
+        self._build_table_embeddings_for_tables(list(table_synonyms.keys()))
+
+    def set_column_comments(self, column_comments: Dict[str, str]) -> None:
+        """
+        Set or update column comments and rebuild embeddings.
+
+        Args:
+            column_comments: Dict mapping column keys (table.column) to comments
+        """
+        logger.info(f"Setting {len(column_comments)} column comments")
+        self.column_comments.update(column_comments)
+        # Rebuild all embeddings since column info changed
+        self._build_column_embeddings()
+
+    def set_semantic_layer(self, semantic_layer: Dict[str, Dict[str, str]]) -> None:
+        """
+        Set or update semantic layer with business meanings.
+
+        Semantic layer structure:
+        {
+            "tables": {
+                "CST_TXN_H": "customer transaction history"
+            },
+            "columns": {
+                "CST_TXN_H.C_AMT": "transaction amount local currency"
+            }
+        }
+
+        Args:
+            semantic_layer: Semantic meanings for tables and columns
+        """
+        logger.info(f"Setting semantic layer with {len(semantic_layer)} entries")
+        self.semantic_layer.update(semantic_layer)
+        # Rebuild all embeddings since semantic info changed
+        self._refresh_schema()
+
+    def _build_table_embeddings_for_tables(self, table_names: List[str]) -> None:
+        """Rebuild documents and embeddings for specific tables."""
+        for table_name in table_names:
+            if table_name in self.table_metadata:
+                self._build_table_document(table_name, self.table_metadata[table_name])
+
+        # Rebuild all column embeddings
+        self._build_column_embeddings()
+
+    def get_schema_info(self) -> Dict[str, Any]:
+        """
+        Get information about current schema.
+
+        Returns:
+            Dict with schema statistics
+        """
+        return {
+            "num_tables": len(self.table_metadata),
+            "num_columns": sum(
+                len(meta.columns) for meta in self.table_metadata.values()
+            ),
+            "num_embeddings": len(self.column_embeddings),
+            "schema_hash": self.schema_hash,
+            "fk_relationships": len(self.fk_graph),
+            "model_name": self.model.get_sentence_embedding_dimension(),
+            "confidence_threshold": self.confidence_threshold,
+            "tie_threshold": self.tie_threshold,
+        }
