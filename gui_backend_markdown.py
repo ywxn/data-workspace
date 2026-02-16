@@ -619,13 +619,15 @@ class DataWorkspaceBackend:
         else:
             first_cols = ", ".join(all_columns[:30])
             last_cols = ", ".join(all_columns[-20:])
-            columns_list = f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+            columns_list = (
+                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+            )
 
         # Prepare example questions list (compact bullets)
         example_questions = [
             "What insights can you find in this data?",
             "Show me a summary of the data",
-            "What trends are visible?"
+            "What trends are visible?",
         ]
         example_list = "\n".join([f"- {q}" for q in example_questions])
 
@@ -663,7 +665,6 @@ class DataWorkspaceBackend:
 
         return welcome_msg
 
-
     def format_file_welcome_message(
         self,
         file_paths: List[str],
@@ -671,7 +672,7 @@ class DataWorkspaceBackend:
         status: str,
     ) -> str:
         """Format welcome message for file data loading with compact bullets."""
-    
+
         # Format columns
         all_columns = merged_dataframe.columns.tolist()
         if len(all_columns) <= 50:
@@ -679,26 +680,30 @@ class DataWorkspaceBackend:
         else:
             first_cols = ", ".join(all_columns[:30])
             last_cols = ", ".join(all_columns[-20:])
-            columns_list = f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
-    
+            columns_list = (
+                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+            )
+
         # Prepare example questions list (compact bullets)
         example_questions = [
             "What insights can you find in this data?",
             "Show me a summary of the data",
-            "What trends are visible?"
+            "What trends are visible?",
         ]
         example_list = "\n".join([f"- {q}" for q in example_questions])
-    
+
         # Prepare file list (compact bullets)
         file_count = len(file_paths)
         file_word = "file" if file_count == 1 else "files"
-        files_detail = "\n".join([f"- {fp.split('/')[-1].split(chr(92))[-1]}" for fp in file_paths])
-    
+        files_detail = "\n".join(
+            [f"- {fp.split('/')[-1].split(chr(92))[-1]}" for fp in file_paths]
+        )
+
         merge_info = ""
         if file_count > 1 and "Merge strategy:" in status:
             merge_strategy = status.split("Merge strategy:")[1].strip()
             merge_info = f"**Merge Strategy:** {merge_strategy}"
-    
+
         welcome_msg = self._join_markdown_blocks(
             [
                 "### Data Loaded Successfully",
@@ -709,5 +714,5 @@ class DataWorkspaceBackend:
                 f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
             ]
         )
-    
+
         return welcome_msg

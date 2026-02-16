@@ -4,24 +4,23 @@ import markdown
 def markdown_to_html(md: str) -> str:
     """
     Convert GitHub Flavored Markdown to styled HTML.
-    
+
     Includes support for:
     - Tables with styling
     - Fenced code blocks
     - Lists
-    
+
     Args:
         md: Markdown text string
-        
+
     Returns:
         HTML string with embedded CSS for table styling
     """
     # Convert markdown to HTML with extensions for GitHub-flavored markdown
     html_content = markdown.markdown(
-        md,
-        extensions=["tables", "fenced_code", "sane_lists"]
+        md, extensions=["tables", "fenced_code", "sane_lists"]
     )
-    
+
     # Add CSS styling for tables and other elements
     styled_html = f"""
 <style>
@@ -65,5 +64,5 @@ def markdown_to_html(md: str) -> str:
 </style>
 {html_content}
 """
-    
+
     return styled_html

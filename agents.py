@@ -489,9 +489,7 @@ class AIAgent:
             # Handle dictionary results (e.g., with image paths)
             parts = []
             for key, value in result.items():
-                if key in ["chart_path"] and isinstance(
-                    value, str
-                ):
+                if key in ["chart_path"] and isinstance(value, str):
                     parts.append(f"![Generated Visualization]({value})")
                 elif key == "message":
                     parts.append(str(value))
