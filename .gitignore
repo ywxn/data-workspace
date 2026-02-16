@@ -18,3 +18,12 @@ projects/
 
 # Ignore testing.py (contains sensitive information)
 testing.py
+
+# ignore compilation folders
+*.build/
+*.dist/
+
+# ignore compiled files
+*.cmd
+*.exe
+*.dll
