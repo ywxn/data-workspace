@@ -1779,6 +1779,20 @@ def start_application():
     logger.info("=" * 60)
     app = QApplication(sys.argv)
 
+    # Preload theme before any dialogs are shown
+    try:
+        config = ConfigManager.load_config()
+        saved_theme = config.get("theme", "system")
+        if saved_theme == "dark":
+            app.setStyleSheet(DARK_THEME_STYLESHEET)
+        elif saved_theme == "light":
+            app.setStyleSheet(LIGHT_THEME_STYLESHEET)
+        else:
+            app.setStyleSheet("")
+        logger.info(f"Preloaded theme: {saved_theme}")
+    except Exception as e:
+        logger.warning(f"Failed to preload theme: {str(e)}")
+
     # Check if API keys are configured, if not prompt user to set them up
     if not ConfigManager.has_any_api_key():
         logger.warning("No API keys configured, prompting user for setup")
