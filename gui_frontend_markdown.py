@@ -628,6 +628,9 @@ class DatabaseConnectionDialog(QDialog):
         method_pref = ConfigManager.get_table_selection_method()
         if method_pref == "nlp":
             self.selection_method_combo.setCurrentIndex(1)
+        self.selection_method_combo.currentTextChanged.connect(
+            self.on_selection_method_changed
+        )
         form_layout.addRow("Table Selection:", self.selection_method_combo)
 
         # Common fields
@@ -656,8 +659,12 @@ class DatabaseConnectionDialog(QDialog):
         self.semantic_layer_label = QLabel("No semantic layer loaded")
         self.semantic_layer_button = QPushButton("Import Semantic Layer (JSON)")
         self.semantic_layer_button.clicked.connect(self.import_semantic_layer)
-        form_layout.addRow("", self.semantic_layer_button)
-        form_layout.addRow("", self.semantic_layer_label)
+        self.semantic_layer_container = QWidget()
+        semantic_layout = QVBoxLayout(self.semantic_layer_container)
+        semantic_layout.setContentsMargins(0, 0, 0, 0)
+        semantic_layout.addWidget(self.semantic_layer_button)
+        semantic_layout.addWidget(self.semantic_layer_label)
+        form_layout.addRow("", self.semantic_layer_container)
 
         layout.addLayout(form_layout)
 
@@ -671,6 +678,7 @@ class DatabaseConnectionDialog(QDialog):
 
         # Initialize field visibility
         self.on_db_type_changed(self.db_type_combo.currentText())
+        self.on_selection_method_changed(self.selection_method_combo.currentText())
 
     def on_db_type_changed(self, db_type):
         """Show/hide fields based on database type"""
@@ -688,6 +696,12 @@ class DatabaseConnectionDialog(QDialog):
             self.database_input.setPlaceholderText("Path to .db or .sqlite file")
         else:
             self.database_input.setPlaceholderText("Database name")
+
+    def on_selection_method_changed(self, method_text):
+        """Show/hide semantic layer controls based on selection method."""
+        logger.debug(f"Table selection method changed to: {method_text}")
+        is_nlp = "nlp" in method_text.lower()
+        self.semantic_layer_container.setVisible(is_nlp)
 
     def validate_and_accept(self):
         """Validate inputs before accepting"""
@@ -897,7 +911,9 @@ class ProjectLoadDialog(QDialog):
 
         self.file_list = QListWidget()
         for f in files:
-            self.file_list.addItem(QListWidgetItem(f))
+            item = QListWidgetItem(f)
+            item.setToolTip(self._get_project_description(f))
+            self.file_list.addItem(item)
         layout.addWidget(self.file_list)
 
         layout.addSpacing(10)
@@ -922,6 +938,21 @@ class ProjectLoadDialog(QDialog):
         if not items:
             return None
         return items[0].text()
+
+    def _get_project_description(self, file_name: str) -> str:
+        """Return project description for tooltip display."""
+        path = os.path.join("projects", file_name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            description = (data or {}).get("description")
+            if isinstance(description, str) and description.strip():
+                return description.strip()
+        except Exception as e:
+            logger.debug(
+                f"Failed to read description for project '{file_name}': {e}"
+            )
+        return "No description available."
 
 
 def select_tables_with_method(
