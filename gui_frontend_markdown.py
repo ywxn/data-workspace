@@ -79,6 +79,8 @@ class APIKeyConfigDialog(QDialog):
         self.setWindowTitle("API Key Configuration")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
@@ -199,6 +201,8 @@ class CreateProjectDialog(QDialog):
         self.setWindowTitle("Create or Load Project")
         self.setModal(True)
         self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self.project_id: Optional[str] = None
         self.backend = DataWorkspaceBackend()
@@ -530,6 +534,8 @@ class DataSourceDialog(QDialog):
         self.setWindowTitle("Select Data Source")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self.data_source_type = None  # 'database', 'file', or None (cancelled)
         self.data_source_config = {}
@@ -601,6 +607,8 @@ class DatabaseConnectionDialog(QDialog):
         self.setWindowTitle("Database Connection")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self.semantic_layer: Optional[Dict[str, Any]] = None
 
@@ -775,6 +783,8 @@ class NLPPromptDialog(QDialog):
         self.setWindowTitle("Describe the Data You Need")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
@@ -813,6 +823,8 @@ class TableSelectionDialog(QDialog):
         self.setWindowTitle("Select Tables")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self._table_names = table_names
 
@@ -868,6 +880,8 @@ class ProjectLoadDialog(QDialog):
         self.setWindowTitle("Load Local Project")
         self.setModal(True)
         self.setMinimumWidth(450)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
