@@ -2,18 +2,20 @@
 Multi-agent system for AI-powered data analysis.
 
 This module provides an orchestrated agent system that breaks down data analysis
-queries into manageable tasks, generates SQL, and provides insights.
+queries into manageable tasks, generates SQL, creates visualizations, and provides insights.
 """
-
 import json
 import os
+import tempfile
 from string import Template
 from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
 
 from anthropic import Anthropic
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from tabulate import tabulate
+import altair as alt
 
 from config import ConfigManager
 from connector import DatabaseConnector
@@ -60,14 +62,77 @@ ANALYSIS_TEMPERATURE = LLM_TEMPERATURE_ANALYSIS
 CLAUDE_MODEL = LLM_MODELS.get("claude")
 OPENAI_MODEL = LLM_MODELS.get("openai")
 
+# Visualization configuration
+VISUALIZATION_MAX_TOKENS = 800
+VISUALIZATION_TEMPERATURE = 0.3
+VISUALIZATION_TEMP_DIR = "temp_charts"  # TODO: Change to proper temp file handling
+ANALYSIS_CONTEXT_RESULT_MAX_CHARS = 2000
+
+# Visualization prompt template
+VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a Python visualization expert that generates Altair charts from query results.
+
+QUERY RESULT DATA
+Columns: $columns
+Sample rows (first 5): $sample_rows
+
+VISUALIZATION REQUIREMENTS
+$requirements
+
+RULES
+- Use ONLY altair library (imported as alt)
+- Access data via 'data_records' variable (list of dictionaries, already provided)
+- Create ONE chart object assigned to variable 'chart'
+- Use appropriate mark types: mark_bar(), mark_line(), mark_point(), mark_area(), mark_circle(), etc.
+- Encode aesthetics properly with .encode()
+- Add meaningful titles and axis labels
+- Keep it simple and readable
+- Set reasonable width/height (300-600px)
+- Handle missing data gracefully
+
+CHART TYPES TO CONSIDER
+- Bar charts: for categorical comparisons
+- Line charts: for trends over time
+- Scatter plots: for relationships between variables
+- Area charts: for cumulative values
+- Pie/donut: for part-to-whole (use mark_arc)
+
+AVAILABLE DATA
+The variable 'data_records' is a list of dictionaries with the query results.
+Columns available: $columns
+
+OUTPUT FORMAT
+Return ONLY valid Python code. No markdown. No explanations.
+The code should:
+1. Import altair as alt
+2. Create a chart from data_records
+3. Assign the chart to variable 'chart'
+
+EXAMPLE
+```python
+import altair as alt
+chart = alt.Chart(data_records).mark_bar().encode(
+    x='category:N',
+    y='sum(value):Q',
+    color='category:N'
+).properties(
+    width=400,
+    height=300,
+    title='Sales by Category'
+)
+```
+
+Return ONLY the Python code.
+"""
+
 
 class AIAgent:
     """
-    Multi-agent system for data analysis with planner, SQL generator, and analyzer.
+    Multi-agent system for data analysis with planner, SQL generator, visualizer, and analyzer.
 
-    Coordinates three specialized agents:
+    Coordinates four specialized agents:
     - Planner: Breaks down queries into execution plans
     - SQL Generator: Creates executable SQL queries
+    - Visualizer: Generates Altair visualizations from data
     - Analyzer: Provides human-readable insights
     """
 
@@ -91,7 +156,7 @@ class AIAgent:
         logger.info(f"Initializing AIAgent with provider: {self.api_provider}")
 
         # Read API keys lazily from config or environment
-        openai_key = ConfigManager.get_api_key("openai")
+        openai_key = ConfigManager.get_api_key("openai") or os.getenv("OPENAI_API_KEY", "")
         claude_key = ConfigManager.get_api_key("claude") or os.getenv(
             "ANTHROPIC_API_KEY", ""
         )
@@ -115,6 +180,10 @@ class AIAgent:
             )
 
         self.execution_context: Dict[str, Any] = {}
+        
+        # Ensure temp directory exists
+        # TODO: Replace with proper temp file handling
+        Path(VISUALIZATION_TEMP_DIR).mkdir(exist_ok=True)
 
     async def _call_llm(
         self,
@@ -258,6 +327,7 @@ class AIAgent:
                 "task_type": "analysis",
                 "steps": ["Analyze the data based on user query"],
                 "requires_sql": False,
+                "requires_visualization": False,
                 "analysis_focus": user_query,
             },
         )
@@ -302,6 +372,126 @@ class AIAgent:
 
         return self._clean_sql_output(generated_sql)
 
+    async def visualization_agent(
+        self,
+        query_result: Dict[str, Any],
+        plan: Dict[str, Any],
+        user_query: str,
+    ) -> Optional[str]:
+        """
+        Visualization agent that generates Altair charts from query results.
+
+        Args:
+            query_result: Dictionary with 'columns' and 'rows' from SQL execution
+            plan: Execution plan with visualization requirements
+            user_query: Original user query for context
+
+        Returns:
+            Path to saved chart image, or None if visualization fails
+        """
+        if "error" in query_result:
+            logger.warning("Cannot visualize error result")
+            return None
+
+        columns = query_result.get("columns", [])
+        rows = query_result.get("rows", [])
+
+        if not rows:
+            logger.warning("Cannot visualize empty result set")
+            return None
+
+        # Convert to list of dictionaries (Altair-compatible format)
+        data_records = [dict(zip(columns, row)) for row in rows]
+        
+        # Prepare sample for prompt (first 5 records)
+        sample_rows = data_records[:5]
+        
+        # Determine visualization requirements from plan
+        requirements = plan.get("analysis_focus", [])
+        if isinstance(requirements, list):
+            requirements = ", ".join(requirements)
+        requirements = f"{requirements}\n\nUser query: {user_query}"
+
+        system_message = Template(VISUALIZATION_SYSTEM_PROMPT_TEMPLATE).substitute(
+            columns=columns,
+            sample_rows=sample_rows,
+            requirements=requirements,
+        )
+
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"Generate visualization for: {user_query}"},
+        ]
+
+        logger.info("Calling visualization agent...")
+        try:
+            viz_code = await self._call_llm(
+                messages,
+                max_tokens=VISUALIZATION_MAX_TOKENS,
+                temperature=VISUALIZATION_TEMPERATURE,
+            )
+
+            # Clean code output
+            viz_code = self._clean_python_output(viz_code)
+            
+            # Execute visualization code
+            chart_path = self._execute_visualization_code(viz_code, data_records)
+            return chart_path
+
+        except Exception as e:
+            logger.error(f"Visualization generation failed: {str(e)}", exc_info=True)
+            return None
+
+    def _execute_visualization_code(
+        self, viz_code: str, data_records: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """
+        Execute generated visualization code and save chart.
+
+        Args:
+            viz_code: Python code that creates an Altair chart
+            data_records: List of dictionaries with the data
+
+        Returns:
+            Path to saved chart file, or None if execution fails
+        """
+        try:
+            # Create namespace with required variables
+            namespace = {
+                'alt': alt,
+                'data_records': data_records,
+            }
+
+            # Execute the code
+            exec(viz_code, namespace)
+
+            # Get the chart object
+            chart = namespace.get('chart')
+            if chart is None:
+                logger.error("Visualization code did not create 'chart' variable")
+                return None
+
+            # Save chart to temp file
+            # TODO: Replace with proper temp file handling
+            temp_file = tempfile.NamedTemporaryFile(
+                mode='wb',
+                suffix='.png',
+                dir=VISUALIZATION_TEMP_DIR,
+                delete=False
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+
+            # Save as PNG
+            chart.save(temp_path, format="png")
+            logger.info(f"Chart saved to: {temp_path}")
+
+            return temp_path
+
+        except Exception as e:
+            logger.error(f"Failed to execute visualization code: {str(e)}", exc_info=True)
+            return None
+
     async def analysis_agent(
         self,
         user_query: str,
@@ -337,8 +527,9 @@ class AIAgent:
         if plan:
             context_parts.append(f"\nExecution Plan: {plan}")
 
-        if code_output is not None:
-            context_parts.append(f"\nQuery Result: {code_output}")
+        # if code_output is not None:
+        #     compact_result = self._compact_code_output_for_prompt(code_output)
+        #     context_parts.append(f"\nQuery Result Summary: {compact_result}")
 
         system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
             context="\n".join(context_parts)
@@ -390,7 +581,13 @@ class AIAgent:
             plan = await self.planner_agent(user_query, context)
             logger.info(f"Generated plan: {plan}")
 
+            if self._query_requests_visualization(user_query) or plan.get("task_type") == "visualization":
+                plan["requires_visualization"] = True
+                if plan.get("requires_sql") is False:
+                    plan["requires_sql"] = True
+
             query_result = None
+            chart_path = None
 
             # Step 2: Generate and execute SQL if needed
             requires_sql = plan.get("requires_sql")
@@ -401,17 +598,25 @@ class AIAgent:
                 logger.info("SQL generation required")
                 generated_sql = await self.sql_generation_agent(plan, user_query, context)
                 query_result = self._execute_sql_query(generated_sql, context)
+                
+                # Step 3: Generate visualization if needed
+                requires_viz = plan.get("requires_visualization", False)
+                if requires_viz and query_result and "error" not in query_result:
+                    logger.info("Visualization generation required")
+                    chart_path = await self.visualization_agent(
+                        query_result, plan, user_query
+                    )
             else:
                 logger.info("SQL generation not required")
 
-            # Step 3: Get analysis
+            # Step 4: Get analysis
             logger.info("Getting analysis from analysis agent")
             analysis = await self.analysis_agent(
                 user_query, context, plan, query_result
             )
 
-            # Step 4: Format response
-            return self._format_response(query_result, analysis)
+            # Step 5: Format response
+            return self._format_response(query_result, analysis, chart_path)
 
         except Exception as e:
             logger.error(f"Error in execute_query: {str(e)}", exc_info=True)
@@ -469,19 +674,38 @@ class AIAgent:
         finally:
             connector.close()
 
-    def _format_response(self, code_result: Any, analysis: str) -> str:
+    @staticmethod
+    def _query_requests_visualization(user_query: str) -> bool:
+        """Heuristic to force visualization when the user explicitly asks for it."""
+        query = user_query.lower()
+        keywords = ["graph", "chart", "plot", "visualize", "visualisation", "visualization", "trend", "over time"]
+        return any(keyword in query for keyword in keywords)
+
+    def _format_response(
+        self, code_result: Any, analysis: str, chart_path: Optional[str] = None
+    ) -> str:
         """
-        Format the final response with code execution results and analysis.
+        Format the final response with code execution results, visualizations, and analysis.
 
         Args:
             code_result: Output from code execution
             analysis: Text analysis from the analyzer
+            chart_path: Optional path to generated chart
 
         Returns:
             Formatted response string
         """
         response_parts = []
 
+        # Add visualization if available
+        if chart_path:
+            response_parts.append("")
+            response_parts.append("### Visualization:")
+            response_parts.append("")
+            response_parts.append(f"![Generated Visualization]({chart_path})")
+            response_parts.append("")
+
+        # Add data result if available
         if code_result is not None:
             response_parts.append("")
             response_parts.append("### Result:")
@@ -489,6 +713,7 @@ class AIAgent:
             response_parts.append(self._format_query_result(code_result))
             response_parts.append("")
 
+        # Always add analysis
         response_parts.append("### Analysis:")
         response_parts.append(analysis)
 
@@ -532,6 +757,43 @@ class AIAgent:
         return str(result)
 
     @staticmethod
+    def _compact_code_output_for_prompt(result: Any) -> str:
+        """Compact query results for LLM context without flooding tokens."""
+        def trim_text(text: str, max_chars: int) -> str:
+            if len(text) <= max_chars:
+                return text
+            head = text[: max_chars - 40]
+            return f"{head}\n... [truncated {len(text) - len(head)} chars]"
+
+        if isinstance(result, dict):
+            if "error" in result:
+                return f"Error: {result['error']}"
+
+            if "columns" in result and "rows" in result:
+                columns = result.get("columns") or []
+                rows = result.get("rows") or []
+
+                if rows and isinstance(rows[0], dict):
+                    sample_rows = rows[:5]
+                else:
+                    sample_rows = [dict(zip(columns, row)) for row in rows[:5]]
+
+                summary = {
+                    "columns": columns,
+                    "rows_returned": len(rows),
+                    "truncated": bool(result.get("truncated")),
+                    "sample_rows": sample_rows,
+                }
+                return trim_text(json.dumps(summary, ensure_ascii=True), ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+
+            return trim_text(json.dumps(result, ensure_ascii=True), ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+
+        if isinstance(result, str):
+            return trim_text(result, ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+
+        return trim_text(str(result), ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+
+    @staticmethod
     def _clean_sql_output(sql: str) -> str:
         """Remove markdown formatting from generated SQL output."""
         cleaned = sql.strip()
@@ -546,6 +808,20 @@ class AIAgent:
         cleaned = cleaned.strip()
         if cleaned.endswith(";"):
             cleaned = cleaned[:-1]
+        return cleaned.strip()
+
+    @staticmethod
+    def _clean_python_output(code: str) -> str:
+        """Remove markdown formatting from generated Python output."""
+        cleaned = code.strip()
+
+        if cleaned.startswith("```python"):
+            cleaned = cleaned[9:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+
         return cleaned.strip()
 
     @staticmethod
