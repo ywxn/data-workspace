@@ -171,12 +171,131 @@ def _find_join_condition(
     return None
 
 
+def _estimate_join_fanout(
+    connector: DatabaseConnector,
+    left_table: str,
+    right_table: str,
+    left_cols: List[str],
+    right_cols: List[str],
+    sample_size: int = 10000,
+) -> Optional[float]:
+    """
+    Estimate fanout factor of a join using key duplication sampling.
+    Returns multiplicative fanout (>=1).
+    """
+    try:
+        left_q = _quote_identifier(connector, left_table)
+        right_q = _quote_identifier(connector, right_table)
+
+        left_cols_q = ", ".join(_quote_identifier(connector, c) for c in left_cols)
+        right_cols_q = ", ".join(_quote_identifier(connector, c) for c in right_cols)
+
+        left_sql = f"SELECT {left_cols_q} FROM {left_q} LIMIT {sample_size}"
+        right_sql = f"SELECT {right_cols_q} FROM {right_q} LIMIT {sample_size}"
+
+        left_df = pd.read_sql_query(left_sql, connector.connection)
+        right_df = pd.read_sql_query(right_sql, connector.connection)
+
+        if left_df.empty or right_df.empty:
+            return 1.0
+
+        left_unique = left_df.drop_duplicates().shape[0]
+        right_unique = right_df.drop_duplicates().shape[0]
+
+        left_rows = len(left_df)
+        right_rows = len(right_df)
+
+        left_dup_rate = 1 - (left_unique / left_rows) if left_rows else 0
+        right_dup_rate = 1 - (right_unique / right_rows) if right_rows else 0
+
+        # convert duplication → fanout
+        def rate_to_fanout(rate):
+            if rate <= 0:
+                return 1.0
+            return 1.0 / (1.0 - rate)
+
+        fanout = max(rate_to_fanout(left_dup_rate), rate_to_fanout(right_dup_rate))
+        return max(1.0, fanout)
+
+    except Exception as e:
+        logger.debug(f"Fanout estimate failed {left_table}->{right_table}: {e}")
+        return None
+
+def _find_best_join_path(
+    connector: DatabaseConnector,
+    fk_graph: Dict[str, List[Tuple[str, dict]]],
+    start: str,
+    target: str,
+    max_depth: int = 4,
+):
+    """
+    Enumerate FK paths and choose lowest fan-out path.
+    """
+
+    from collections import deque
+
+    best_path = None
+    best_score = float("inf")
+
+    queue = deque([(start, [], 1.0)])  # (table, path, cumulative_fanout)
+
+    while queue:
+        table, path, fanout = queue.popleft()
+
+        if len(path) > max_depth:
+            continue
+
+        if table == target:
+            if fanout < best_score:
+                best_score = fanout
+                best_path = path
+            continue
+
+        for neighbor, fk in fk_graph.get(table, []):
+            if any(step[1] == neighbor for step in path):
+                continue
+
+            left_cols = fk.get("constrained_columns", [])
+            right_cols = fk.get("referred_columns", [])
+
+            step_fanout = _estimate_join_fanout(
+                connector,
+                table,
+                neighbor,
+                left_cols,
+                right_cols,
+            ) or 1.0
+
+            queue.append(
+                (
+                    neighbor,
+                    path + [(table, neighbor, fk)],
+                    fanout * step_fanout,
+                )
+            )
+
+    return best_path
+
 def _build_join_query(
     connector: DatabaseConnector, table_names: List[str]
 ) -> Tuple[Optional[str], Dict[str, List[str]], List[str]]:
+    """
+    Build a safe SQL join query across multiple tables.
+
+    Supports:
+    - multi-hop FK joins
+    - arbitrary join order
+    - missing FK constraints (name-based inference)
+    - row-count guard
+    - fan-out explosion detection
+    """
+
     from sqlalchemy import inspect
+    from collections import deque
 
     inspector = inspect(connector.engine)
+
+    # ---------- collect safe columns ----------
     safe_cols_by_table: Dict[str, List[str]] = {}
     skipped_cols: List[str] = []
 
@@ -186,49 +305,174 @@ def _build_join_query(
         safe_cols_by_table[table_name] = safe_cols
         skipped_cols.extend([f"{table_name}.{col}" for col in skipped])
 
+    # ---------- base row count ----------
+    row_counts: Dict[str, Optional[int]] = {
+        t: _estimate_table_rows(connector, t) for t in table_names
+    }
+    known_counts = [c for c in row_counts.values() if c is not None]
+    base_rows = max(known_counts) if known_counts else None
+    cumulative_fanout = 1.0
+
+    # ---------- build FK graph ----------
+    fk_graph: Dict[str, List[Tuple[str, dict]]] = {}
+    for table in inspector.get_table_names():
+        fk_graph.setdefault(table, [])
+        for fk in inspector.get_foreign_keys(table):
+            ref = fk.get("referred_table")
+            if not ref:
+                continue
+            fk_graph[table].append((ref, fk))
+            fk_graph.setdefault(ref, [])
+
+    # ---------- helpers ----------
+    def find_path(start: str, target: str):
+        queue = deque([(start, [])])
+        visited = set()
+
+        while queue:
+            table, path = queue.popleft()
+            if table == target:
+                return path
+            if table in visited:
+                continue
+            visited.add(table)
+
+            for neighbor, fk in fk_graph.get(table, []):
+                queue.append((neighbor, path + [(table, neighbor, fk)]))
+
+        return None
+
+    def infer_join(left: str, right: str):
+        cols_left = {c["name"] for c in _get_columns_with_types(connector, left)}
+        cols_right = {c["name"] for c in _get_columns_with_types(connector, right)}
+        common = cols_left & cols_right
+
+        candidates = [
+            c for c in common if c.lower().endswith("_id") or c.lower() == "id"
+        ]
+        if not candidates:
+            return None
+
+        col = candidates[0]
+        return left, right, [col], [col]
+
+    def check_fanout(left_table, right_table, left_cols, right_cols):
+        nonlocal cumulative_fanout
+
+        fanout = _estimate_join_fanout(
+            connector,
+            left_table,
+            right_table,
+            left_cols,
+            right_cols,
+        )
+
+        if fanout:
+            cumulative_fanout *= fanout
+
+            if base_rows:
+                estimated_rows = base_rows * cumulative_fanout
+
+                if (
+                    estimated_rows > MERGE_MAX_ESTIMATED_ROWS
+                    and estimated_rows > base_rows * MERGE_MAX_ROW_MULTIPLIER
+                ):
+                    logger.warning(
+                        "Join aborted (fanout explosion): "
+                        f"{left_table}->{right_table} "
+                        f"fanout≈{fanout:.2f}, "
+                        f"est≈{estimated_rows:,.0f} rows"
+                    )
+                    return False
+        return True
+
+    # ---------- build joins ----------
     base_table = table_names[0]
     joined = {base_table}
     join_clauses: List[str] = []
 
-    for table_name in table_names[1:]:
-        join_found = None
-        for candidate in list(joined):
-            join_found = _find_join_condition(inspector, candidate, table_name)
-            if join_found:
+    for target in table_names[1:]:
+        if target in joined:
+            continue
+
+        path = None
+
+        for candidate in joined:
+            p = _find_best_join_path(connector, fk_graph, candidate, target)
+            if p:
+                path = p
                 break
 
-        if not join_found:
-            return None, safe_cols_by_table, skipped_cols
+        if path:
+            for left_table, right_table, fk in path:
+                if right_table in joined:
+                    continue
 
-        left_cols, right_cols, left_table, right_table = join_found
-        if not left_cols or not right_cols:
-            return None, safe_cols_by_table, skipped_cols
+                left_cols = fk.get("constrained_columns", [])
+                right_cols = fk.get("referred_columns", [])
+                if not left_cols or not right_cols:
+                    continue
 
-        left_quoted = _quote_identifier(connector, left_table)
-        right_quoted = _quote_identifier(connector, right_table)
-        join_conditions = []
-        for left_col, right_col in zip(left_cols, right_cols):
-            join_conditions.append(
-                f"{left_quoted}.{_quote_identifier(connector, left_col)} = "
-                f"{right_quoted}.{_quote_identifier(connector, right_col)}"
-            )
-        join_clause = f"LEFT JOIN {right_quoted} ON " + " AND ".join(join_conditions)
-        join_clauses.append(join_clause)
-        joined.add(table_name)
+                if not check_fanout(left_table, right_table, left_cols, right_cols):
+                    return None, safe_cols_by_table, skipped_cols
 
+                left_q = _quote_identifier(connector, left_table)
+                right_q = _quote_identifier(connector, right_table)
+
+                conds = [
+                    f"{left_q}.{_quote_identifier(connector, lc)} = "
+                    f"{right_q}.{_quote_identifier(connector, rc)}"
+                    for lc, rc in zip(left_cols, right_cols)
+                ]
+
+                join_clauses.append(f"LEFT JOIN {right_q} ON " + " AND ".join(conds))
+                joined.add(right_table)
+
+            continue
+
+        # ---------- fallback inference ----------
+        inferred = None
+        for candidate in joined:
+            inferred = infer_join(candidate, target)
+            if inferred:
+                break
+
+        if inferred:
+            left_table, right_table, left_cols, right_cols = inferred
+
+            if not check_fanout(left_table, right_table, left_cols, right_cols):
+                return None, safe_cols_by_table, skipped_cols
+
+            left_q = _quote_identifier(connector, left_table)
+            right_q = _quote_identifier(connector, right_table)
+
+            conds = [
+                f"{left_q}.{_quote_identifier(connector, lc)} = "
+                f"{right_q}.{_quote_identifier(connector, rc)}"
+                for lc, rc in zip(left_cols, right_cols)
+            ]
+
+            join_clauses.append(f"LEFT JOIN {right_q} ON " + " AND ".join(conds))
+            joined.add(right_table)
+            continue
+
+        # ---------- cannot connect ----------
+        return None, safe_cols_by_table, skipped_cols
+
+    # ---------- SELECT ----------
     select_parts: List[str] = []
     for table_name, columns in safe_cols_by_table.items():
-        table_quoted = _quote_identifier(connector, table_name)
+        table_q = _quote_identifier(connector, table_name)
         for col in columns:
-            col_quoted = _quote_identifier(connector, col)
+            col_q = _quote_identifier(connector, col)
             alias = _quote_identifier(connector, f"{table_name}__{col}")
-            select_parts.append(f"{table_quoted}.{col_quoted} AS {alias}")
+            select_parts.append(f"{table_q}.{col_q} AS {alias}")
 
     if not select_parts:
         return None, safe_cols_by_table, skipped_cols
 
-    base_quoted = _quote_identifier(connector, base_table)
-    query = f"SELECT {', '.join(select_parts)} FROM {base_quoted} "
+    base_q = _quote_identifier(connector, base_table)
+    query = f"SELECT {', '.join(select_parts)} FROM {base_q} "
     if join_clauses:
         query += " ".join(join_clauses)
 
@@ -698,30 +942,49 @@ def _load_multiple_tables(
     """
     Load and merge multiple tables from a database.
 
-    Args:
-        connector: Active database connector
-        table_names: List of table names to load
-
-    Returns:
-        Tuple of (merged_dataframe or None, message: str)
+    Attempts SQL joins first.
+    Falls back to pandas merge if unsafe or impossible.
     """
+
     try:
         query, _, skipped_cols = _build_join_query(connector, table_names)
-        if not query:
-            return (
-                None,
-                "Unable to build safe SQL joins across selected tables. "
-                "Please choose tables with foreign-key relationships.",
+
+        # ---------- SQL join path ----------
+        if query:
+            df, truncated = _read_sql_limited(
+                query, connector, DB_MAX_ROWS_IN_MEMORY
             )
 
-        df, truncated = _read_sql_limited(query, connector, DB_MAX_ROWS_IN_MEMORY)
-        tables_str = ", ".join(table_names)
-        msg = f"Data loaded from tables: {tables_str} using SQL joins"
-        if truncated:
-            msg = f"{msg}. Results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
-        if skipped_cols:
-            msg = f"{msg}. Skipped large columns: {', '.join(skipped_cols)}"
-        return df, msg
+            tables_str = ", ".join(table_names)
+            msg = f"Data loaded from tables: {tables_str} using SQL joins"
+
+            if truncated:
+                msg += f". Results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
+            if skipped_cols:
+                msg += f". Skipped large columns: {', '.join(skipped_cols)}"
+
+            return df, msg
+
+        # ---------- pandas fallback ----------
+        logger.info(
+            "SQL join unsafe or not possible. Falling back to pandas merge."
+        )
+
+        dfs = []
+        for t in table_names:
+            df, load_msg, _ = _load_table_via_sql(connector, t)
+            if df is None:
+                return None, f"Failed loading table {t}: {load_msg}"
+            dfs.append(df)
+
+        merged_df, strategy = merge_dataframes(dfs)
+
+        msg = (
+            f"Tables loaded individually and merged in pandas "
+            f"({strategy})"
+        )
+
+        return merged_df, msg
 
     except Exception as e:
         logger.error(f"Error loading multiple tables: {str(e)}")
