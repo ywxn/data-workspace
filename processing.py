@@ -2,37 +2,67 @@
 Data loading and processing utilities.
 
 Handles data import from various sources (database, CSV, Excel)
-and merging of multiple dataframes using intelligent strategies.
+using SQL-first workflows and minimal in-memory processing.
 """
 
-import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
+import csv
+import os
+import re
+import sqlite3
+import tempfile
+from typing import Any, Dict, List, Tuple, Optional
+
 from connector import DatabaseConnector
 from logger import get_logger
-from typing import Any, Dict, List, Tuple, Optional
 from security_validators import validate_sql_security
 from constants import (
-    MERGE_COMMON_COLS_THRESHOLD,
-    MERGE_KEY_PATTERNS,
-    MERGE_MAX_ESTIMATED_ROWS,
-    MERGE_MAX_ROW_MULTIPLIER,
-    MERGE_WARN_DUPLICATE_RATE,
     DB_MAX_ROWS_IN_MEMORY,
     DB_READ_CHUNK_SIZE,
     SQL_LARGE_TYPES,
+    SAMPLE_ROWS_DEFAULT,
+    MERGE_MAX_ESTIMATED_ROWS,
+    MERGE_MAX_ROW_MULTIPLIER,
 )
 
 logger = get_logger(__name__)
-
-# Use constants from constants.py for merge strategy decisions
-COMMON_KEY_THRESHOLD = MERGE_COMMON_COLS_THRESHOLD
-COMMON_KEY_PATTERNS = MERGE_KEY_PATTERNS
 
 
 def _quote_identifier(connector: DatabaseConnector, name: str) -> str:
     preparer = connector.engine.dialect.identifier_preparer
     parts = name.split(".")
     return ".".join(preparer.quote(part) for part in parts)
+
+
+def _quote_sqlite_identifier(name: str) -> str:
+    return f"\"{name.replace('"', '""')}\""
+
+
+def _normalize_columns(raw_columns: List[Any]) -> List[str]:
+    columns: List[str] = []
+    seen: Dict[str, int] = {}
+    for idx, col in enumerate(raw_columns, 1):
+        base = str(col).strip() if col not in (None, "") else f"column_{idx}"
+        base = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_") or f"column_{idx}"
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        name = f"{base}_{count}" if count > 1 else base
+        columns.append(name)
+    return columns
+
+
+def _safe_table_name(file_path: str, existing: Optional[set] = None) -> str:
+    base = os.path.splitext(os.path.basename(file_path))[0]
+    name = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_") or "table"
+    if name[0].isdigit():
+        name = f"t_{name}"
+    existing = existing or set()
+    candidate = name
+    suffix = 1
+    while candidate in existing:
+        suffix += 1
+        candidate = f"{name}_{suffix}"
+    existing.add(candidate)
+    return candidate
 
 
 def _get_columns_with_types(
@@ -59,6 +89,48 @@ def _filter_large_columns(columns: List[Dict[str, Any]]) -> Tuple[List[str], Lis
     return safe_cols, skipped
 
 
+def _execute_query(
+    connector: DatabaseConnector,
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
+    max_rows: Optional[int] = None,
+    chunksize: int = DB_READ_CHUNK_SIZE,
+) -> Tuple[Dict[str, Any], bool]:
+    if not connector.connection:
+        raise RuntimeError("No active database connection.")
+
+    is_safe, error_msg = validate_sql_security(query, params)
+    if not is_safe:
+        raise RuntimeError(error_msg)
+
+    from sqlalchemy import text
+
+    result = connector.connection.execute(text(query), params or {})
+    columns = list(result.keys())
+    rows: List[Tuple[Any, ...]] = []
+    truncated = False
+
+    if max_rows is None:
+        rows = result.fetchall()
+        return {"columns": columns, "rows": rows}, False
+
+    while True:
+        chunk = result.fetchmany(chunksize)
+        if not chunk:
+            break
+        rows.extend(chunk)
+        if len(rows) >= max_rows:
+            rows = rows[:max_rows]
+            truncated = True
+            break
+
+    return {"columns": columns, "rows": rows}, truncated
+
+
+def _rows_to_dicts(columns: List[str], rows: List[Tuple[Any, ...]]) -> List[Dict[str, Any]]:
+    return [dict(zip(columns, row)) for row in rows]
+
+
 def _estimate_table_rows(
     connector: DatabaseConnector, table_name: str
 ) -> Optional[int]:
@@ -73,76 +145,58 @@ def _estimate_table_rows(
         return None
 
     try:
-        df = pd.read_sql_query(query, connector.connection)
-        return int(df.iloc[0]["row_count"])
+        from sqlalchemy import text
+
+        result = connector.connection.execute(text(query))
+        row = result.fetchone()
+        return int(row[0]) if row else None
     except Exception as e:
         logger.warning(f"Row count estimate failed for {table_name}: {str(e)}")
         return None
 
 
-def _read_sql_limited(
-    query: str,
-    connector: DatabaseConnector,
-    max_rows: int,
-    chunksize: int = DB_READ_CHUNK_SIZE,
-) -> Tuple[pd.DataFrame, bool]:
-    is_safe, error_msg = validate_sql_security(query)
-    if not is_safe:
-        raise RuntimeError(error_msg)
-
-    rows: List[pd.DataFrame] = []
-    total_rows = 0
-    truncated = False
-
-    for chunk in pd.read_sql_query(query, connector.connection, chunksize=chunksize):
-        rows.append(chunk)
-        total_rows += len(chunk)
-        if total_rows >= max_rows:
-            truncated = True
-            break
-
-    if not rows:
-        return pd.DataFrame(), False
-
-    df = pd.concat(rows, ignore_index=True)
-    if len(df) > max_rows:
-        df = df.iloc[:max_rows]
-        truncated = True
-
-    return df, truncated
-
-
-def _load_table_via_sql(
-    connector: DatabaseConnector, table_name: str
-) -> Tuple[Optional[pd.DataFrame], str, List[str]]:
-    if not connector.connection:
-        return None, "No active database connection.", []
-
+def _load_table_sample(
+    connector: DatabaseConnector, table_name: str, limit: int = SAMPLE_ROWS_DEFAULT
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     columns = _get_columns_with_types(connector, table_name)
     safe_cols, skipped_cols = _filter_large_columns(columns)
 
     if not safe_cols:
-        return None, "No safe columns available to load.", skipped_cols
+        return [], skipped_cols
 
     quoted_table = _quote_identifier(connector, table_name)
     quoted_cols = ", ".join(
         f"{quoted_table}.{_quote_identifier(connector, col)}" for col in safe_cols
     )
-    query = f"SELECT {quoted_cols} FROM {quoted_table}"
+    query = f"SELECT {quoted_cols} FROM {quoted_table} LIMIT {limit}"
 
-    row_count = _estimate_table_rows(connector, table_name)
-    if row_count is not None and row_count <= DB_MAX_ROWS_IN_MEMORY:
-        is_safe, error_msg = validate_sql_security(query)
-        if not is_safe:
-            return None, error_msg, skipped_cols
-        df = pd.read_sql_query(query, connector.connection)
-        return df, "", skipped_cols
+    try:
+        result, _ = _execute_query(connector, query, max_rows=limit)
+        return _rows_to_dicts(result["columns"], result["rows"]), skipped_cols
+    except Exception as e:
+        logger.warning(f"Sample load failed for {table_name}: {str(e)}")
+        return [], skipped_cols
 
-    df, truncated = _read_sql_limited(query, connector, DB_MAX_ROWS_IN_MEMORY)
-    msg = "Loaded using chunked reads"
-    if truncated:
-        msg = f"{msg}; results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
-    return df, msg, skipped_cols
+
+def _collect_table_info(
+    connector: DatabaseConnector, table_name: str
+) -> Tuple[Dict[str, Any], List[str]]:
+    columns = _get_columns_with_types(connector, table_name)
+    safe_cols, skipped_cols = _filter_large_columns(columns)
+
+    column_types = {col.get("name"): str(col.get("type", "")) for col in columns}
+    row_count = _estimate_table_rows(connector, table_name) or 0
+    sample_rows, _ = _load_table_sample(connector, table_name, SAMPLE_ROWS_DEFAULT)
+
+    return (
+        {
+            "columns": safe_cols,
+            "column_types": column_types,
+            "row_count": row_count,
+            "sample_rows": sample_rows,
+        },
+        skipped_cols,
+    )
 
 
 def _find_join_condition(
@@ -193,23 +247,25 @@ def _estimate_join_fanout(
         left_sql = f"SELECT {left_cols_q} FROM {left_q} LIMIT {sample_size}"
         right_sql = f"SELECT {right_cols_q} FROM {right_q} LIMIT {sample_size}"
 
-        left_df = pd.read_sql_query(left_sql, connector.connection)
-        right_df = pd.read_sql_query(right_sql, connector.connection)
+        left_result, _ = _execute_query(connector, left_sql, max_rows=sample_size)
+        right_result, _ = _execute_query(connector, right_sql, max_rows=sample_size)
 
-        if left_df.empty or right_df.empty:
+        left_rows = left_result["rows"]
+        right_rows = right_result["rows"]
+
+        if not left_rows or not right_rows:
             return 1.0
 
-        left_unique = left_df.drop_duplicates().shape[0]
-        right_unique = right_df.drop_duplicates().shape[0]
+        left_unique = len({tuple(row) for row in left_rows})
+        right_unique = len({tuple(row) for row in right_rows})
 
-        left_rows = len(left_df)
-        right_rows = len(right_df)
+        left_count = len(left_rows)
+        right_count = len(right_rows)
 
-        left_dup_rate = 1 - (left_unique / left_rows) if left_rows else 0
-        right_dup_rate = 1 - (right_unique / right_rows) if right_rows else 0
+        left_dup_rate = 1 - (left_unique / left_count) if left_count else 0
+        right_dup_rate = 1 - (right_unique / right_count) if right_count else 0
 
-        # convert duplication → fanout
-        def rate_to_fanout(rate):
+        def rate_to_fanout(rate: float) -> float:
             if rate <= 0:
                 return 1.0
             return 1.0 / (1.0 - rate)
@@ -403,458 +459,173 @@ def _build_join_query(
                 path = p
                 break
 
-        if path:
-            for left_table, right_table, fk in path:
-                if right_table in joined:
-                    continue
+        if not path:
+            inferred = infer_join(base_table, target)
+            if not inferred:
+                logger.warning(f"No join path found for {base_table}->{target}")
+                return None, safe_cols_by_table, skipped_cols
 
-                left_cols = fk.get("constrained_columns", [])
-                right_cols = fk.get("referred_columns", [])
-                if not left_cols or not right_cols:
-                    continue
+            left_table, right_table, left_cols, right_cols = inferred
+            if not check_fanout(left_table, right_table, left_cols, right_cols):
+                return None, safe_cols_by_table, skipped_cols
 
-                if not check_fanout(left_table, right_table, left_cols, right_cols):
-                    return None, safe_cols_by_table, skipped_cols
-
-                left_q = _quote_identifier(connector, left_table)
-                right_q = _quote_identifier(connector, right_table)
-
-                conds = [
-                    f"{left_q}.{_quote_identifier(connector, lc)} = "
-                    f"{right_q}.{_quote_identifier(connector, rc)}"
-                    for lc, rc in zip(left_cols, right_cols)
-                ]
-
-                join_clauses.append(f"LEFT JOIN {right_q} ON " + " AND ".join(conds))
-                joined.add(right_table)
-
+            left_q = _quote_identifier(connector, left_table)
+            right_q = _quote_identifier(connector, right_table)
+            conditions = " AND ".join(
+                f"{left_q}.{_quote_identifier(connector, l)} = {right_q}.{_quote_identifier(connector, r)}"
+                for l, r in zip(left_cols, right_cols)
+            )
+            join_clauses.append(f"JOIN {right_q} ON {conditions}")
+            joined.add(right_table)
             continue
 
-        # ---------- fallback inference ----------
-        inferred = None
-        for candidate in joined:
-            inferred = infer_join(candidate, target)
-            if inferred:
-                break
+        for left_table, right_table, fk in path:
+            if right_table in joined:
+                continue
 
-        if inferred:
-            left_table, right_table, left_cols, right_cols = inferred
+            left_cols = fk.get("constrained_columns", [])
+            right_cols = fk.get("referred_columns", [])
+
+            if not left_cols or not right_cols:
+                inferred = infer_join(left_table, right_table)
+                if not inferred:
+                    logger.warning(f"No join columns found for {left_table}->{right_table}")
+                    return None, safe_cols_by_table, skipped_cols
+                left_table, right_table, left_cols, right_cols = inferred
 
             if not check_fanout(left_table, right_table, left_cols, right_cols):
                 return None, safe_cols_by_table, skipped_cols
 
             left_q = _quote_identifier(connector, left_table)
             right_q = _quote_identifier(connector, right_table)
-
-            conds = [
-                f"{left_q}.{_quote_identifier(connector, lc)} = "
-                f"{right_q}.{_quote_identifier(connector, rc)}"
-                for lc, rc in zip(left_cols, right_cols)
-            ]
-
-            join_clauses.append(f"LEFT JOIN {right_q} ON " + " AND ".join(conds))
+            conditions = " AND ".join(
+                f"{left_q}.{_quote_identifier(connector, l)} = {right_q}.{_quote_identifier(connector, r)}"
+                for l, r in zip(left_cols, right_cols)
+            )
+            join_clauses.append(f"JOIN {right_q} ON {conditions}")
             joined.add(right_table)
-            continue
 
-        # ---------- cannot connect ----------
-        return None, safe_cols_by_table, skipped_cols
-
-    # ---------- SELECT ----------
-    select_parts: List[str] = []
-    for table_name, columns in safe_cols_by_table.items():
+    select_cols: List[str] = []
+    for table_name in table_names:
         table_q = _quote_identifier(connector, table_name)
-        for col in columns:
+        for col in safe_cols_by_table.get(table_name, []):
             col_q = _quote_identifier(connector, col)
-            alias = _quote_identifier(connector, f"{table_name}__{col}")
-            select_parts.append(f"{table_q}.{col_q} AS {alias}")
+            alias = f"{table_name}__{col}"
+            alias_q = _quote_identifier(connector, alias)
+            select_cols.append(f"{table_q}.{col_q} AS {alias_q}")
 
-    if not select_parts:
+    if not select_cols:
         return None, safe_cols_by_table, skipped_cols
 
     base_q = _quote_identifier(connector, base_table)
-    query = f"SELECT {', '.join(select_parts)} FROM {base_q} "
+    query = f"SELECT {', '.join(select_cols)} FROM {base_q}"
     if join_clauses:
-        query += " ".join(join_clauses)
+        query = f"{query} {' '.join(join_clauses)}"
 
     return query, safe_cols_by_table, skipped_cols
 
 
-def _identify_key_columns(common_cols: set, all_cols_union: set) -> Optional[List[str]]:
-    """
-    Identify potential key columns for merging.
-
-    Args:
-        common_cols: Set of columns present in all dataframes
-        all_cols_union: Union of all columns across dataframes
-
-    Returns:
-        List of key column candidates, or None if no suitable keys found
-    """
-    # Look for columns with key-like names
-    key_candidates = [
-        col
-        for col in common_cols
-        if col.lower() in COMMON_KEY_PATTERNS
-        or col.lower().endswith("_id")
-        or col.lower().endswith("_key")
-    ]
-
-    return key_candidates if key_candidates else None
+def _read_csv_rows(file_path: str) -> Tuple[List[str], List[Tuple[Any, ...]]]:
+    with open(file_path, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if header is None:
+            return [], []
+        columns = _normalize_columns(header)
+        rows: List[Tuple[Any, ...]] = []
+        for row in reader:
+            values = list(row)
+            if len(values) < len(columns):
+                values.extend([""] * (len(columns) - len(values)))
+            rows.append(tuple(values[: len(columns)]))
+        return columns, rows
 
 
-def _merge_on_keys(
-    dataframes: List[pd.DataFrame], key_columns: List[str]
-) -> Tuple[pd.DataFrame, str]:
-    """
-    Attempt to merge dataframes on specified key columns.
+def _read_excel_rows(
+    file_path: str, sheet_name: Optional[str] = None
+) -> Tuple[List[str], List[Tuple[Any, ...]]]:
+    from openpyxl import load_workbook
 
-    Falls back to concatenation if merge fails.
+    workbook = load_workbook(file_path, read_only=True, data_only=True)
+    if sheet_name and sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+    else:
+        sheet = workbook.active
 
-    Args:
-        dataframes: List of dataframes to merge
-        key_columns: Columns to merge on
+    rows_iter = sheet.iter_rows(values_only=True)
+    header = next(rows_iter, None)
+    if header is None:
+        return [], []
 
-    Returns:
-        Tuple of (merged_dataframe, strategy_description)
-    """
-    try:
-        dataframes = _normalize_key_dtypes(dataframes, key_columns)
-        merged_df = dataframes[0]
-        for idx, df in enumerate(dataframes[1:], 1):
-            safe_to_merge, reason = _preflight_merge(merged_df, df, key_columns)
-            if not safe_to_merge:
-                logger.warning(
-                    f"Preflight merge check failed on {key_columns}: {reason}. Using concatenation."
-                )
-                merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
-                return (
-                    merged_df,
-                    f"Merge skipped ({reason}), using vertical concatenation",
-                )
-            merged_df = pd.merge(
-                merged_df,
-                df,
-                on=key_columns,
-                how="outer",
-                suffixes=("", f"_table{idx+1}"),
-            )
-
-        keys_str = ", ".join(key_columns)
-        return merged_df, f"Horizontal merge on key(s): {keys_str}"
-    except Exception as e:
-        logger.warning(
-            f"Merge on {key_columns} failed, falling back to concatenation: {str(e)}"
-        )
-        merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
-        return merged_df, "Merge failed, using vertical concatenation"
+    columns = _normalize_columns(list(header))
+    rows: List[Tuple[Any, ...]] = []
+    for row in rows_iter:
+        values = ["" if value is None else str(value) for value in row]
+        if len(values) < len(columns):
+            values.extend([""] * (len(columns) - len(values)))
+        rows.append(tuple(values[: len(columns)]))
+    return columns, rows
 
 
-def _normalize_key_dtypes(
-    dataframes: List[pd.DataFrame], key_columns: List[str]
-) -> List[pd.DataFrame]:
-    """
-    Normalize key column dtypes across dataframes to improve merge behavior.
-    """
-    if not dataframes:
-        return dataframes
+def _load_files_into_sqlite(
+    file_paths: List[str], sheet_name: Optional[str] = None
+) -> Tuple[str, List[str], str]:
+    if not file_paths:
+        raise ValueError("No file paths provided.")
 
-    normalized = []
-    for df in dataframes:
-        df_copy = df.copy()
-        for key in key_columns:
-            if key not in df_copy.columns:
-                continue
-            series_list = [d[key] for d in dataframes if key in d.columns]
-            if all(is_numeric_dtype(s) for s in series_list):
-                df_copy[key] = pd.to_numeric(df_copy[key], errors="coerce")
-            elif all(is_datetime64_any_dtype(s) for s in series_list):
-                df_copy[key] = pd.to_datetime(df_copy[key], errors="coerce")
-            else:
-                df_copy[key] = df_copy[key].astype("string")
-        normalized.append(df_copy)
+    temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    temp_db.close()
 
-    return normalized
-
-
-def _estimate_outer_join_rows(
-    left: pd.DataFrame, right: pd.DataFrame, key_columns: List[str]
-) -> Optional[int]:
-    """
-    Estimate outer-join row count based on key frequency.
-    """
-    if not key_columns:
-        return None
-    try:
-        left_counts = (
-            left.groupby(key_columns, dropna=False).size().rename("left_count")
-        )
-        right_counts = (
-            right.groupby(key_columns, dropna=False).size().rename("right_count")
-        )
-
-        merged_counts = (
-            left_counts.to_frame()
-            .merge(
-                right_counts.to_frame(),
-                left_index=True,
-                right_index=True,
-                how="outer",
-            )
-            .fillna(0)
-        )
-
-        left_count = merged_counts["left_count"].astype("int64")
-        right_count = merged_counts["right_count"].astype("int64")
-        both_mask = (left_count > 0) & (right_count > 0)
-
-        matched = (left_count[both_mask] * right_count[both_mask]).sum()
-        left_only = left_count[~both_mask].sum()
-        right_only = right_count[~both_mask].sum()
-        return int(matched + left_only + right_only)
-    except Exception as e:
-        logger.warning(f"Join size estimate failed: {str(e)}")
-        return None
-
-
-def _preflight_merge(
-    left: pd.DataFrame, right: pd.DataFrame, key_columns: List[str]
-) -> Tuple[bool, str]:
-    """
-    Validate merge safety with duplicate-rate and join-size checks.
-    """
-    left_rows = len(left)
-    right_rows = len(right)
-    if left_rows == 0 or right_rows == 0:
-        return True, "one side empty"
-
-    left_dup_rate = left.duplicated(subset=key_columns).mean()
-    right_dup_rate = right.duplicated(subset=key_columns).mean()
-
-    if (
-        left_dup_rate > MERGE_WARN_DUPLICATE_RATE
-        or right_dup_rate > MERGE_WARN_DUPLICATE_RATE
-    ):
-        logger.warning(
-            "High duplicate rate on merge keys. "
-            f"Left: {left_dup_rate:.1%}, Right: {right_dup_rate:.1%}"
-        )
-
-    estimated_rows = _estimate_outer_join_rows(left, right, key_columns)
-    if estimated_rows is None:
-        return True, "no estimate"
-
-    max_side = max(left_rows, right_rows)
-    if (
-        estimated_rows > MERGE_MAX_ESTIMATED_ROWS
-        and estimated_rows > max_side * MERGE_MAX_ROW_MULTIPLIER
-    ):
-        return (
-            False,
-            f"estimated {estimated_rows} rows exceeds thresholds",
-        )
-
-    return True, "ok"
-
-
-def _standardize_dtypes(dataframes: List[pd.DataFrame]) -> List[pd.DataFrame]:
-    """
-    Standardize data types across dataframes before merging.
-    Handles both object types and numeric type conflicts.
-    """
-    if not dataframes:
-        return dataframes
-
-    standardized = []
-
-    # First pass: identify target types for each column
-    column_types = {}
-    for df in dataframes:
-        for col in df.columns:
-            if col not in column_types:
-                column_types[col] = df[col].dtype
-            else:
-                # If types differ, prefer the more general type
-                existing_type = column_types[col]
-                current_type = df[col].dtype
-                if existing_type != current_type:
-                    # float64 ≻ int64 ≻ object
-                    if existing_type == "object" or current_type == "object":
-                        column_types[col] = "object"
-                    elif "float" in str(current_type) or "float" in str(existing_type):
-                        column_types[col] = "float64"
-
-    # Second pass: convert all dataframes to use standardized types
-    for df in dataframes:
-        df_copy = df.copy()
-        for col in df_copy.columns:
-            target_type = column_types.get(col)
-            if target_type and df_copy[col].dtype != target_type:
-                try:
-                    if target_type == "object":
-                        df_copy[col] = df_copy[col].astype("object")
-                    elif "float" in str(target_type):
-                        df_copy[col] = pd.to_numeric(df_copy[col], errors="coerce")
-                    else:
-                        df_copy[col] = df_copy[col].astype(target_type)
-                except Exception as e:
-                    logger.warning(
-                        f"Could not convert {col} to {target_type}: {str(e)}"
-                    )
-        standardized.append(df_copy)
-
-    return standardized
-
-
-def merge_dataframes(dataframes: List[pd.DataFrame]) -> Tuple[pd.DataFrame, str]:
-    """
-    Intelligently merge multiple dataframes using optimal strategy.
-
-    For tables with no universal common columns, performs sequential merges
-    on pairwise shared key columns.
-
-    Args:
-        dataframes: List of pandas DataFrames to merge
-    Returns:
-        Tuple of (merged_dataframe, strategy_description)
-
-    Strategies:
-    1. Identical schemas: vertical concatenation
-    2. High overlap of columns: vertical concatenation
-    3. All tables share common key columns: horizontal merge on those keys
-    4. No universal common columns: sequential/chain merges on pairwise keys
-    5. No common columns at all: horizontal concatenation
-    """
-    if not dataframes:
-        return pd.DataFrame(), "No dataframes provided"
-
-    dataframes = [df for df in dataframes if not df.empty]
-    dataframes = _standardize_dtypes(dataframes)
-
-    if not dataframes:
-        return pd.DataFrame(), "All dataframes were empty"
-
-    if len(dataframes) == 1:
-        return dataframes[0], ""
-
-    all_column_sets = [set(df.columns) for df in dataframes]
-    common_cols = set.intersection(*all_column_sets)
-    all_cols_union = set.union(*all_column_sets)
-
-    identical_schemas = all(cols == all_column_sets[0] for cols in all_column_sets)
-
-    # Strategy 1: Identical schemas: simple vertical concatenation
-    if identical_schemas:
-        merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
-        return merged_df, "Vertical concatenation (identical columns)"
-
-    # Strategy 2: High overlap (>70%) - vertical concatenation
-    overlap_ratio = len(common_cols) / len(all_cols_union) if all_cols_union else 0
-    if common_cols and overlap_ratio > COMMON_KEY_THRESHOLD:
-        merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
-        strategy = f"Vertical concatenation ({len(common_cols)} common columns, {overlap_ratio:.1%} overlap)"
-        return merged_df, strategy
-
-    # Strategy 3: All tables share common key columns: horizontal merge
-    if common_cols:
-        key_candidates = _identify_key_columns(common_cols, all_cols_union)
-
-        # Also include common ID columns that weren't caught
-        for col in common_cols:
-            if (
-                "_id" in col.lower() or col.lower() in ["id"]
-            ) and col not in key_candidates:
-                key_candidates.append(col)
-
-        if key_candidates:
-            logger.info(
-                f"Attempting horizontal merge on universal keys: {key_candidates}"
-            )
-            return _merge_on_keys(dataframes, key_candidates)
-
-    # Strategy 4: No universal common columns: try sequential/chain merges on pairwise keys
-    logger.info(
-        "No universal common columns detected. Attempting sequential merge strategy."
-    )
-    merged_df = _sequential_merge(dataframes)
-    if merged_df is not None:
-        return merged_df, "Sequential merge on pairwise key columns"
-
-    # Strategy 5: No common columns at all: horizontal concatenation
-    merged_df = pd.concat(dataframes, axis=1, ignore_index=False)
-    return merged_df, "Horizontal concatenation (no common columns)"
-
-
-def _sequential_merge(dataframes: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """
-    Merge multiple dataframes sequentially when they don't share universal keys.
-
-    Example: If table1-table2 share key_a, and table2-table3 share key_b,
-    merge (table1 on key_a with table2) then (result on key_b with table3).
-
-    Args:
-        dataframes: List of dataframes to merge
-
-    Returns:
-        Merged dataframe or None if sequential merge fails
-    """
-    if not dataframes or len(dataframes) < 2:
-        return None
+    conn = sqlite3.connect(temp_db.name)
+    created_tables: List[str] = []
+    existing = set()
 
     try:
-        merged_df = dataframes[0]
-        merge_log = []
-
-        for idx, right_df in enumerate(dataframes[1:], 1):
-            # Find shared key columns between current merged_df and next table
-            left_cols = set(merged_df.columns)
-            right_cols = set(right_df.columns)
-
-            # Find potential key columns in both
-            shared_cols = left_cols & right_cols
-            key_candidates = [
-                col
-                for col in shared_cols
-                if "_id" in col.lower() or col.lower() in ["id"]
-            ]
-
-            if not key_candidates:
-                # No ID columns shared, look for any common columns
-                key_candidates = list(shared_cols)
-
-            if key_candidates:
-                logger.info(f"Merging table {idx} on keys: {key_candidates}")
-                merged_df = pd.merge(
-                    merged_df,
-                    right_df,
-                    on=key_candidates,
-                    how="outer",
-                    suffixes=("", f"_table{idx+1}"),
-                )
-                merge_log.append(f"Table {idx} merged on {', '.join(key_candidates)}")
+        for file_path in file_paths:
+            table_name = _safe_table_name(file_path, existing)
+            if file_path.lower().endswith(".csv"):
+                columns, rows = _read_csv_rows(file_path)
+            elif file_path.lower().endswith((".xlsx", ".xls")):
+                columns, rows = _read_excel_rows(file_path, sheet_name)
             else:
-                # No common columns with this table, skip merge
-                logger.warning(
-                    f"No common key columns found to merge table {idx}, using concatenation"
-                )
-                merged_df = pd.concat([merged_df, right_df], axis=1, ignore_index=False)
-                merge_log.append(f"Table {idx} concatenated (no common keys)")
+                raise ValueError(f"Unsupported file type: {file_path}")
 
-        logger.info(f"Sequential merge completed: {'; '.join(merge_log)}")
-        return merged_df
+            if not columns:
+                raise ValueError(f"No columns detected in file: {file_path}")
 
-    except Exception as e:
-        logger.error(f"Sequential merge failed: {str(e)}")
-        return None
+            col_defs = ", ".join(
+                f"{_quote_sqlite_identifier(col)} TEXT" for col in columns
+            )
+            conn.execute(
+                f"CREATE TABLE {_quote_sqlite_identifier(table_name)} ({col_defs})"
+            )
+
+            placeholders = ", ".join(["?"] * len(columns))
+            col_list = ", ".join(_quote_sqlite_identifier(col) for col in columns)
+            insert_sql = (
+                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "
+                f"({col_list}) VALUES ({placeholders})"
+            )
+            if rows:
+                conn.executemany(insert_sql, rows)
+
+            created_tables.append(table_name)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return temp_db.name, created_tables, "Files loaded into SQLite workspace"
 
 
 def load_data(
     source_type: str, source_config: Dict[str, Any]
-) -> Tuple[Optional[pd.DataFrame], str]:
+) -> Tuple[Optional[Dict[str, Any]], str]:
     """
-    Load data from a database, CSV, or Excel file into a pandas DataFrame.
+    Load data from a database, CSV, or Excel file into a SQL-native context.
 
     Args:
-        source_type: Type of source ('database', 'csv', or 'excel')
+        source_type: Type of source ('database', 'csv', 'excel', or 'file')
         source_config: Configuration dictionary containing:
             - For database: {
                 'db_type': str,
@@ -864,12 +635,10 @@ def load_data(
               }
             - For CSV: {'file_path': str}
             - For Excel: {'file_path': str, 'sheet_name': str (optional)}
+            - For file: {'file_paths': List[str]}
 
     Returns:
-        Tuple of (DataFrame or None, status_message: str)
-
-    Raises:
-        Returns (None, error_message) on failure instead of raising
+        Tuple of (context or None, status_message: str)
     """
     try:
         source_type = source_type.lower()
@@ -877,14 +646,20 @@ def load_data(
 
         if source_type == "database":
             return _load_from_database(source_config)
-        elif source_type == "csv":
-            return _load_from_csv(source_config)
-        elif source_type == "excel":
-            return _load_from_excel(source_config)
-        else:
-            msg = f"Unsupported source type: {source_type}"
-            logger.error(msg)
-            return None, msg
+        if source_type == "file":
+            return _load_from_files(source_config)
+        if source_type == "csv":
+            return _load_from_files({"file_paths": [source_config.get("file_path", "")]})
+        if source_type == "excel":
+            config = {
+                "file_paths": [source_config.get("file_path", "")],
+                "sheet_name": source_config.get("sheet_name"),
+            }
+            return _load_from_files(config)
+
+        msg = f"Unsupported source type: {source_type}"
+        logger.error(msg)
+        return None, msg
 
     except Exception as e:
         msg = f"Error loading data: {str(e)}"
@@ -892,16 +667,7 @@ def load_data(
         return None, msg
 
 
-def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], str]:
-    """
-    Load data from a database connection.
-
-    Args:
-        config: Configuration with db_type, credentials, and table(s)
-
-    Returns:
-        Tuple of (DataFrame or None, message: str)
-    """
+def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     table = config.get("table")
     if not table:
         return None, "Error: 'table' field is required for database source"
@@ -917,123 +683,145 @@ def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame],
         return None, message
 
     try:
-        if isinstance(table, list):
-            logger.info(f"Loading {len(table)} tables from database")
-            return _load_multiple_tables(connector, table)
-        else:
-            logger.info(f"Loading table: {table}")
-            df, load_msg, skipped_cols = _load_table_via_sql(connector, table)
-            if df is None:
-                return None, load_msg
-            skip_msg = (
-                f" Skipped large columns: {', '.join(skipped_cols)}"
-                if skipped_cols
-                else ""
-            )
-            msg = load_msg or "Data loaded successfully"
-            return df, f"{msg} from table: {table}.{skip_msg}"
+        tables = table if isinstance(table, list) else [table]
+        table_info: Dict[str, Any] = {}
+        skipped_cols_by_table: Dict[str, List[str]] = {}
+
+        for table_name in tables:
+            info, skipped_cols = _collect_table_info(connector, table_name)
+            table_info[table_name] = info
+            if skipped_cols:
+                skipped_cols_by_table[table_name] = skipped_cols
+
+        context = {
+            "source_type": "database",
+            "db_type": db_type,
+            "credentials": credentials,
+            "tables": tables,
+            "table_info": table_info,
+            "skipped_columns": skipped_cols_by_table,
+        }
+
+        return context, "Schema loaded successfully"
     finally:
         connector.close()
 
 
-def _load_multiple_tables(
-    connector: DatabaseConnector, table_names: List[str]
-) -> Tuple[Optional[pd.DataFrame], str]:
-    """
-    Load and merge multiple tables from a database.
+def _load_from_files(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    file_paths = config.get("file_paths") or []
+    if not file_paths:
+        return None, "Error: 'file_paths' is required for file source"
 
-    Attempts SQL joins first.
-    Falls back to pandas merge if unsafe or impossible.
-    """
+    sheet_name = config.get("sheet_name")
 
     try:
-        query, _, skipped_cols = _build_join_query(connector, table_names)
+        db_path, tables, message = _load_files_into_sqlite(file_paths, sheet_name)
+        connector = DatabaseConnector()
+        success, conn_msg = connector.connect("sqlite", {"database": db_path})
+        if not success:
+            return None, conn_msg
 
-        # ---------- SQL join path ----------
-        if query:
-            df, truncated = _read_sql_limited(
-                query, connector, DB_MAX_ROWS_IN_MEMORY
+        try:
+            table_info: Dict[str, Any] = {}
+            skipped_cols_by_table: Dict[str, List[str]] = {}
+            for table_name in tables:
+                info, skipped_cols = _collect_table_info(connector, table_name)
+                table_info[table_name] = info
+                if skipped_cols:
+                    skipped_cols_by_table[table_name] = skipped_cols
+
+            context = {
+                "source_type": "file",
+                "db_type": "sqlite",
+                "credentials": {"database": db_path},
+                "tables": tables,
+                "table_info": table_info,
+                "file_paths": file_paths,
+                "skipped_columns": skipped_cols_by_table,
+            }
+
+            return context, message
+        finally:
+            connector.close()
+    except Exception as e:
+        logger.error(f"Error loading files: {str(e)}", exc_info=True)
+        return None, f"Error loading files: {str(e)}"
+
+
+def add_files_to_sqlite(
+    context: Dict[str, Any], file_paths: List[str]
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    if not context or context.get("db_type") != "sqlite":
+        return None, "Current context is not a SQLite workspace."
+
+    db_path = context.get("credentials", {}).get("database")
+    if not db_path:
+        return None, "Missing SQLite database path in context."
+
+    existing_list = context.get("tables", [])
+    existing_tables = set(existing_list)
+
+    conn = sqlite3.connect(db_path)
+    created_tables: List[str] = []
+    try:
+        for file_path in file_paths:
+            table_name = _safe_table_name(file_path, existing_tables)
+            if file_path.lower().endswith(".csv"):
+                columns, rows = _read_csv_rows(file_path)
+            elif file_path.lower().endswith((".xlsx", ".xls")):
+                columns, rows = _read_excel_rows(file_path, None)
+            else:
+                raise ValueError(f"Unsupported file type: {file_path}")
+
+            if not columns:
+                raise ValueError(f"No columns detected in file: {file_path}")
+
+            col_defs = ", ".join(
+                f"{_quote_sqlite_identifier(col)} TEXT" for col in columns
+            )
+            conn.execute(
+                f"CREATE TABLE {_quote_sqlite_identifier(table_name)} ({col_defs})"
             )
 
-            tables_str = ", ".join(table_names)
-            msg = f"Data loaded from tables: {tables_str} using SQL joins"
+            placeholders = ", ".join(["?"] * len(columns))
+            col_list = ", ".join(_quote_sqlite_identifier(col) for col in columns)
+            insert_sql = (
+                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "
+                f"({col_list}) VALUES ({placeholders})"
+            )
+            if rows:
+                conn.executemany(insert_sql, rows)
 
-            if truncated:
-                msg += f". Results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
+            created_tables.append(table_name)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not created_tables:
+        return None, "No new tables were added."
+
+    connector = DatabaseConnector()
+    success, message = connector.connect("sqlite", {"database": db_path})
+    if not success:
+        return None, message
+
+    try:
+        table_info = context.get("table_info", {})
+        skipped_cols_by_table = context.get("skipped_columns", {})
+
+        for table_name in created_tables:
+            info, skipped_cols = _collect_table_info(connector, table_name)
+            table_info[table_name] = info
             if skipped_cols:
-                msg += f". Skipped large columns: {', '.join(skipped_cols)}"
+                skipped_cols_by_table[table_name] = skipped_cols
 
-            return df, msg
+        updated = dict(context)
+        updated["tables"] = existing_list + created_tables
+        updated["table_info"] = table_info
+        updated["skipped_columns"] = skipped_cols_by_table
+        updated["file_paths"] = list(set(context.get("file_paths", [])) | set(file_paths))
 
-        # ---------- pandas fallback ----------
-        logger.info(
-            "SQL join unsafe or not possible. Falling back to pandas merge."
-        )
-
-        dfs = []
-        for t in table_names:
-            df, load_msg, _ = _load_table_via_sql(connector, t)
-            if df is None:
-                return None, f"Failed loading table {t}: {load_msg}"
-            dfs.append(df)
-
-        merged_df, strategy = merge_dataframes(dfs)
-
-        msg = (
-            f"Tables loaded individually and merged in pandas "
-            f"({strategy})"
-        )
-
-        return merged_df, msg
-
-    except Exception as e:
-        logger.error(f"Error loading multiple tables: {str(e)}")
-        return None, f"Error loading tables: {str(e)}"
-
-
-def _load_from_csv(config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], str]:
-    """
-    Load data from a CSV file.
-
-    Args:
-        config: Configuration with file_path
-
-    Returns:
-        Tuple of (DataFrame or None, message: str)
-    """
-    file_path = config.get("file_path")
-    if not file_path:
-        return None, "Error: 'file_path' is required for CSV source"
-
-    try:
-        logger.info(f"Loading CSV: {file_path}")
-        df = pd.read_csv(file_path)
-        return df, f"CSV file loaded successfully: {file_path}"
-    except Exception as e:
-        logger.error(f"Error loading CSV: {str(e)}")
-        return None, f"Error loading CSV: {str(e)}"
-
-
-def _load_from_excel(config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame], str]:
-    """
-    Load data from an Excel file.
-
-    Args:
-        config: Configuration with file_path and optional sheet_name
-
-    Returns:
-        Tuple of (DataFrame or None, message: str)
-    """
-    file_path = config.get("file_path")
-    if not file_path:
-        return None, "Error: 'file_path' is required for Excel source"
-
-    sheet_name = config.get("sheet_name", 0)
-
-    try:
-        logger.info(f"Loading Excel: {file_path}, sheet: {sheet_name}")
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-        return df, f"Excel file loaded successfully: {file_path}"
-    except Exception as e:
-        logger.error(f"Error loading Excel: {str(e)}")
-        return None, f"Error loading Excel: {str(e)}"
+        return updated, f"Added {len(created_tables)} table(s) to SQLite workspace"
+    finally:
+        connector.close()

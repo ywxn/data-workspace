@@ -1,6 +1,5 @@
 import sys
 import asyncio
-import pandas as pd
 import webbrowser
 import json
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
@@ -28,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
-from processing import load_data, merge_dataframes
+from processing import load_data, add_files_to_sqlite
 from connector import DatabaseConnector
 from config import ConfigManager
 from markdown_converter import markdown_to_html
@@ -404,10 +403,10 @@ class CreateProjectDialog(QDialog):
                 "credentials": new_config["credentials"],
                 "table": selected_tables,
             }
-            merged_dataframe, status = load_data("database", source_config)
+            data_context, status = load_data("database", source_config)
 
-            if merged_dataframe is not None:
-                self.backend.loaded_dataframe = merged_dataframe
+            if data_context is not None:
+                self.backend.data_context = data_context
                 # Update project data_source to reflect the used config (save host/port but don't store password)
                 credentials_to_store = new_config["credentials"].copy()
                 if "password" in credentials_to_store:
@@ -434,11 +433,11 @@ class CreateProjectDialog(QDialog):
         elif ds and isinstance(ds, dict) and ds.get("file_paths"):
             # Try to load files recorded in the saved project
             file_paths = ds.get("file_paths", [])
-            merged_dataframe, welcome_msg = self.backend.load_file_data_with_ui(
+            data_context, welcome_msg = self.backend.load_file_data_with_ui(
                 file_paths
             )
-            if merged_dataframe is not None:
-                self.backend.loaded_dataframe = merged_dataframe
+            if data_context is not None:
+                self.backend.data_context = data_context
                 QMessageBox.information(
                     self,
                     "Project Loaded",
@@ -1000,10 +999,10 @@ class QueryWorker(QThread):
     result_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, query: str, df: pd.DataFrame):
+    def __init__(self, query: str, data_context: Dict[str, Any]):
         super().__init__()
         self.query = query
-        self.df = df
+        self.data_context = data_context
         self.agent = AIAgent()
 
     def run(self):
@@ -1016,11 +1015,12 @@ class QueryWorker(QThread):
             asyncio.set_event_loop(loop)
 
             # Use the new orchestrated execute_query method
+            tables = self.data_context.get("tables", [])
             logger.debug(
-                f"Executing query asynchronously (dataframe shape: {self.df.shape})"
+                f"Executing query asynchronously (tables: {tables})"
             )
             result = loop.run_until_complete(
-                self.agent.execute_query(self.query, self.df)
+                self.agent.execute_query(self.query, self.data_context)
             )
             logger.info(
                 f"Query execution completed successfully (result length: {len(result)} chars)"
@@ -1241,7 +1241,7 @@ class DataWorkspaceGUI(QMainWindow):
         self.backend = DataWorkspaceBackend()
         self.project_id: Optional[str] = None
         self.chat_id: Optional[str] = None
-        self.dataframe: Optional[pd.DataFrame] = None
+        self.data_context: Optional[Dict[str, Any]] = None
         self.is_running = False
         self.processing_marker = "**Assistant:** _Processing..._"
         self.current_theme = "system"
@@ -1459,7 +1459,7 @@ class DataWorkspaceGUI(QMainWindow):
             logger.debug("Empty query submitted, ignoring")
             return
 
-        if self.dataframe is None:
+        if self.data_context is None:
             logger.warning("Query submitted but no data loaded")
             QMessageBox.warning(
                 self, "No Data", "No data loaded. Please restart and load data first."
@@ -1496,10 +1496,8 @@ class DataWorkspaceGUI(QMainWindow):
         self.add_message_to_chat("user", query)
 
         # Create and start worker thread
-        logger.debug(
-            f"Creating query worker for dataframe with shape: {self.dataframe.shape}"
-        )
-        self.worker = QueryWorker(query, self.dataframe)
+        logger.debug("Creating query worker for active SQL context")
+        self.worker = QueryWorker(query, self.data_context)
         self.worker.result_signal.connect(self.display_result)
         self.worker.error_signal.connect(self.display_error)
         self.worker.finished.connect(self.on_query_finished)
@@ -1817,17 +1815,17 @@ class DataWorkspaceGUI(QMainWindow):
                                             else selected_tables
                                         ),
                                     }
-                                    df, status = load_data(
+                                    data_context, status = load_data(
                                         "database", data_source_config
                                     )
-                                    if df is not None:
-                                        self.backend.loaded_dataframe = df
-                                        self.dataframe = df
+                                    if data_context is not None:
+                                        self.backend.data_context = data_context
+                                        self.data_context = data_context
                                         logger.info(
-                                            f"Successfully loaded data from tables: {selected_tables}, shape: {df.shape}"
+                                            f"Successfully loaded data from tables: {selected_tables}"
                                         )
                                         welcome_msg = self.backend.format_database_welcome_message(
-                                            db_type, selected_tables, df, status
+                                            db_type, selected_tables, data_context, status
                                         )
                                         self.conversation_display.setHtml(
                                             markdown_to_html(welcome_msg)
@@ -1863,13 +1861,13 @@ class DataWorkspaceGUI(QMainWindow):
                         file_paths = source_config.get("file_paths", [])
                         logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
                         if file_paths:
-                            df, welcome_msg = self.backend.load_file_data_with_ui(
+                            data_context, welcome_msg = self.backend.load_file_data_with_ui(
                                 file_paths
                             )
-                            if df is not None:
-                                self.dataframe = df
+                            if data_context is not None:
+                                self.data_context = data_context
                                 logger.info(
-                                    f"Successfully loaded {len(file_paths)} file(s), data shape: {df.shape}"
+                                    f"Successfully loaded {len(file_paths)} file(s)"
                                 )
                                 self.conversation_display.setHtml(
                                     markdown_to_html(welcome_msg)
@@ -1892,7 +1890,7 @@ class DataWorkspaceGUI(QMainWindow):
         """Connect additional data sources without overwriting existing data."""
         logger.info("User initiated additional data source connection")
 
-        if self.dataframe is None:
+        if self.data_context is None:
             QMessageBox.information(
                 self,
                 "No Data Loaded",
@@ -1909,10 +1907,6 @@ class DataWorkspaceGUI(QMainWindow):
         source_type = source_dialog.data_source_type
         source_config = source_dialog.data_source_config
         logger.info(f"Additional data source type selected: {source_type}")
-
-        new_df: Optional[pd.DataFrame] = None
-        source_label = ""
-        source_entry: Dict[str, Any] = {}
 
         try:
             if source_type == "database":
@@ -1961,24 +1955,70 @@ class DataWorkspaceGUI(QMainWindow):
                         else selected_tables
                     ),
                 }
-                new_df, status = load_data("database", data_source_config)
-                if new_df is None:
+                new_context, status = load_data("database", data_source_config)
+                if new_context is None:
                     QMessageBox.warning(self, "Load Failed", status)
                     return
 
-                source_label = (
-                    f"Database ({db_type}) tables: {', '.join(selected_tables)}"
+                if self.data_context.get("source_type") != "database":
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Additional database sources can only be added to an existing database workspace.",
+                    )
+                    return
+
+                if (
+                    self.data_context.get("db_type") != db_type
+                    or self.data_context.get("credentials") != credentials
+                ):
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Adding tables from a different database connection is not supported in SQL-first mode.",
+                    )
+                    return
+
+                existing_tables = set(self.data_context.get("tables", []))
+                table_info = self.data_context.get("table_info", {})
+                skipped_cols = self.data_context.get("skipped_columns", {})
+
+                for table_name in new_context.get("tables", []):
+                    if table_name not in existing_tables:
+                        existing_tables.add(table_name)
+                        table_info[table_name] = new_context.get("table_info", {}).get(
+                            table_name, {}
+                        )
+                        skipped = new_context.get("skipped_columns", {}).get(table_name)
+                        if skipped:
+                            skipped_cols[table_name] = skipped
+
+                self.data_context["tables"] = list(existing_tables)
+                self.data_context["table_info"] = table_info
+                self.data_context["skipped_columns"] = skipped_cols
+                self.backend.data_context = self.data_context
+
+                if self.backend.active_project is not None:
+                    creds_to_store = credentials.copy()
+                    if "password" in creds_to_store:
+                        creds_to_store["password"] = ""
+                    self.backend.active_project.data_source = {
+                        "db_type": db_type,
+                        "credentials": creds_to_store,
+                        "table": list(existing_tables),
+                        "table_selection_method": selection_method,
+                        "semantic_layer": semantic_layer,
+                    }
+
+                welcome_msg = self.backend.format_database_welcome_message(
+                    db_type, list(existing_tables), self.data_context, status
                 )
-                creds_to_store = credentials.copy()
-                if "password" in creds_to_store:
-                    creds_to_store["password"] = ""
-                source_entry = {
-                    "db_type": db_type,
-                    "credentials": creds_to_store,
-                    "table": selected_tables,
-                    "table_selection_method": selection_method,
-                    "semantic_layer": semantic_layer,
-                }
+                self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                QMessageBox.information(
+                    self,
+                    "Data Loaded",
+                    "Additional tables added to the database workspace.",
+                )
 
             elif source_type == "file":
                 file_paths = source_config.get("file_paths", [])
@@ -1986,49 +2026,34 @@ class DataWorkspaceGUI(QMainWindow):
                     QMessageBox.warning(self, "Load Failed", "No files selected.")
                     return
 
-                new_df, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
-                if new_df is None:
-                    QMessageBox.warning(self, "Load Failed", welcome_msg)
+                if self.data_context.get("source_type") != "file":
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Additional files can only be added to an existing file workspace.",
+                    )
                     return
 
-                source_label = (
-                    f"Files: {', '.join([os.path.basename(p) for p in file_paths])}"
+                updated_context, status = add_files_to_sqlite(self.data_context, file_paths)
+                if updated_context is None:
+                    QMessageBox.warning(self, "Load Failed", status)
+                    return
+
+                self.data_context = updated_context
+                self.backend.data_context = updated_context
+                welcome_msg = self.backend.format_file_welcome_message(
+                    file_paths, updated_context, status
                 )
-                source_entry = {"file_paths": file_paths}
+                self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                QMessageBox.information(
+                    self,
+                    "Data Loaded",
+                    "Additional files added to the SQLite workspace.",
+                )
 
             else:
                 QMessageBox.warning(self, "Error", "Unknown source type.")
                 return
-
-            merged_df, merge_strategy = merge_dataframes([self.dataframe, new_df])
-            self.dataframe = merged_df
-            self.backend.loaded_dataframe = merged_df
-
-            if self.backend.active_project is not None:
-                project_ds = self.backend.active_project.data_source
-                if not isinstance(project_ds, dict):
-                    project_ds = {}
-                additional_sources = project_ds.get("additional_sources", [])
-                additional_sources.append(source_entry)
-                project_ds["additional_sources"] = additional_sources
-                self.backend.active_project.data_source = project_ds
-
-            merge_label = merge_strategy or "Merged with existing data"
-            combined_msg = self.backend._join_markdown_blocks(
-                [
-                    "### Additional Data Loaded",
-                    f"**Previous Data Source:** {self.backend.active_project.data_source if self.backend.active_project else 'N/A'}",
-                    f"**Added:** {source_label}",
-                    f"**Merge Strategy:** {merge_label}",
-                    f"**Combined Shape:** {len(merged_df)} rows, {len(merged_df.columns)} columns",
-                ]
-            )
-            self.conversation_display.setHtml(markdown_to_html(combined_msg))
-            QMessageBox.information(
-                self,
-                "Data Loaded",
-                "Additional data loaded and merged successfully.",
-            )
 
         except Exception as e:
             logger.error(
@@ -2096,7 +2121,7 @@ class DataWorkspaceGUI(QMainWindow):
                 self.backend = DataWorkspaceBackend()
                 self.project_id = None
                 self.chat_id = None
-                self.dataframe = None
+                self.data_context = None
                 self.conversation_display.clear()
                 self.query_input.clear()
                 self.chat_list.clear()
@@ -2289,16 +2314,16 @@ def start_application():
         window.chat_list.setCurrentRow(0)
 
     # Check if data is already loaded from project (e.g., loading saved project with data source)
-    data_already_loaded = window.backend.loaded_dataframe is not None
+    data_already_loaded = window.backend.data_context is not None
     logger.info(f"Data already loaded from project: {data_already_loaded}")
 
     # Only ask for data source if no data is already loaded
     if data_already_loaded:
         logger.info("Using data already loaded from project")
         # Data was already loaded from project, generate welcome message
-        if window.backend.loaded_dataframe is not None:
-            df = window.backend.loaded_dataframe
-            logger.debug(f"Loaded dataframe shape: {df.shape}")
+        if window.backend.data_context is not None:
+            data_context = window.backend.data_context
+            logger.debug("Loaded SQL context from project")
             # Check what type of source was used
             if (
                 window.backend.active_project
@@ -2313,18 +2338,19 @@ def start_application():
                     welcome_msg = window.backend.format_database_welcome_message(
                         ds.get("db_type"),
                         selected_tables,
-                        df,
+                        data_context,
                         "Data loaded from project",
                     )
                     window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                 elif ds.get("file_paths"):
                     # File source
-                    welcome_msg = window.backend.load_file_data_with_ui(
-                        ds.get("file_paths", [])
-                    )[1]
+                    welcome_msg = window.backend.format_file_welcome_message(
+                        ds.get("file_paths", []),
+                        data_context,
+                        "Data loaded from project",
+                    )
                     window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                    window.dataframe = df
-            window.dataframe = df
+            window.data_context = data_context
     else:
         logger.info("No data loaded, prompting for data source")
         # No data loaded yet, ask for data source
@@ -2411,14 +2437,12 @@ def start_application():
                 if not selected_tables:
                     return
 
-                merged_dataframe, status = load_data("database", source_config)
+                data_context, status = load_data("database", source_config)
 
-                if merged_dataframe is not None:
-                    logger.info(
-                        f"Successfully loaded database data, shape: {merged_dataframe.shape}"
-                    )
-                    window.dataframe = merged_dataframe
-                    window.backend.loaded_dataframe = merged_dataframe
+                if data_context is not None:
+                    logger.info("Successfully loaded database data")
+                    window.data_context = data_context
+                    window.backend.data_context = data_context
                     # Store data source in the project
                     if window.backend.active_project:
                         creds_to_store = credentials.copy()
@@ -2432,7 +2456,7 @@ def start_application():
                             "semantic_layer": semantic_layer,
                         }
                     welcome_msg = window.backend.format_database_welcome_message(
-                        db_type, selected_tables, merged_dataframe, status
+                        db_type, selected_tables, data_context, status
                     )
                     window.conversation_display.setHtml(markdown_to_html(welcome_msg))
                 else:
@@ -2446,12 +2470,12 @@ def start_application():
             elif source_type == "file":
                 file_paths = source_config["file_paths"]
                 logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
-                merged_dataframe, welcome_msg = window.backend.load_file_data_with_ui(
+                data_context, welcome_msg = window.backend.load_file_data_with_ui(
                     file_paths
                 )
 
-                if merged_dataframe is not None:
-                    window.dataframe = merged_dataframe
+                if data_context is not None:
+                    window.data_context = data_context
                     # Store file paths in the project
                     if window.backend.active_project:
                         window.backend.active_project.data_source = {

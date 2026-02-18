@@ -203,7 +203,7 @@ db.connect("oracle", {
 
 ```python
 from connector import DatabaseConnector
-import pandas as pd
+from sqlalchemy import text
 
 db = DatabaseConnector()
 success, msg = db.connect("sqlite", {
@@ -211,9 +211,9 @@ success, msg = db.connect("sqlite", {
 })
 
 if success:
-    # Load data
-    df = pd.read_sql("SELECT * FROM users", db.engine)
-    print(df)
+    result = db.connection.execute(text("SELECT * FROM users"))
+    rows = result.fetchall()
+    print(rows)
     db.close()
 ```
 
@@ -230,8 +230,9 @@ success, msg = db.connect("mysql", {
 })
 
 if success:
-    df = pd.read_sql("SELECT * FROM orders LIMIT 1000", db.engine)
-    print(df)
+    result = db.connection.execute(text("SELECT * FROM orders LIMIT 1000"))
+    rows = result.fetchall()
+    print(rows)
     db.close()
 ```
 
@@ -255,7 +256,8 @@ if success:
     columns = db.get_columns("sales_data")
     
     # Load specific table
-    df = pd.read_sql("SELECT * FROM sales_data WHERE year=2024", db.engine)
+    result = db.connection.execute(text("SELECT * FROM sales_data WHERE year=2024"))
+    rows = result.fetchall()
     
     db.close()
 ```
@@ -489,14 +491,14 @@ The application uses parameterized queries:
 
 ```python
 # Safe - uses parameterization
-df = pd.read_sql(
-    "SELECT * FROM users WHERE id = ?",
-    db.engine,
-    params=(user_id,)
+result = db.connection.execute(
+    text("SELECT * FROM users WHERE id = :user_id"),
+    {"user_id": user_id},
 )
+rows = result.fetchall()
 
 # Avoid - string concatenation
-df = pd.read_sql(f"SELECT * FROM users WHERE id = {user_id}")  # UNSAFE!
+result = db.connection.execute(text(f"SELECT * FROM users WHERE id = {user_id}"))  # UNSAFE!
 ```
 
 ### Firewall Rules
@@ -553,17 +555,21 @@ db.connect("sqlserver", {
 ### Export data to CSV
 
 ```python
-from processing import load_data
-import pandas as pd
+from connector import DatabaseConnector
+from sqlalchemy import text
+import csv
 
-df, msg = load_data("database", {
-    "db_type": "sqlite",
-    "credentials": {"database": "mydb.sqlite"},
-    "table": "users"
-})
+db = DatabaseConnector()
+db.connect("sqlite", {"database": "mydb.sqlite"})
 
-# Export
-df.to_csv("users_export.csv", index=False)
+result = db.connection.execute(text("SELECT * FROM users"))
+rows = result.fetchall()
+columns = result.keys()
+
+with open("users_export.csv", "w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    writer.writerow(columns)
+    writer.writerows(rows)
 ```
 
 ### Backup database

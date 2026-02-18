@@ -1,7 +1,6 @@
 """Backend logic for the AI Data Workspace GUI (Qt Markdown version)."""
 
 from typing import Any, Dict, List, Tuple, Optional
-import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
@@ -84,7 +83,7 @@ class DataWorkspaceBackend:
         self.active_project: Optional[Project] = None
         self.active_chat: Optional[ChatSession] = None
         self.projects: Dict[str, Project] = {}
-        self.loaded_dataframe: Optional[pd.DataFrame] = None
+        self.data_context: Optional[Dict[str, Any]] = None
         self.schema_metadata: Optional[Dict[str, Any]] = None
 
     @staticmethod
@@ -335,25 +334,32 @@ class DataWorkspaceBackend:
 
     def validate_connection(self) -> Tuple[bool, str]:
         """Validate the current data source connection."""
-        if self.loaded_dataframe is not None:
+        if self.data_context is not None:
             return True, "Connection is valid."
         return False, "No active connection."
 
     def load_schema(self) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Load schema metadata from the connected data source."""
-        if self.loaded_dataframe is not None:
+        if self.data_context is not None:
+            table_info = self.data_context.get("table_info", {})
             schema = {
-                "columns": list(self.loaded_dataframe.columns),
-                "dtypes": self.loaded_dataframe.dtypes.astype(str).to_dict(),
+                "tables": self.data_context.get("tables", []),
+                "columns": {
+                    table: info.get("columns", [])
+                    for table, info in table_info.items()
+                },
+                "dtypes": {
+                    table: info.get("column_types", {})
+                    for table, info in table_info.items()
+                },
             }
             return True, "Schema loaded successfully.", schema
         return False, "No data loaded.", None
 
     def get_available_tables(self) -> List[str]:
         """Get list of available tables from the data source."""
-        if self.loaded_dataframe is not None:
-            name = self.loaded_dataframe.name or "table"
-            return [str(name)]
+        if self.data_context is not None:
+            return list(self.data_context.get("tables", []))
         return []
 
     # ==================== Chat Session Management ====================
@@ -469,7 +475,7 @@ class DataWorkspaceBackend:
     # ==================== Data Export ====================
 
     def export_results(
-        self, data: pd.DataFrame, format: str, file_path: str
+        self, data: Dict[str, Any], format: str, file_path: str
     ) -> Tuple[bool, str]:
         """Export query results to file (CSV, Excel, JSON)."""
         raise NotImplementedError()
@@ -482,21 +488,41 @@ class DataWorkspaceBackend:
 
     # ==================== Utility Functions ====================
 
-    def get_data_preview(self, limit: int = 5) -> Optional[pd.DataFrame]:
+    def get_data_preview(self, limit: int = 5) -> Optional[Dict[str, Any]]:
         """Get preview of loaded data."""
-        if self.loaded_dataframe is not None:
-            return self.loaded_dataframe.head(limit)
-        return None
+        if self.data_context is None:
+            return None
+
+        tables = self.data_context.get("tables", [])
+        if not tables:
+            return None
+
+        primary_table = tables[0]
+        info = self.data_context.get("table_info", {}).get(primary_table, {})
+        rows = info.get("sample_rows", [])[:limit]
+        return {"table": primary_table, "rows": rows}
 
     def get_column_info(self) -> Optional[Dict[str, Any]]:
         """Get information about columns in loaded data."""
-        if self.loaded_dataframe is not None:
-            return {
-                "columns": list(self.loaded_dataframe.columns),
-                "dtypes": self.loaded_dataframe.dtypes.astype(str).to_dict(),
-                "non_null_counts": self.loaded_dataframe.count().to_dict(),
-            }
-        return None
+        if self.data_context is None:
+            return None
+
+        table_info = self.data_context.get("table_info", {})
+        return {
+            "tables": self.data_context.get("tables", []),
+            "columns": {
+                table: info.get("columns", [])
+                for table, info in table_info.items()
+            },
+            "dtypes": {
+                table: info.get("column_types", {})
+                for table, info in table_info.items()
+            },
+            "row_counts": {
+                table: info.get("row_count", 0)
+                for table, info in table_info.items()
+            },
+        }
 
     def clear_session(self) -> Tuple[bool, str]:
         """Clear the active chat session."""
@@ -509,118 +535,50 @@ class DataWorkspaceBackend:
 
     def load_file_data_with_ui(
         self, file_paths: List[str]
-    ) -> Tuple[Optional[pd.DataFrame], str]:
-        """Load and merge data from multiple files, returning dataframe and markdown welcome message."""
-        from processing import load_data, merge_dataframes
-
-        dataframes = []
-        file_info = []
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Load data from multiple files, returning SQL context and markdown message."""
         errors = []
 
-        for file_path in file_paths:
-            try:
-                if file_path.lower().endswith(".csv"):
-                    df, status = load_data("csv", {"file_path": file_path})
-                elif file_path.lower().endswith((".xlsx", ".xls")):
-                    df, status = load_data("excel", {"file_path": file_path})
-                else:
-                    errors.append(f"Unsupported file type: {file_path}")
-                    continue
+        try:
+            context, status = load_data("file", {"file_paths": file_paths})
+        except Exception as e:
+            context = None
+            status = str(e)
 
-                if df is not None:
-                    dataframes.append(df)
-                    file_info.append(
-                        {
-                            "name": file_path.split("/")[-1].split("\\")[-1],
-                            "rows": len(df),
-                            "columns": len(df.columns),
-                        }
-                    )
-                else:
-                    errors.append(f"Failed to load {file_path}: {status}")
-            except Exception as e:
-                errors.append(f"Error loading {file_path}: {str(e)}")
-
-        if not dataframes:
+        if context is None:
             error_detail = (
                 "\n".join([f"- {err}" for err in errors])
                 if errors
                 else "- Unknown error"
             )
-            return (
-                None,
-                f"Failed to load any files:\n{error_detail}",
-            )
+            return None, f"Failed to load any files:\n{error_detail}\n{status}"
 
-        merged_dataframe, merge_strategy = merge_dataframes(dataframes)
-        self.loaded_dataframe = merged_dataframe
+        self.data_context = context
+        welcome_msg = self.format_file_welcome_message(file_paths, context, status)
 
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
-        else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
-            )
-
-        files_detail = "\n".join(
-            [
-                f"- {info['name']}: {info['rows']} rows, {info['columns']} columns"
-                for info in file_info
-            ]
-        )
-
-        merge_info = f"**Merge Strategy:** {merge_strategy}\n" if merge_strategy else ""
-        file_word = "file" if len(file_info) == 1 else "files"
-
-        welcome_msg = self._join_markdown_blocks(
-            [
-                "### Data Loaded Successfully",
-                f"**Loaded {len(file_info)} {file_word}:**\n{files_detail}",
-                merge_info.strip(),
-                f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
-                f"**Columns:** {columns_list}",
-            ]
-        )
-
-        if errors:
-            error_detail = "\n".join([f"- {err}" for err in errors])
-            welcome_msg = self._join_markdown_blocks(
-                [welcome_msg, f"**Warnings:**\n{error_detail}"]
-            )
-
-        welcome_msg = self._join_markdown_blocks(
-            [
-                welcome_msg,
-                "Ready to analyze your data! Try asking questions like:\n"
-                "- What insights can you find in this data?\n"
-                "- Show me a summary of the data\n"
-                "- What trends are visible?",
-            ]
-        )
-
-        return merged_dataframe, welcome_msg
+        return context, welcome_msg
 
     def format_database_welcome_message(
         self,
         db_type: str,
         selected_tables: Any,
-        merged_dataframe: pd.DataFrame,
+        data_context: Dict[str, Any],
         status: str,
     ) -> str:
         """Format welcome message for database data loading with compact bullets."""
 
-        # Format columns
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
+        table_info = data_context.get("table_info", {})
+        qualified_columns: List[str] = []
+        for table, info in table_info.items():
+            qualified_columns.extend([f"{table}.{col}" for col in info.get("columns", [])])
+
+        if len(qualified_columns) <= 50:
+            columns_list = ", ".join(qualified_columns)
         else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
+            first_cols = ", ".join(qualified_columns[:30])
+            last_cols = ", ".join(qualified_columns[-20:])
             columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+                f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
             )
 
         # Prepare example questions list (compact bullets)
@@ -632,32 +590,32 @@ class DataWorkspaceBackend:
         example_list = "\n".join([f"- {q}" for q in example_questions])
 
         if isinstance(selected_tables, list):
-            # Prepare table list (compact bullets)
-            tables_detail = "\n".join([f"- {table}" for table in selected_tables])
-
-            merge_info = ""
-            if "Merge strategy:" in status:
-                merge_strategy = status.split("Merge strategy:")[1].strip()
-                merge_info = f"**Merge Strategy:** {merge_strategy}"
+            tables_detail = "\n".join(
+                [
+                    f"- {table}: {table_info.get(table, {}).get('row_count', 0)} rows, "
+                    f"{len(table_info.get(table, {}).get('columns', []))} columns"
+                    for table in selected_tables
+                ]
+            )
 
             table_word = "table" if len(selected_tables) == 1 else "tables"
             welcome_msg = self._join_markdown_blocks(
                 [
                     "### Data Loaded Successfully",
                     f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n\n{tables_detail}",
-                    merge_info,
-                    f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
                     f"**Columns:** {columns_list}",
                     f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
                 ]
             )
         else:
+            table = str(selected_tables)
+            info = table_info.get(table, {})
             welcome_msg = self._join_markdown_blocks(
                 [
                     "### Data Loaded Successfully",
                     f"**Loaded from {db_type} database**",
-                    f"**Table:** {selected_tables}",
-                    f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                    f"**Table:** {table}",
+                    f"**Rows:** {info.get('row_count', 0)}",
                     f"**Columns:** {columns_list}",
                     f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
                 ]
@@ -668,20 +626,23 @@ class DataWorkspaceBackend:
     def format_file_welcome_message(
         self,
         file_paths: List[str],
-        merged_dataframe: pd.DataFrame,
+        data_context: Dict[str, Any],
         status: str,
     ) -> str:
         """Format welcome message for file data loading with compact bullets."""
 
-        # Format columns
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
+        table_info = data_context.get("table_info", {})
+        qualified_columns: List[str] = []
+        for table, info in table_info.items():
+            qualified_columns.extend([f"{table}.{col}" for col in info.get("columns", [])])
+
+        if len(qualified_columns) <= 50:
+            columns_list = ", ".join(qualified_columns)
         else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
+            first_cols = ", ".join(qualified_columns[:30])
+            last_cols = ", ".join(qualified_columns[-20:])
             columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+                f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
             )
 
         # Prepare example questions list (compact bullets)
@@ -692,24 +653,27 @@ class DataWorkspaceBackend:
         ]
         example_list = "\n".join([f"- {q}" for q in example_questions])
 
-        # Prepare file list (compact bullets)
         file_count = len(file_paths)
         file_word = "file" if file_count == 1 else "files"
         files_detail = "\n".join(
-            [f"- {fp.split('/')[-1].split(chr(92))[-1]}" for fp in file_paths]
+            [
+                f"- {os.path.basename(fp)}"
+                for fp in file_paths
+            ]
         )
 
-        merge_info = ""
-        if file_count > 1 and "Merge strategy:" in status:
-            merge_strategy = status.split("Merge strategy:")[1].strip()
-            merge_info = f"**Merge Strategy:** {merge_strategy}"
+        table_detail = "\n".join(
+            [
+                f"- {table}: {info.get('row_count', 0)} rows, {len(info.get('columns', []))} columns"
+                for table, info in table_info.items()
+            ]
+        )
 
         welcome_msg = self._join_markdown_blocks(
             [
                 "### Data Loaded Successfully",
                 f"**Loaded {file_count} {file_word}:**\n\n{files_detail}",
-                merge_info,
-                f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                f"**Tables:**\n\n{table_detail}",
                 f"**Columns:** {columns_list}",
                 f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
             ]

@@ -55,10 +55,11 @@ If `requirements.txt` is unavailable:
 
 ```bash
 # Core dependencies
-pip install pandas
 pip install PyQt6
 pip install openai
 pip install anthropic
+pip install openpyxl
+pip install tabulate
 
 # Database support
 pip install sqlalchemy
@@ -80,7 +81,7 @@ pip install python-markdown
 ### 4. Verify Installation
 
 ```bash
-python -c "import pandas; import PyQt6; import openai; print('Installation successful')"
+python -c "import openpyxl; import tabulate; import PyQt6; import openai; print('Installation successful')"
 ```
 
 ## API Key Setup
@@ -194,7 +195,8 @@ python -m pip --version
 
 ```bash
 python
->>> import pandas as pd
+>>> import openpyxl
+>>> import tabulate
 >>> import PyQt6
 >>> from openai import AsyncOpenAI
 >>> from anthropic import Anthropic
@@ -236,13 +238,13 @@ which python3
 python3 --version
 ```
 
-### "ModuleNotFoundError: No module named 'pandas'"
+### "ModuleNotFoundError: No module named 'openpyxl'"
 
 ```bash
 # Ensure virtual environment is activated
 # Then reinstall:
 pip install --upgrade pip
-pip install pandas
+pip install openpyxl
 ```
 
 ### "No module named 'PyQt6'"
@@ -263,7 +265,7 @@ Affects macOS and some Windows setups:
 /Applications/Python\ 3.10/Install\ Certificates.command
 
 # Or modify pip call (all platforms)
-pip install --trusted-host pypi.python.org --trusted-host files.pythonhosted.org pandas
+pip install --trusted-host pypi.python.org --trusted-host files.pythonhosted.org openpyxl
 ```
 
 ### Database Driver Issues

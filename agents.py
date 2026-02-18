@@ -2,25 +2,23 @@
 Multi-agent system for AI-powered data analysis.
 
 This module provides an orchestrated agent system that breaks down data analysis
-queries into manageable tasks, generates code, and provides insights.
+queries into manageable tasks, generates SQL, and provides insights.
 """
 
-import pandas as pd
-from openai import AsyncOpenAI
-from anthropic import Anthropic
-from openai.types.chat import ChatCompletionMessageParam
-from typing import Dict, Any, List, Optional, Tuple
-import tempfile
-import os
 import json
-import re
-import altair as alt
-import numpy as np
+import os
 from string import Template
+from typing import Dict, Any, List, Optional, Tuple
+
+from anthropic import Anthropic
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
+from tabulate import tabulate
 
 from config import ConfigManager
+from connector import DatabaseConnector
 from logger import get_logger
-from security_validators import validate_code_security, get_security_violations
+from security_validators import validate_sql_security
 from constants import (
     LLM_MAX_TOKENS_DEFAULT,
     LLM_MAX_TOKENS_CODE,
@@ -32,6 +30,9 @@ from constants import (
     PLANNER_SYSTEM_PROMPT_TEMPLATE,
     CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE,
     ANALYSIS_SYSTEM_PROMPT_TEMPLATE,
+    DB_MAX_ROWS_IN_MEMORY,
+    DB_READ_CHUNK_SIZE,
+    SAMPLE_ROWS_INFO,
 )
 
 # Load API keys from configuration
@@ -62,11 +63,11 @@ OPENAI_MODEL = LLM_MODELS.get("openai")
 
 class AIAgent:
     """
-    Multi-agent system for data analysis with planner, code generator, and analyzer.
+    Multi-agent system for data analysis with planner, SQL generator, and analyzer.
 
     Coordinates three specialized agents:
     - Planner: Breaks down queries into execution plans
-    - Code Generator: Creates executable pandas code
+    - SQL Generator: Creates executable SQL queries
     - Analyzer: Provides human-readable insights
     """
 
@@ -179,32 +180,43 @@ class AIAgent:
         return response.choices[0].message.content or ""
 
     @staticmethod
-    def _get_column_names(df: pd.DataFrame) -> List[str]:
-        """Get column names from a pandas DataFrame."""
-        return df.columns.tolist()
+    def _build_schema_metadata(context: Dict[str, Any]) -> Dict[str, Any]:
+        """Build schema metadata for prompt context."""
+        tables = context.get("tables", [])
+        table_info = context.get("table_info", {})
 
-    @staticmethod
-    def _get_sample_data(df: pd.DataFrame, n: int = 5) -> List[Dict[str, Any]]:
-        """Get sample data from a pandas DataFrame."""
-        return df.head(n).to_dict(orient="records")
+        columns_by_table: Dict[str, List[str]] = {}
+        column_types: Dict[str, str] = {}
+        row_counts: Dict[str, int] = {}
+        samples: Dict[str, List[Dict[str, Any]]] = {}
 
-    @staticmethod
-    def _get_dataframe_info(df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Get comprehensive DataFrame information for context.
+        for table in tables:
+            info = table_info.get(table, {})
+            columns = info.get("columns", [])
+            columns_by_table[table] = columns
+            row_counts[table] = int(info.get("row_count", 0) or 0)
+            sample_rows = info.get("sample_rows", [])
+            samples[table] = sample_rows[:SAMPLE_ROWS_INFO]
+            types = info.get("column_types", {})
+            for col in columns:
+                qualified = f"{table}.{col}"
+                if col in types:
+                    column_types[qualified] = str(types[col])
 
-        Returns:
-            Dictionary with columns, dtypes, shape, null counts, and sample data
-        """
+        qualified_columns = [f"{t}.{c}" for t, cols in columns_by_table.items() for c in cols]
+
         return {
-            "columns": df.columns.tolist(),
-            "dtypes": df.dtypes.astype(str).to_dict(),
-            "shape": df.shape,
-            "null_counts": df.isnull().sum().to_dict(),
-            "sample": df.head(3).to_dict(orient="records"),
+            "tables": tables,
+            "columns": qualified_columns,
+            "columns_by_table": columns_by_table,
+            "column_types": column_types,
+            "row_counts": row_counts,
+            "sample_rows": samples,
         }
 
-    async def planner_agent(self, user_query: str, df: pd.DataFrame) -> Dict[str, Any]:
+    async def planner_agent(
+        self, user_query: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Planner agent that breaks down user queries into actionable steps.
 
@@ -212,18 +224,20 @@ class AIAgent:
 
         Args:
             user_query: The user's data analysis question
-            df: The DataFrame to analyze
+            context: SQL context with schema metadata
 
         Returns:
             Dictionary containing task_type, steps, code requirements, etc.
         """
-        dataframe_metadata = self._get_dataframe_info(df)
+        schema_metadata = self._build_schema_metadata(context)
 
         system_message = Template(PLANNER_SYSTEM_PROMPT_TEMPLATE).substitute(
-            columns=dataframe_metadata["columns"],
-            shape=dataframe_metadata["shape"],
-            dtypes=dataframe_metadata["dtypes"],
-            sample=dataframe_metadata["sample"],
+            tables=schema_metadata["tables"],
+            columns=schema_metadata["columns"],
+            columns_by_table=schema_metadata["columns_by_table"],
+            row_counts=schema_metadata["row_counts"],
+            dtypes=schema_metadata["column_types"],
+            sample=schema_metadata["sample_rows"],
             user_query=user_query,
         )
 
@@ -243,53 +257,55 @@ class AIAgent:
             {
                 "task_type": "analysis",
                 "steps": ["Analyze the data based on user query"],
-                "requires_code": False,
+                "requires_sql": False,
                 "analysis_focus": user_query,
             },
         )
 
-    async def code_generation_agent(
-        self, plan: Dict[str, Any], user_query: str, df: pd.DataFrame
+    async def sql_generation_agent(
+        self, plan: Dict[str, Any], user_query: str, context: Dict[str, Any]
     ) -> str:
         """
-        Code generation agent that creates executable pandas/Python code.
+        SQL generation agent that creates executable SQL.
 
         Args:
             plan: Execution plan from planner agent
             user_query: Original user query
-            df: DataFrame to operate on
+            context: SQL context with schema metadata
 
         Returns:
-            Executable Python code string
+            Executable SQL string
         """
-        dataframe_metadata = self._get_dataframe_info(df)
+        schema_metadata = self._build_schema_metadata(context)
 
         system_message = Template(CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE).substitute(
-            columns=dataframe_metadata["columns"],
-            dtypes=dataframe_metadata["dtypes"],
-            shape=dataframe_metadata["shape"],
-            sample=dataframe_metadata["sample"],
+            tables=schema_metadata["tables"],
+            columns=schema_metadata["columns"],
+            columns_by_table=schema_metadata["columns_by_table"],
+            row_counts=schema_metadata["row_counts"],
+            dtypes=schema_metadata["column_types"],
+            sample=schema_metadata["sample_rows"],
             plan=plan,
         )
 
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": f"Generate code for: {user_query}"},
+            {"role": "user", "content": f"Generate SQL for: {user_query}"},
         ]
 
-        logger.info("Calling code generation agent...")
-        generated_code = await self._call_llm(
+        logger.info("Calling SQL generation agent...")
+        generated_sql = await self._call_llm(
             messages,
             max_tokens=CODE_GENERATION_MAX_TOKENS,
             temperature=CODE_GENERATION_TEMPERATURE,
         )
 
-        return self._clean_code_markdown(generated_code)
+        return self._clean_sql_output(generated_sql)
 
     async def analysis_agent(
         self,
         user_query: str,
-        df: pd.DataFrame,
+        context: Dict[str, Any],
         plan: Optional[Dict[str, Any]] = None,
         code_output: Optional[Any] = None,
     ) -> str:
@@ -300,28 +316,29 @@ class AIAgent:
 
         Args:
             user_query: Original user query
-            df: DataFrame being analyzed
+            context: SQL context with schema metadata
             plan: Optional execution plan for context
             code_output: Optional output from code execution
 
         Returns:
             Human-readable analysis of the results
         """
-        dataframe_metadata = self._get_dataframe_info(df)
+        schema_metadata = self._build_schema_metadata(context)
 
         context_parts = [
-            "DataFrame Info:",
-            f"- Columns: {dataframe_metadata['columns']}",
-            f"- Shape: {dataframe_metadata['shape']} (rows, columns)",
-            f"- Data types: {dataframe_metadata['dtypes']}",
-            f"- Sample: {dataframe_metadata['sample']}",
+            "Schema Info:",
+            f"- Tables: {schema_metadata['tables']}",
+            f"- Columns: {schema_metadata['columns']}",
+            f"- Row counts: {schema_metadata['row_counts']}",
+            f"- Column types: {schema_metadata['column_types']}",
+            f"- Sample rows: {schema_metadata['sample_rows']}",
         ]
 
         if plan:
             context_parts.append(f"\nExecution Plan: {plan}")
 
         if code_output is not None:
-            context_parts.append(f"\nCode Execution Result: {code_output}")
+            context_parts.append(f"\nQuery Result: {code_output}")
 
         system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
             context="\n".join(context_parts)
@@ -350,7 +367,7 @@ class AIAgent:
 
         return analysis
 
-    async def execute_query(self, user_query: str, df: pd.DataFrame) -> str:
+    async def execute_query(self, user_query: str, context: Dict[str, Any]) -> str:
         """
         Main orchestration method that coordinates all agents.
 
@@ -358,7 +375,7 @@ class AIAgent:
 
         Args:
             user_query: The user's data analysis question
-            df: The DataFrame to analyze
+            context: SQL context with schema metadata
 
         Returns:
             Formatted response with results and analysis
@@ -370,84 +387,87 @@ class AIAgent:
             logger.info(f"Starting execute_query with query: {user_query}")
 
             # Step 1: Plan the task
-            plan = await self.planner_agent(user_query, df)
+            plan = await self.planner_agent(user_query, context)
             logger.info(f"Generated plan: {plan}")
 
-            code_execution_result = None
+            query_result = None
 
-            # Step 2: Generate and execute code if needed
-            if plan.get("requires_code", False):
-                logger.info("Code generation required")
-                generated_code = await self.code_generation_agent(plan, user_query, df)
-                code_execution_result = self._execute_generated_code(generated_code, df)
+            # Step 2: Generate and execute SQL if needed
+            requires_sql = plan.get("requires_sql")
+            if requires_sql is None:
+                requires_sql = plan.get("requires_code", False)
+
+            if requires_sql:
+                logger.info("SQL generation required")
+                generated_sql = await self.sql_generation_agent(plan, user_query, context)
+                query_result = self._execute_sql_query(generated_sql, context)
             else:
-                logger.info("Code generation not required")
+                logger.info("SQL generation not required")
 
             # Step 3: Get analysis
             logger.info("Getting analysis from analysis agent")
             analysis = await self.analysis_agent(
-                user_query, df, plan, code_execution_result
+                user_query, context, plan, query_result
             )
 
             # Step 4: Format response
-            return self._format_response(code_execution_result, analysis)
+            return self._format_response(query_result, analysis)
 
         except Exception as e:
             logger.error(f"Error in execute_query: {str(e)}", exc_info=True)
             return f"Error processing query: {str(e)}\n\nPlease try rephrasing your question."
 
-    def _execute_generated_code(self, code: str, df: pd.DataFrame) -> Any:
+    def _execute_sql_query(self, sql: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute generated code safely with security validation.
+        Execute generated SQL safely using SQLAlchemy Core.
 
         Args:
-            code: Python code to execute
-            df: DataFrame available to the code
+            sql: SQL query to execute
+            context: SQL context with connection details
 
         Returns:
-            The 'result' variable from code execution, or error message
+            Dictionary with columns, rows, and optional truncation info
         """
-        # Validate code safety
-        is_safe, error_msg = validate_code_security(code)
+        is_safe, error_msg = validate_sql_security(sql)
         if not is_safe:
-            logger.warning(f"Code security violation: {error_msg}")
-            return f"Security violation detected: {error_msg}"
+            logger.warning(f"SQL security violation: {error_msg}")
+            return {"error": error_msg}
+
+        db_type = context.get("db_type")
+        credentials = context.get("credentials", {})
+
+        connector = DatabaseConnector()
+        success, message = connector.connect(db_type, credentials)
+        if not success:
+            return {"error": message}
 
         try:
-            logger.info("Executing generated code")
+            from sqlalchemy import text
 
-            # Setup execution environment
-            local_vars = {
-                "df": df,
-                "pd": pd,
-                "result": None,
-                "tempfile": tempfile,
-                "os": os,
-                "alt": alt,
-                "altair": alt,
-            }
+            result = connector.connection.execute(text(sql))
+            columns = list(result.keys())
+            rows: List[Tuple[Any, ...]] = []
+            truncated = False
 
-            global_vars = {
-                "pd": pd,
-                "df": df,
-                "tempfile": tempfile,
-                "os": os,
-                "alt": alt,
-                "altair": alt,
-            }
+            while True:
+                chunk = result.fetchmany(DB_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                rows.extend(chunk)
+                if len(rows) >= DB_MAX_ROWS_IN_MEMORY:
+                    rows = rows[:DB_MAX_ROWS_IN_MEMORY]
+                    truncated = True
+                    break
 
-            logger.info(f"Generated code:\n{code}")
-
-            exec(code, global_vars, local_vars)
-            code_result = local_vars.get("result")
-
-            logger.info("Code execution successful")
-            return code_result
-
+            payload: Dict[str, Any] = {"columns": columns, "rows": rows}
+            if truncated:
+                payload["truncated"] = True
+            return payload
         except Exception as e:
-            error_msg = f"Code execution error: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return error_msg
+            logger.error(f"SQL execution error: {str(e)}", exc_info=True)
+            return {"error": f"SQL execution error: {str(e)}"}
+        finally:
+            connector.close()
 
     def _format_response(self, code_result: Any, analysis: str) -> str:
         """
@@ -466,7 +486,7 @@ class AIAgent:
             response_parts.append("")
             response_parts.append("### Result:")
             response_parts.append("")
-            response_parts.append(self._format_code_result(code_result))
+            response_parts.append(self._format_query_result(code_result))
             response_parts.append("")
 
         response_parts.append("### Analysis:")
@@ -475,7 +495,7 @@ class AIAgent:
         return "\n".join(response_parts)
 
     @staticmethod
-    def _format_code_result(result: Any) -> str:
+    def _format_query_result(result: Any) -> str:
         """
         Format code execution result into readable string.
 
@@ -486,44 +506,47 @@ class AIAgent:
             Formatted string representation
         """
         if isinstance(result, dict):
-            # Handle dictionary results (e.g., with image paths)
-            parts = []
-            for key, value in result.items():
-                if key in ["chart_path"] and isinstance(value, str):
-                    parts.append(f"![Generated Visualization]({value})")
-                elif key == "message":
-                    parts.append(str(value))
+            if "error" in result:
+                return str(result["error"])
+            if "chart_path" in result and isinstance(result["chart_path"], str):
+                return f"![Generated Visualization]({result['chart_path']})"
+            if "columns" in result and "rows" in result:
+                columns = result.get("columns") or []
+                rows = result.get("rows") or []
+                if not rows:
+                    return "No rows returned."
+                if rows and isinstance(rows[0], dict):
+                    table_md = tabulate(rows, headers="keys", tablefmt="github")
                 else:
-                    parts.append(f"**{key}:** {value}")
+                    table_md = tabulate(rows, headers=columns, tablefmt="github")
+                if result.get("truncated"):
+                    return f"{table_md}\n\n_Results truncated._"
+                return table_md
+
+            parts = [f"**{key}:** {value}" for key, value in result.items()]
             return "\n".join(parts)
-        elif isinstance(result, str):
+
+        if isinstance(result, str):
             return result
-        elif isinstance(result, pd.DataFrame):
-            return result.to_markdown() or str(result)
-        else:
-            return str(result)
+
+        return str(result)
 
     @staticmethod
-    def _clean_code_markdown(code: str) -> str:
-        """
-        Remove markdown formatting from generated code.
+    def _clean_sql_output(sql: str) -> str:
+        """Remove markdown formatting from generated SQL output."""
+        cleaned = sql.strip()
 
-        Args:
-            code: Code string possibly wrapped in markdown code blocks
+        if cleaned.startswith("```sql"):
+            cleaned = cleaned[6:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
 
-        Returns:
-            Clean Python code
-        """
-        code = code.strip()
-
-        if code.startswith("```python"):
-            code = code[9:]
-        if code.startswith("```"):
-            code = code[3:]
-        if code.endswith("```"):
-            code = code[:-3]
-
-        return code.strip()
+        cleaned = cleaned.strip()
+        if cleaned.endswith(";"):
+            cleaned = cleaned[:-1]
+        return cleaned.strip()
 
     @staticmethod
     def _parse_json_response(

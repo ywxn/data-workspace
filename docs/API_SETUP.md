@@ -233,7 +233,7 @@ python
 
 ### "Context Length Exceeded"
 
-**Meaning**: DataFrame + prompt too large for model
+**Meaning**: Result set + prompt too large for model
 
 **Solutions**:
 1. Filter data before analysis
@@ -345,7 +345,8 @@ except Exception:
 # Test script
 from config import ConfigManager
 from agents import AIAgent
-import pandas as pd
+import sqlite3
+import tempfile
 
 # Check configuration
 print("OpenAI Key:", ConfigManager.get_api_key("openai") is not None)
@@ -353,11 +354,32 @@ print("Claude Key:", ConfigManager.get_api_key("claude") is not None)
 
 # Test API
 try:
-    agent = AIAgent(api_provider="openai")
-    df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
-    
-    import asyncio
-    response = asyncio.run(agent.execute_query("Show me the data", df))
+   agent = AIAgent(api_provider="openai")
+
+   db_path = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+   conn = sqlite3.connect(db_path)
+   conn.execute("CREATE TABLE sample (A INTEGER, B INTEGER)")
+   conn.executemany("INSERT INTO sample (A, B) VALUES (?, ?)", [(1, 4), (2, 5), (3, 6)])
+   conn.commit()
+   conn.close()
+
+   context = {
+      "source_type": "file",
+      "db_type": "sqlite",
+      "credentials": {"database": db_path},
+      "tables": ["sample"],
+      "table_info": {
+         "sample": {
+            "columns": ["A", "B"],
+            "column_types": {"A": "INTEGER", "B": "INTEGER"},
+            "row_count": 3,
+            "sample_rows": [{"A": 1, "B": 4}, {"A": 2, "B": 5}, {"A": 3, "B": 6}],
+         }
+      },
+   }
+
+   import asyncio
+   response = asyncio.run(agent.execute_query("Show me the data", context))
     print("API test successful!")
     print(response)
 except Exception as e:
