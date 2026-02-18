@@ -79,15 +79,14 @@ VISUALIZATION REQUIREMENTS
 $requirements
 
 RULES
-- Use ONLY altair library (imported as alt)
-- Access data via 'data_records' variable (list of dictionaries, already provided)
+- Use ONLY altair (imported as alt)
+- Data available as list of dicts: data_records
+- Use alt.Data(values=data_records) as the data source
 - Create ONE chart object assigned to variable 'chart'
-- Use appropriate mark types: mark_bar(), mark_line(), mark_point(), mark_area(), mark_circle(), etc.
-- Encode aesthetics properly with .encode()
-- Add meaningful titles and axis labels
-- Keep it simple and readable
-- Set reasonable width/height (300-600px)
-- Handle missing data gracefully
+- Use appropriate mark types and encodings
+- Add titles and axis labels
+- width/height 300-600
+- Convert columns to correct types if needed (e.g. alt.X('date:T') for date columns)
 
 CHART TYPES TO CONSIDER
 - Bar charts: for categorical comparisons
@@ -101,27 +100,7 @@ The variable 'data_records' is a list of dictionaries with the query results.
 Columns available: $columns
 
 OUTPUT FORMAT
-Return ONLY valid Python code. No markdown. No explanations.
-The code should:
-1. Import altair as alt
-2. Create a chart from data_records
-3. Assign the chart to variable 'chart'
-
-EXAMPLE
-```python
-import altair as alt
-chart = alt.Chart(data_records).mark_bar().encode(
-    x='category:N',
-    y='sum(value):Q',
-    color='category:N'
-).properties(
-    width=400,
-    height=300,
-    title='Sales by Category'
-)
-```
-
-Return ONLY the Python code.
+Return ONLY valid Python code. No markdown. No explanations. The code should create an Altair chart object assigned to variable 'chart'.
 """
 
 
@@ -402,10 +381,10 @@ class AIAgent:
 
         # Convert to list of dictionaries (Altair-compatible format)
         data_records = [dict(zip(columns, row)) for row in rows]
-        
+
         # Prepare sample for prompt (first 5 records)
         sample_rows = data_records[:5]
-        
+
         # Determine visualization requirements from plan
         requirements = plan.get("analysis_focus", [])
         if isinstance(requirements, list):
@@ -433,7 +412,7 @@ class AIAgent:
 
             # Clean code output
             viz_code = self._clean_python_output(viz_code)
-            
+
             # Execute visualization code
             chart_path = self._execute_visualization_code(viz_code, data_records)
             return chart_path
@@ -456,36 +435,34 @@ class AIAgent:
             Path to saved chart file, or None if execution fails
         """
         try:
-            # Create namespace with required variables
             namespace = {
-                'alt': alt,
-                'data_records': data_records,
+                "alt": alt,
+                "data_records": data_records,
             }
 
-            # Execute the code
             exec(viz_code, namespace)
 
-            # Get the chart object
-            chart = namespace.get('chart')
+            chart = namespace.get("chart")
             if chart is None:
                 logger.error("Visualization code did not create 'chart' variable")
                 return None
 
-            # Save chart to temp file
-            # TODO: Replace with proper temp file handling
             temp_file = tempfile.NamedTemporaryFile(
-                mode='wb',
-                suffix='.png',
+                mode="wb",
+                suffix=".svg",
                 dir=VISUALIZATION_TEMP_DIR,
-                delete=False
+                delete=False,
             )
             temp_path = temp_file.name
             temp_file.close()
 
-            # Save as PNG
-            chart.save(temp_path, format="png")
-            logger.info(f"Chart saved to: {temp_path}")
+            chart.save(temp_path)
 
+            if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 200:
+                logger.error("Invalid SVG output")
+                return None
+
+            logger.info(f"Chart saved to: {temp_path}")
             return temp_path
 
         except Exception as e:
@@ -704,9 +681,7 @@ class AIAgent:
             response_parts.append("")
             response_parts.append(f"![Generated Visualization]({chart_path})")
             response_parts.append("")
-
-        # Add data result if available
-        if code_result is not None:
+        elif code_result is not None:
             response_parts.append("")
             response_parts.append("### Result:")
             response_parts.append("")
@@ -733,8 +708,6 @@ class AIAgent:
         if isinstance(result, dict):
             if "error" in result:
                 return str(result["error"])
-            if "chart_path" in result and isinstance(result["chart_path"], str):
-                return f"![Generated Visualization]({result['chart_path']})"
             if "columns" in result and "rows" in result:
                 columns = result.get("columns") or []
                 rows = result.get("rows") or []
