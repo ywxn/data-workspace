@@ -10,12 +10,16 @@ from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 from connector import DatabaseConnector
 from logger import get_logger
 from typing import Any, Dict, List, Tuple, Optional
+from security_validators import validate_sql_security
 from constants import (
     MERGE_COMMON_COLS_THRESHOLD,
     MERGE_KEY_PATTERNS,
     MERGE_MAX_ESTIMATED_ROWS,
     MERGE_MAX_ROW_MULTIPLIER,
     MERGE_WARN_DUPLICATE_RATE,
+    DB_MAX_ROWS_IN_MEMORY,
+    DB_READ_CHUNK_SIZE,
+    SQL_LARGE_TYPES,
 )
 
 logger = get_logger(__name__)
@@ -23,6 +27,212 @@ logger = get_logger(__name__)
 # Use constants from constants.py for merge strategy decisions
 COMMON_KEY_THRESHOLD = MERGE_COMMON_COLS_THRESHOLD
 COMMON_KEY_PATTERNS = MERGE_KEY_PATTERNS
+
+
+def _quote_identifier(connector: DatabaseConnector, name: str) -> str:
+    preparer = connector.engine.dialect.identifier_preparer
+    parts = name.split(".")
+    return ".".join(preparer.quote(part) for part in parts)
+
+
+def _get_columns_with_types(
+    connector: DatabaseConnector, table_name: str
+) -> List[Dict[str, Any]]:
+    from sqlalchemy import inspect
+
+    inspector = inspect(connector.engine)
+    return inspector.get_columns(table_name)
+
+
+def _filter_large_columns(columns: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+    safe_cols: List[str] = []
+    skipped: List[str] = []
+
+    for col in columns:
+        col_name = col.get("name")
+        col_type = str(col.get("type", "")).lower()
+        if any(t in col_type for t in SQL_LARGE_TYPES):
+            skipped.append(col_name)
+            continue
+        safe_cols.append(col_name)
+
+    return safe_cols, skipped
+
+
+def _estimate_table_rows(
+    connector: DatabaseConnector, table_name: str
+) -> Optional[int]:
+    if not connector.connection:
+        return None
+
+    quoted_table = _quote_identifier(connector, table_name)
+    query = f"SELECT COUNT(1) AS row_count FROM {quoted_table}"
+    is_safe, error_msg = validate_sql_security(query)
+    if not is_safe:
+        logger.warning(error_msg)
+        return None
+
+    try:
+        df = pd.read_sql_query(query, connector.connection)
+        return int(df.iloc[0]["row_count"])
+    except Exception as e:
+        logger.warning(f"Row count estimate failed for {table_name}: {str(e)}")
+        return None
+
+
+def _read_sql_limited(
+    query: str,
+    connector: DatabaseConnector,
+    max_rows: int,
+    chunksize: int = DB_READ_CHUNK_SIZE,
+) -> Tuple[pd.DataFrame, bool]:
+    is_safe, error_msg = validate_sql_security(query)
+    if not is_safe:
+        raise RuntimeError(error_msg)
+
+    rows: List[pd.DataFrame] = []
+    total_rows = 0
+    truncated = False
+
+    for chunk in pd.read_sql_query(query, connector.connection, chunksize=chunksize):
+        rows.append(chunk)
+        total_rows += len(chunk)
+        if total_rows >= max_rows:
+            truncated = True
+            break
+
+    if not rows:
+        return pd.DataFrame(), False
+
+    df = pd.concat(rows, ignore_index=True)
+    if len(df) > max_rows:
+        df = df.iloc[:max_rows]
+        truncated = True
+
+    return df, truncated
+
+
+def _load_table_via_sql(
+    connector: DatabaseConnector, table_name: str
+) -> Tuple[Optional[pd.DataFrame], str, List[str]]:
+    if not connector.connection:
+        return None, "No active database connection.", []
+
+    columns = _get_columns_with_types(connector, table_name)
+    safe_cols, skipped_cols = _filter_large_columns(columns)
+
+    if not safe_cols:
+        return None, "No safe columns available to load.", skipped_cols
+
+    quoted_table = _quote_identifier(connector, table_name)
+    quoted_cols = ", ".join(
+        f"{quoted_table}.{_quote_identifier(connector, col)}" for col in safe_cols
+    )
+    query = f"SELECT {quoted_cols} FROM {quoted_table}"
+
+    row_count = _estimate_table_rows(connector, table_name)
+    if row_count is not None and row_count <= DB_MAX_ROWS_IN_MEMORY:
+        is_safe, error_msg = validate_sql_security(query)
+        if not is_safe:
+            return None, error_msg, skipped_cols
+        df = pd.read_sql_query(query, connector.connection)
+        return df, "", skipped_cols
+
+    df, truncated = _read_sql_limited(query, connector, DB_MAX_ROWS_IN_MEMORY)
+    msg = "Loaded using chunked reads"
+    if truncated:
+        msg = f"{msg}; results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
+    return df, msg, skipped_cols
+
+
+def _find_join_condition(
+    inspector,
+    left_table: str,
+    right_table: str,
+) -> Optional[Tuple[List[str], List[str], str, str]]:
+    for fk in inspector.get_foreign_keys(left_table):
+        if fk.get("referred_table") == right_table:
+            return (
+                fk.get("constrained_columns", []),
+                fk.get("referred_columns", []),
+                left_table,
+                right_table,
+            )
+
+    for fk in inspector.get_foreign_keys(right_table):
+        if fk.get("referred_table") == left_table:
+            return (
+                fk.get("referred_columns", []),
+                fk.get("constrained_columns", []),
+                left_table,
+                right_table,
+            )
+
+    return None
+
+
+def _build_join_query(
+    connector: DatabaseConnector, table_names: List[str]
+) -> Tuple[Optional[str], Dict[str, List[str]], List[str]]:
+    from sqlalchemy import inspect
+
+    inspector = inspect(connector.engine)
+    safe_cols_by_table: Dict[str, List[str]] = {}
+    skipped_cols: List[str] = []
+
+    for table_name in table_names:
+        columns = _get_columns_with_types(connector, table_name)
+        safe_cols, skipped = _filter_large_columns(columns)
+        safe_cols_by_table[table_name] = safe_cols
+        skipped_cols.extend([f"{table_name}.{col}" for col in skipped])
+
+    base_table = table_names[0]
+    joined = {base_table}
+    join_clauses: List[str] = []
+
+    for table_name in table_names[1:]:
+        join_found = None
+        for candidate in list(joined):
+            join_found = _find_join_condition(inspector, candidate, table_name)
+            if join_found:
+                break
+
+        if not join_found:
+            return None, safe_cols_by_table, skipped_cols
+
+        left_cols, right_cols, left_table, right_table = join_found
+        if not left_cols or not right_cols:
+            return None, safe_cols_by_table, skipped_cols
+
+        left_quoted = _quote_identifier(connector, left_table)
+        right_quoted = _quote_identifier(connector, right_table)
+        join_conditions = []
+        for left_col, right_col in zip(left_cols, right_cols):
+            join_conditions.append(
+                f"{left_quoted}.{_quote_identifier(connector, left_col)} = "
+                f"{right_quoted}.{_quote_identifier(connector, right_col)}"
+            )
+        join_clause = f"LEFT JOIN {right_quoted} ON " + " AND ".join(join_conditions)
+        join_clauses.append(join_clause)
+        joined.add(table_name)
+
+    select_parts: List[str] = []
+    for table_name, columns in safe_cols_by_table.items():
+        table_quoted = _quote_identifier(connector, table_name)
+        for col in columns:
+            col_quoted = _quote_identifier(connector, col)
+            alias = _quote_identifier(connector, f"{table_name}__{col}")
+            select_parts.append(f"{table_quoted}.{col_quoted} AS {alias}")
+
+    if not select_parts:
+        return None, safe_cols_by_table, skipped_cols
+
+    base_quoted = _quote_identifier(connector, base_table)
+    query = f"SELECT {', '.join(select_parts)} FROM {base_quoted} "
+    if join_clauses:
+        query += " ".join(join_clauses)
+
+    return query, safe_cols_by_table, skipped_cols
 
 
 def _identify_key_columns(common_cols: set, all_cols_union: set) -> Optional[List[str]]:
@@ -468,8 +678,16 @@ def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[pd.DataFrame],
             return _load_multiple_tables(connector, table)
         else:
             logger.info(f"Loading table: {table}")
-            df = pd.read_sql(f"SELECT * FROM {table}", connector.connection)
-            return df, f"Data loaded successfully from table: {table}"
+            df, load_msg, skipped_cols = _load_table_via_sql(connector, table)
+            if df is None:
+                return None, load_msg
+            skip_msg = (
+                f" Skipped large columns: {', '.join(skipped_cols)}"
+                if skipped_cols
+                else ""
+            )
+            msg = load_msg or "Data loaded successfully"
+            return df, f"{msg} from table: {table}.{skip_msg}"
     finally:
         connector.close()
 
@@ -488,16 +706,22 @@ def _load_multiple_tables(
         Tuple of (merged_dataframe or None, message: str)
     """
     try:
-        dataframes = []
-        for table_name in table_names:
-            logger.info(f"Loading table: {table_name}")
-            df = pd.read_sql(f"SELECT * FROM {table_name}", connector.connection)
-            dataframes.append(df)
+        query, _, skipped_cols = _build_join_query(connector, table_names)
+        if not query:
+            return (
+                None,
+                "Unable to build safe SQL joins across selected tables. "
+                "Please choose tables with foreign-key relationships.",
+            )
 
-        merged_df, merge_strategy = merge_dataframes(dataframes)
-        strategy_msg = f". Merge strategy: {merge_strategy}" if merge_strategy else ""
+        df, truncated = _read_sql_limited(query, connector, DB_MAX_ROWS_IN_MEMORY)
         tables_str = ", ".join(table_names)
-        return merged_df, f"Data loaded from tables: {tables_str}{strategy_msg}"
+        msg = f"Data loaded from tables: {tables_str} using SQL joins"
+        if truncated:
+            msg = f"{msg}. Results truncated to {DB_MAX_ROWS_IN_MEMORY} rows"
+        if skipped_cols:
+            msg = f"{msg}. Skipped large columns: {', '.join(skipped_cols)}"
+        return df, msg
 
     except Exception as e:
         logger.error(f"Error loading multiple tables: {str(e)}")

@@ -156,6 +156,22 @@ SAMPLE_ROWS_INFO = 3
 
 # File Size / Performance
 MAX_DATAFRAME_ROWS_WARNING = 1_000_000
+DB_MAX_ROWS_IN_MEMORY = 200_000
+DB_READ_CHUNK_SIZE = 50_000
+
+# SQL Column Type Handling
+SQL_LARGE_TYPES = [
+    "blob",
+    "bytea",
+    "binary",
+    "varbinary",
+    "image",
+    "json",
+    "jsonb",
+    "xml",
+    "geography",
+    "geometry",
+]
 
 # HTML/Markdown Conversion
 MARKDOWN_CSS_TABLE_STYLE = (
