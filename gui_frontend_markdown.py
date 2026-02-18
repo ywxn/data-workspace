@@ -4,7 +4,7 @@ import pandas as pd
 import webbrowser
 import json
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup
+from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -1024,6 +1024,8 @@ class DataWorkspaceGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("AI Data Workspace")
         self.setGeometry(100, 100, 1400, 800)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         # Create menu bar
         menu_bar = self.menuBar()

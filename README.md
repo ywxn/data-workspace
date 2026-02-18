@@ -73,10 +73,6 @@ This creates a standalone `.exe` file in the `main.dist` directory.
 nuitka --onefile --follow-imports -O main.py
 ```
 
-### Output
-
-The compiled executable will be created in `main.dist/` directory. You can distribute this as a standalone application.
-
 ## Configuration
 
 Configuration is stored in `config.json`. You can:
@@ -84,23 +80,7 @@ Configuration is stored in `config.json`. You can:
 - Configure table selection method (manual or nlp)
 - Save theme preference
 
-API keys are securely stored in the config file.
-
-## Project Structure
-
-```
-├── main.py                          # Application entry point
-├── gui_frontend_markdown.py         # UI components
-├── gui_backend_markdown.py          # Backend logic
-├── agents.py                        # AI agent for queries
-├── connector.py                     # Database connector
-├── processing.py                    # Data processing utilities
-├── config.py                        # Configuration management
-├── logger.py                        # Logging setup
-├── data/                            # Sample data files
-├── docs/                            # Documentation
-└── requirements.txt                 # Python dependencies
-```
+API keys are insecurely stored in the config file. This is a temporary measure, users are encouraged to store their API keys as environment variables for better security. Future versions will implement a more secure key management system.
 
 ## Documentation
 
@@ -128,7 +108,7 @@ For detailed information, see:
 
 ## License
 
-© 2026 AI Data Workspace. All rights reserved.
+This project is licensed under the GNU General Public License v3.0.
 
 ## Support
 
