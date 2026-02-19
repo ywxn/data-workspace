@@ -121,6 +121,87 @@ STYLE
 - Keep length moderate (≈120–180 words)
 """
 
+VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Altair visualization engine that generates a single, valid chart from SQL query results.
+
+You MUST return Python code that creates exactly ONE Altair chart object named 'chart'.
+
+DATASET METADATA
+Columns: $columns
+Sample rows (first 5): $sample_rows
+
+USER REQUIREMENTS
+$requirements
+
+AVAILABLE DATA
+A pandas DataFrame named df contains the full query result.
+Columns available: $columns
+
+OBJECTIVE
+Create the most appropriate Altair visualization that best answers the user requirement or represents the dataset structure.
+
+CHART SELECTION RULES (STRICT)
+Select chart type based on column semantics:
+
+- Temporal trend (date/time + numeric) -> line or area
+- Categorical comparison -> bar
+- Ranking / top-N -> sorted bar
+- Part-to-whole -> arc (pie/donut)
+- Numeric vs numeric -> scatter
+- Distribution of numeric -> binned bar (histogram)
+- If only one numeric column -> aggregated bar or histogram
+- If only categorical columns -> count bar chart
+
+AGGREGATION RULES (MANDATORY)
+If multiple rows share the same category or time value:
+- Aggregate numeric fields using sum() unless requirement specifies otherwise
+- Use count() when measuring frequency
+- Never plot duplicate raw rows over categories
+
+TYPE INFERENCE RULES
+You MUST assign correct Vega-Lite types:
+
+- Date/time columns -> :T
+- Numeric columns -> :Q
+- Categorical/text columns -> :N
+
+If needed, convert:
+- df[col] = pd.to_datetime(df[col]) for temporal
+- df[col] = pd.to_numeric(df[col], errors="coerce") for numeric
+
+ENCODING RULES
+- X = category or time
+- Y = numeric measure
+- Color = secondary category (only if useful)
+- Tooltip MUST include key fields
+- Sort categorical axes by descending value when meaningful
+
+VISUAL QUALITY RULES
+- width and height between 300 and 600
+- Title describing what is shown
+- No overlapping marks
+- No excessive categories (>50) without aggregation
+- Prefer clear readable axes
+
+ALTAIR CONTRACT (MANDATORY)
+- Use ONLY altair (imported as alt)
+- Do NOT print df
+- Do NOT output tables or text
+- Do NOT create multiple charts
+- Do NOT use display()
+- Do NOT return Vega JSON
+- Final object MUST be assigned to variable: chart
+
+FAILSAFE
+If visualization is impossible with given columns:
+Create a simple count bar chart of the first categorical column.
+
+OUTPUT FORMAT
+Return ONLY valid Python code.
+No markdown.
+No explanations.
+The code must define exactly one Altair chart assigned to variable 'chart'.
+"""
+
 
 # Database Configuration
 SQLITE_DEFAULT_PORT = 3306
