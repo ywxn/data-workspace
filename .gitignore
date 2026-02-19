@@ -38,3 +38,8 @@ docs/
 # misc
 nlp_table_selector_examples.py
 run_tests.py
+
+# graphs
+graphs/
+graph/
+temp_graphs/

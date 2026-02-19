@@ -1276,6 +1276,7 @@ class DataWorkspaceGUI(QMainWindow):
         self.is_running = False
         self.processing_marker = "**Assistant:** _Processing..._"
         self.current_theme = "system"
+        self.font_point_size = QApplication.instance().font().pointSize()
 
         # Load saved theme preference or use system theme
         config = ConfigManager.load_config()
@@ -2203,16 +2204,31 @@ class DataWorkspaceGUI(QMainWindow):
 
     def _apply_theme(self, theme: str) -> None:
         """Apply the selected theme to the application"""
+        stylesheet = self._build_theme_stylesheet(theme)
         if theme == "dark":
-            QApplication.instance().setStyleSheet(DARK_THEME_STYLESHEET)
+            QApplication.instance().setStyleSheet(stylesheet)
             self.dark_theme_action.setChecked(True)
         elif theme == "light":
-            QApplication.instance().setStyleSheet(LIGHT_THEME_STYLESHEET)
+            QApplication.instance().setStyleSheet(stylesheet)
             self.light_theme_action.setChecked(True)
         elif theme == "system":
             # Reset to system theme (empty stylesheet)
-            QApplication.instance().setStyleSheet("")
+            QApplication.instance().setStyleSheet(stylesheet)
             self.system_theme_action.setChecked(True)
+
+    def _build_theme_stylesheet(self, theme: str) -> str:
+        if theme == "dark":
+            base = DARK_THEME_STYLESHEET
+        elif theme == "light":
+            base = LIGHT_THEME_STYLESHEET
+        else:
+            base = ""
+
+        if not self.font_point_size:
+            return base
+
+        font_override = f"\nQWidget {{ font-size: {self.font_point_size}pt; }}\n"
+        return f"{base}{font_override}"
 
     def adjust_font(self, delta: int):
         """Adjust font size"""
@@ -2226,6 +2242,8 @@ class DataWorkspaceGUI(QMainWindow):
             font.setPointSize(new_size)
             self.setFont(font)
             QApplication.instance().setFont(font)
+            self.font_point_size = new_size
+            self._apply_theme(self.current_theme)
             logger.debug("Font size adjusted successfully")
         except Exception as e:
             logger.error(f"Failed to adjust font size: {str(e)}", exc_info=True)

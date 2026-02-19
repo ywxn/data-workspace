@@ -6,6 +6,8 @@ from datetime import datetime
 import re
 import os
 import json
+import shutil
+import tempfile
 from connector import DatabaseConnector
 from processing import load_data
 from logger import get_logger
@@ -149,6 +151,7 @@ class DataWorkspaceBackend:
         project = self.projects[project_id]
 
         try:
+            self._persist_chart_assets(project)
             os.makedirs("projects", exist_ok=True)
             safe_title = re.sub(r"[^A-Za-z0-9_-]", "_", project.title)[:50]
             filename = f"{project_id}_{safe_title}.json"
@@ -185,6 +188,103 @@ class DataWorkspaceBackend:
         except Exception as e:
             logger.error(f"Error saving project {project_id}: {str(e)}", exc_info=True)
             return False, str(e)
+
+    @staticmethod
+    def _get_temp_chart_dir() -> str:
+        return os.path.abspath(
+            os.path.join(tempfile.gettempdir(), "ai_data_workspace_charts")
+        )
+
+    def _persist_chart_assets(self, project: Project) -> None:
+        graph_dir = os.path.abspath("graph")
+        os.makedirs(graph_dir, exist_ok=True)
+        temp_dir = self._get_temp_chart_dir()
+        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        allowed_ext = {".svg", ".png", ".jpg", ".jpeg", ".gif"}
+
+        logger.debug(f"Persisting chart assets for project: {project.project_id}")
+        for chat in project.get_all_chats():
+            for message in chat.messages:
+                content = message.get("content", "")
+                if not content:
+                    continue
+                updated = self._rewrite_chart_paths(
+                    content, pattern, temp_dir, graph_dir, allowed_ext
+                )
+                if updated != content:
+                    logger.debug(f"Chart paths rewritten in message: {message.get('role')}")
+                    message["content"] = updated
+
+    @staticmethod
+    def _rewrite_chart_paths(
+        content: str,
+        pattern: re.Pattern,
+        temp_dir: str,
+        graph_dir: str,
+        allowed_ext: set,
+    ) -> str:
+        def replace(match: re.Match) -> str:
+            alt_text = match.group(1)
+            raw_path = match.group(2).strip().strip("\"").strip("'")
+            lower = raw_path.lower()
+            if lower.startswith("http://") or lower.startswith("https://"):
+                logger.debug(f"Skipping remote URL: {raw_path}")
+                return match.group(0)
+
+            path_candidate = raw_path
+            if not os.path.isabs(path_candidate):
+                path_candidate = os.path.abspath(path_candidate)
+
+            ext = os.path.splitext(path_candidate)[1].lower()
+            if ext not in allowed_ext:
+                logger.debug(f"Unsupported file extension: {ext}")
+                return match.group(0)
+
+            if not os.path.exists(path_candidate):
+                logger.warning(f"Chart file not found: {path_candidate}")
+                return match.group(0)
+
+            try:
+                common = os.path.commonpath([path_candidate, temp_dir])
+            except ValueError:
+                common = ""
+
+            if common != temp_dir:
+                try:
+                    common_graph = os.path.commonpath([path_candidate, graph_dir])
+                except ValueError:
+                    common_graph = ""
+                if common_graph == graph_dir:
+                    rel_path = os.path.relpath(path_candidate, os.getcwd())
+                    rel_path = rel_path.replace("\\", "/")
+                    logger.debug(f"Using relative path from graph dir: {rel_path}")
+                    return f"![{alt_text}]({rel_path})"
+                logger.debug(f"Chart path outside temp/graph directories: {path_candidate}")
+                return match.group(0)
+
+            base_name = os.path.basename(path_candidate)
+            target = os.path.join(graph_dir, base_name)
+            if os.path.exists(target):
+                if os.path.getsize(target) != os.path.getsize(path_candidate):
+                    name, ext_name = os.path.splitext(base_name)
+                    counter = 1
+                    while os.path.exists(target):
+                        target = os.path.join(graph_dir, f"{name}_{counter}{ext_name}")
+                        counter += 1
+                    logger.debug(f"File exists with different size, using new name: {target}")
+
+            try:
+                shutil.copy2(path_candidate, target)
+                logger.info(f"Chart asset copied: {path_candidate} -> {target}")
+            except Exception as e:
+                logger.error(f"Failed to copy chart asset: {path_candidate}", exc_info=True)
+                return match.group(0)
+
+            rel_path = os.path.relpath(target, os.getcwd())
+            rel_path = rel_path.replace("\\", "/")
+            return f"![{alt_text}]({rel_path})"
+
+        return pattern.sub(replace, content)
 
     def list_saved_projects(self) -> List[str]:
         """List saved project files under ./projects."""

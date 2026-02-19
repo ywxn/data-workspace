@@ -4,6 +4,7 @@ Multi-agent system for AI-powered data analysis.
 This module provides an orchestrated agent system that breaks down data analysis
 queries into manageable tasks, generates SQL, creates visualizations, and provides insights.
 """
+
 import json
 import os
 import tempfile
@@ -16,6 +17,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from tabulate import tabulate
 import altair as alt
+import pandas as pd
 
 from config import ConfigManager
 from connector import DatabaseConnector
@@ -38,10 +40,8 @@ from constants import (
 )
 
 # Load API keys from configuration
-OPENAI_API_KEY = ConfigManager.get_api_key("openai")
-CLAUDE_API_KEY = ConfigManager.get_api_key("claude") or os.getenv(
-    "ANTHROPIC_API_KEY", ""
-)
+OPENAI_API_KEY = ConfigManager.get_api_key("openai") or os.getenv("OPENAI_API_KEY", "")
+CLAUDE_API_KEY = ConfigManager.get_api_key("claude") or os.getenv("ANTHROPIC_API_KEY", "")
 
 # Default API to use: "openai" or "claude"
 DEFAULT_API = ConfigManager.get_default_api()
@@ -65,42 +65,91 @@ OPENAI_MODEL = LLM_MODELS.get("openai")
 # Visualization configuration
 VISUALIZATION_MAX_TOKENS = 800
 VISUALIZATION_TEMPERATURE = 0.3
-VISUALIZATION_TEMP_DIR = "temp_charts"  # TODO: Change to proper temp file handling
+VISUALIZATION_TEMP_DIR = os.path.join(
+    tempfile.gettempdir(), "ai_data_workspace_charts"
+)
 ANALYSIS_CONTEXT_RESULT_MAX_CHARS = 2000
 
 # Visualization prompt template
-VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a Python visualization expert that generates Altair charts from query results.
+VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Altair visualization engine that generates a single, valid chart from SQL query results.
 
-QUERY RESULT DATA
+You MUST return Python code that creates exactly ONE Altair chart object named 'chart'.
+
+DATASET METADATA
 Columns: $columns
 Sample rows (first 5): $sample_rows
 
-VISUALIZATION REQUIREMENTS
+USER REQUIREMENTS
 $requirements
 
-RULES
-- Use ONLY altair (imported as alt)
-- Data available as list of dicts: data_records
-- Use alt.Data(values=data_records) as the data source
-- Create ONE chart object assigned to variable 'chart'
-- Use appropriate mark types and encodings
-- Add titles and axis labels
-- width/height 300-600
-- Convert columns to correct types if needed (e.g. alt.X('date:T') for date columns)
-
-CHART TYPES TO CONSIDER
-- Bar charts: for categorical comparisons
-- Line charts: for trends over time
-- Scatter plots: for relationships between variables
-- Area charts: for cumulative values
-- Pie/donut: for part-to-whole (use mark_arc)
-
 AVAILABLE DATA
-The variable 'data_records' is a list of dictionaries with the query results.
+A pandas DataFrame named df contains the full query result.
 Columns available: $columns
 
+OBJECTIVE
+Create the most appropriate Altair visualization that best answers the user requirement or represents the dataset structure.
+
+CHART SELECTION RULES (STRICT)
+Select chart type based on column semantics:
+
+- Temporal trend (date/time + numeric) → line or area
+- Categorical comparison → bar
+- Ranking / top-N → sorted bar
+- Part-to-whole → arc (pie/donut)
+- Numeric vs numeric → scatter
+- Distribution of numeric → binned bar (histogram)
+- If only one numeric column → aggregated bar or histogram
+- If only categorical columns → count bar chart
+
+AGGREGATION RULES (MANDATORY)
+If multiple rows share the same category or time value:
+- Aggregate numeric fields using sum() unless requirement specifies otherwise
+- Use count() when measuring frequency
+- Never plot duplicate raw rows over categories
+
+TYPE INFERENCE RULES
+You MUST assign correct Vega-Lite types:
+
+- Date/time columns → :T
+- Numeric columns → :Q
+- Categorical/text columns → :N
+
+If needed, convert:
+- df[col] = pd.to_datetime(df[col]) for temporal
+- df[col] = pd.to_numeric(df[col], errors="coerce") for numeric
+
+ENCODING RULES
+- X = category or time
+- Y = numeric measure
+- Color = secondary category (only if useful)
+- Tooltip MUST include key fields
+- Sort categorical axes by descending value when meaningful
+
+VISUAL QUALITY RULES
+- width and height between 300 and 600
+- Title describing what is shown
+- No overlapping marks
+- No excessive categories (>50) without aggregation
+- Prefer clear readable axes
+
+ALTAIR CONTRACT (MANDATORY)
+- Use ONLY altair (imported as alt)
+- Do NOT print df
+- Do NOT output tables or text
+- Do NOT create multiple charts
+- Do NOT use display()
+- Do NOT return Vega JSON
+- Final object MUST be assigned to variable: chart
+
+FAILSAFE
+If visualization is impossible with given columns:
+Create a simple count bar chart of the first categorical column.
+
 OUTPUT FORMAT
-Return ONLY valid Python code. No markdown. No explanations. The code should create an Altair chart object assigned to variable 'chart'.
+Return ONLY valid Python code.
+No markdown.
+No explanations.
+The code must define exactly one Altair chart assigned to variable 'chart'.
 """
 
 
@@ -135,7 +184,9 @@ class AIAgent:
         logger.info(f"Initializing AIAgent with provider: {self.api_provider}")
 
         # Read API keys lazily from config or environment
-        openai_key = ConfigManager.get_api_key("openai") or os.getenv("OPENAI_API_KEY", "")
+        openai_key = ConfigManager.get_api_key("openai") or os.getenv(
+            "OPENAI_API_KEY", ""
+        )
         claude_key = ConfigManager.get_api_key("claude") or os.getenv(
             "ANTHROPIC_API_KEY", ""
         )
@@ -159,9 +210,8 @@ class AIAgent:
             )
 
         self.execution_context: Dict[str, Any] = {}
-        
+
         # Ensure temp directory exists
-        # TODO: Replace with proper temp file handling
         Path(VISUALIZATION_TEMP_DIR).mkdir(exist_ok=True)
 
     async def _call_llm(
@@ -251,7 +301,9 @@ class AIAgent:
                 if col in types:
                     column_types[qualified] = str(types[col])
 
-        qualified_columns = [f"{t}.{c}" for t, cols in columns_by_table.items() for c in cols]
+        qualified_columns = [
+            f"{t}.{c}" for t, cols in columns_by_table.items() for c in cols
+        ]
 
         return {
             "tables": tables,
@@ -349,6 +401,8 @@ class AIAgent:
             temperature=CODE_GENERATION_TEMPERATURE,
         )
 
+        logger.info(f"Generated SQL: {generated_sql}")
+
         return self._clean_sql_output(generated_sql)
 
     async def visualization_agent(
@@ -379,8 +433,9 @@ class AIAgent:
             logger.warning("Cannot visualize empty result set")
             return None
 
-        # Convert to list of dictionaries (Altair-compatible format)
+        # Convert to list of dictionaries and DataFrame for Altair
         data_records = [dict(zip(columns, row)) for row in rows]
+        df = pd.DataFrame(data_records)
 
         # Prepare sample for prompt (first 5 records)
         sample_rows = data_records[:5]
@@ -414,7 +469,7 @@ class AIAgent:
             viz_code = self._clean_python_output(viz_code)
 
             # Execute visualization code
-            chart_path = self._execute_visualization_code(viz_code, data_records)
+            chart_path = self._execute_visualization_code(viz_code, data_records, df)
             return chart_path
 
         except Exception as e:
@@ -422,7 +477,7 @@ class AIAgent:
             return None
 
     def _execute_visualization_code(
-        self, viz_code: str, data_records: List[Dict[str, Any]]
+        self, viz_code: str, data_records: List[Dict[str, Any]], df: pd.DataFrame
     ) -> Optional[str]:
         """
         Execute generated visualization code and save chart.
@@ -438,7 +493,16 @@ class AIAgent:
             namespace = {
                 "alt": alt,
                 "data_records": data_records,
+                "df": df,
             }
+
+            # Heuristic type fixes
+            for col in df.columns:
+                if "date" in col.lower() or "time" in col.lower():
+                    try:
+                        df[col] = pd.to_datetime(df[col])
+                    except Exception:
+                        pass
 
             exec(viz_code, namespace)
 
@@ -466,7 +530,9 @@ class AIAgent:
             return temp_path
 
         except Exception as e:
-            logger.error(f"Failed to execute visualization code: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to execute visualization code: {str(e)}", exc_info=True
+            )
             return None
 
     async def analysis_agent(
@@ -558,7 +624,10 @@ class AIAgent:
             plan = await self.planner_agent(user_query, context)
             logger.info(f"Generated plan: {plan}")
 
-            if self._query_requests_visualization(user_query) or plan.get("task_type") == "visualization":
+            if (
+                self._query_requests_visualization(user_query)
+                or plan.get("task_type") == "visualization"
+            ):
                 plan["requires_visualization"] = True
                 if plan.get("requires_sql") is False:
                     plan["requires_sql"] = True
@@ -573,9 +642,11 @@ class AIAgent:
 
             if requires_sql:
                 logger.info("SQL generation required")
-                generated_sql = await self.sql_generation_agent(plan, user_query, context)
+                generated_sql = await self.sql_generation_agent(
+                    plan, user_query, context
+                )
                 query_result = self._execute_sql_query(generated_sql, context)
-                
+
                 # Step 3: Generate visualization if needed
                 requires_viz = plan.get("requires_visualization", False)
                 if requires_viz and query_result and "error" not in query_result:
@@ -655,7 +726,22 @@ class AIAgent:
     def _query_requests_visualization(user_query: str) -> bool:
         """Heuristic to force visualization when the user explicitly asks for it."""
         query = user_query.lower()
-        keywords = ["graph", "chart", "plot", "visualize", "visualisation", "visualization", "trend", "over time"]
+        keywords = [
+            "graph",
+            "chart",
+            "plot",
+            "visualize",
+            "visualisation",
+            "visualization",
+            "trend",
+            "over time",
+            "distribution",
+            "compare",
+            "correlation",
+            "relationship",
+            "histogram",
+            "scatter",
+        ]
         return any(keyword in query for keyword in keywords)
 
     def _format_response(
@@ -732,6 +818,7 @@ class AIAgent:
     @staticmethod
     def _compact_code_output_for_prompt(result: Any) -> str:
         """Compact query results for LLM context without flooding tokens."""
+
         def trim_text(text: str, max_chars: int) -> str:
             if len(text) <= max_chars:
                 return text
@@ -757,9 +844,14 @@ class AIAgent:
                     "truncated": bool(result.get("truncated")),
                     "sample_rows": sample_rows,
                 }
-                return trim_text(json.dumps(summary, ensure_ascii=True), ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+                return trim_text(
+                    json.dumps(summary, ensure_ascii=True),
+                    ANALYSIS_CONTEXT_RESULT_MAX_CHARS,
+                )
 
-            return trim_text(json.dumps(result, ensure_ascii=True), ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
+            return trim_text(
+                json.dumps(result, ensure_ascii=True), ANALYSIS_CONTEXT_RESULT_MAX_CHARS
+            )
 
         if isinstance(result, str):
             return trim_text(result, ANALYSIS_CONTEXT_RESULT_MAX_CHARS)
