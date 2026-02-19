@@ -357,7 +357,7 @@ class AIAgent:
         df = pd.DataFrame(data_records)
 
         # Prepare sample for prompt (first 5 records)
-        sample_rows = data_records[:5]
+        sample_rows = df.head(5).to_dict(orient="records") if not df.empty else []
 
         # Determine visualization requirements from plan
         requirements = plan.get("analysis_focus", [])
@@ -388,7 +388,7 @@ class AIAgent:
             viz_code = self._clean_python_output(viz_code)
 
             # Execute visualization code
-            chart_path = self._execute_visualization_code(viz_code, data_records, df)
+            chart_path = self._execute_visualization_code(viz_code, df)
             return chart_path
 
         except Exception as e:
@@ -396,14 +396,14 @@ class AIAgent:
             return None
 
     def _execute_visualization_code(
-        self, viz_code: str, data_records: List[Dict[str, Any]], df: pd.DataFrame
+        self, viz_code: str, df: pd.DataFrame
     ) -> Optional[str]:
         """
         Execute generated visualization code and save chart.
 
         Args:
             viz_code: Python code that creates an Altair chart
-            data_records: List of dictionaries with the data
+            df: pandas DataFrame with the data
 
         Returns:
             Path to saved chart file, or None if execution fails
@@ -411,7 +411,6 @@ class AIAgent:
         try:
             namespace = {
                 "alt": alt,
-                "data_records": data_records,
                 "df": df,
             }
 
