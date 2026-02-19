@@ -475,23 +475,29 @@ class AIAgent:
         Returns:
             Human-readable analysis of the results
         """
+        # Check if result is too simple for analysis
+        if code_output and self._is_low_signal(code_output):
+            return "The query returned limited data; no significant analytical insights are available."
+
         schema_metadata = self._build_schema_metadata(context)
 
+        # Minimal schema info - focus on what's relevant
         context_parts = [
-            "Schema Info:",
-            f"- Tables: {schema_metadata['tables']}",
-            f"- Columns: {schema_metadata['columns']}",
-            f"- Row counts: {schema_metadata['row_counts']}",
-            f"- Column types: {schema_metadata['column_types']}",
-            f"- Sample rows: {schema_metadata['sample_rows']}",
+            f"Available tables: {', '.join(schema_metadata['tables'])}",
         ]
 
         if plan:
-            context_parts.append(f"\nExecution Plan: {plan}")
+            plan_summary = {
+                "task_type": plan.get("task_type"),
+                "objective": plan.get("objective"),
+                "analysis_focus": plan.get("analysis_focus"),
+            }
+            context_parts.append(f"\nExecution Plan: {plan_summary}")
 
-        # if code_output is not None:
-        #     compact_result = self._compact_code_output_for_prompt(code_output)
-        #     context_parts.append(f"\nQuery Result Summary: {compact_result}")
+        # Provide structured result summary instead of raw data
+        if code_output is not None:
+            summary = self._summarize_query_result(code_output)
+            context_parts.append(f"\nQuery Result Summary: {json.dumps(summary, indent=2)}")
 
         system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
             context="\n".join(context_parts)
@@ -662,6 +668,93 @@ class AIAgent:
             "scatter",
         ]
         return any(keyword in query for keyword in keywords)
+
+    @staticmethod
+    def _summarize_query_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate statistical summary of query results for LLM context.
+
+        Creates aggregated metadata about columns, distributions, and patterns
+        instead of passing raw rows to the analysis agent.
+
+        Args:
+            result: Query result dictionary with 'columns' and 'rows'
+
+        Returns:
+            Dictionary with row count, column profiles, and sample data
+        """
+        if not result or "columns" not in result:
+            return {"type": "none"}
+
+        columns = result.get("columns", [])
+        rows = result.get("rows", [])
+
+        if not rows:
+            return {"type": "empty", "columns": columns}
+
+        summary = {
+            "row_count": len(rows),
+            "columns": columns,
+            "truncated": bool(result.get("truncated")),
+        }
+
+        # Column profiling for insights
+        col_profiles = {}
+
+        if rows and isinstance(rows[0], (list, tuple)):
+            # Convert to column arrays
+            cols_data = list(zip(*rows))
+            for col, values in zip(columns, cols_data):
+                numeric_vals = [v for v in values if isinstance(v, (int, float))]
+                unique_vals = set(str(v) for v in values if v is not None)
+
+                col_profiles[col] = {
+                    "unique_count": len(unique_vals),
+                    "sample_values": list(unique_vals)[:5],
+                }
+
+                if numeric_vals:
+                    col_profiles[col].update(
+                        {
+                            "min": min(numeric_vals),
+                            "max": max(numeric_vals),
+                            "mean": round(sum(numeric_vals) / len(numeric_vals), 2),
+                        }
+                    )
+
+        summary["column_profiles"] = col_profiles
+
+        # Only include sample rows for small datasets
+        if len(rows) <= 50:
+            if isinstance(rows[0], (list, tuple)):
+                summary["sample_rows"] = [dict(zip(columns, row)) for row in rows[:5]]
+            else:
+                summary["sample_rows"] = rows[:5]
+
+        return summary
+
+    @staticmethod
+    def _is_low_signal(result: Dict[str, Any]) -> bool:
+        """
+        Detect if query result has insufficient data for meaningful analysis.
+
+        Args:
+            result: Query result dictionary
+
+        Returns:
+            True if result is trivial or has low signal
+        """
+        if not result or "rows" not in result:
+            return True
+        if "error" in result:
+            return True
+        rows = result.get("rows", [])
+        if len(rows) <= 3:
+            return True
+        columns = result.get("columns", [])
+        if len(columns) == 1 and len(rows) == 1:
+            return True
+        return False
 
     def _format_response(
         self, code_result: Any, analysis: str, chart_path: Optional[str] = None

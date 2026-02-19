@@ -119,7 +119,13 @@ STYLE
 - Do not speculate beyond provided data
 - Prefer clarity over technical jargon
 - Keep length moderate (≈120–180 words)
-"""
+GUARDRAILS (MANDATORY)
+- Do NOT describe the schema or table structure
+- Do NOT restate obvious counts like "the query returned X rows"
+- Focus on patterns, trends, anomalies, comparisons, and insights
+- If the dataset is large, rely only on summary statistics and profiles
+- If there is insufficient signal, say so briefly
+- Do NOT invent observations that are not supported by the data"""
 
 VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Altair visualization engine that generates a single, valid chart from SQL query results.
 
