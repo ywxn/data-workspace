@@ -223,7 +223,7 @@ class NLPTableSelector:
         table_synonyms: Optional[Dict[str, List[str]]] = None,
         column_comments: Optional[Dict[str, str]] = None,
         acronym_map: Optional[Dict[str, str]] = None,
-        semantic_layer: Optional[Dict[str, Dict[str, str]]] = None,
+        semantic_layer: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Initialize the NLP table selector.
@@ -236,15 +236,19 @@ class NLPTableSelector:
             table_synonyms: Optional dict mapping table names to synonym lists
             column_comments: Optional dict mapping column names to comments
             acronym_map: Optional custom acronym dictionary
-            semantic_layer: Optional dict with "tables" and "columns" meanings:
-                {
-                    "tables": {
-                        "CST_TXN_H": "customer transaction history"
-                    },
-                    "columns": {
-                        "CST_TXN_H.C_AMT": "transaction amount local currency"
+            semantic_layer: Optional list of table descriptors:
+                [
+                    {
+                        "table_name": "CST_TXN_H",
+                        "description": "customer transaction history",
+                        "columns": [
+                            {
+                                "name": "C_AMT",
+                                "description": "transaction amount local currency"
+                            }
+                        ]
                     }
-                }
+                ]
 
         Raises:
             RuntimeError: If db_connector is not connected
@@ -260,7 +264,7 @@ class NLPTableSelector:
         self.tie_threshold = tie_threshold
         self.table_synonyms = table_synonyms or {}
         self.column_comments = column_comments or {}
-        self.semantic_layer = semantic_layer or {}
+        self.semantic_layer = semantic_layer or []
 
         # Initialize normalizer
         self.normalizer = SchemaNormalizer(acronym_map=acronym_map)
@@ -336,8 +340,9 @@ class NLPTableSelector:
 
         # Get semantic table meaning
         semantic_table = None
-        if self.semantic_layer.get("tables", {}).get(table_name):
-            semantic_table = self.semantic_layer["tables"][table_name]
+        semantic_table_map, semantic_column_map = self._build_semantic_maps()
+        if semantic_table_map.get(table_name):
+            semantic_table = semantic_table_map[table_name]
 
         table_meta = TableMetadata(
             table_name=table_name,
@@ -352,8 +357,8 @@ class NLPTableSelector:
             # Get semantic column meaning
             col_key = f"{table_name}.{col_name}"
             semantic_col = None
-            if self.semantic_layer.get("columns", {}).get(col_key):
-                semantic_col = self.semantic_layer["columns"][col_key]
+            if semantic_column_map.get(col_key):
+                semantic_col = semantic_column_map[col_key]
 
             col_meta = ColumnMetadata(
                 table_name=table_name,
@@ -746,27 +751,51 @@ class NLPTableSelector:
         # Rebuild all embeddings since column info changed
         self._build_column_embeddings()
 
-    def set_semantic_layer(self, semantic_layer: Dict[str, Dict[str, str]]) -> None:
+    def set_semantic_layer(self, semantic_layer: List[Dict[str, Any]]) -> None:
         """
         Set or update semantic layer with business meanings.
 
         Semantic layer structure:
-        {
-            "tables": {
-                "CST_TXN_H": "customer transaction history"
-            },
-            "columns": {
-                "CST_TXN_H.C_AMT": "transaction amount local currency"
+        [
+            {
+                "table_name": "CST_TXN_H",
+                "description": "customer transaction history",
+                "columns": [
+                    {"name": "C_AMT", "description": "transaction amount local currency"}
+                ]
             }
-        }
+        ]
 
         Args:
             semantic_layer: Semantic meanings for tables and columns
         """
         logger.info(f"Setting semantic layer with {len(semantic_layer)} entries")
-        self.semantic_layer.update(semantic_layer)
+        self.semantic_layer = semantic_layer
         # Rebuild all embeddings since semantic info changed
         self._refresh_schema()
+
+    def _build_semantic_maps(self) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Build lookup maps for semantic table and column descriptions."""
+        table_map: Dict[str, str] = {}
+        column_map: Dict[str, str] = {}
+
+        for entry in self.semantic_layer:
+            table_name = entry.get("table_name")
+            if not table_name:
+                continue
+
+            table_desc = entry.get("description")
+            if table_desc:
+                table_map[table_name] = table_desc
+
+            for col in entry.get("columns", []) or []:
+                col_name = col.get("name")
+                col_desc = col.get("description")
+                if not col_name or not col_desc:
+                    continue
+                column_map[f"{table_name}.{col_name}"] = col_desc
+
+        return table_map, column_map
 
     def _build_table_embeddings_for_tables(self, table_names: List[str]) -> None:
         """Rebuild documents and embeddings for specific tables."""
