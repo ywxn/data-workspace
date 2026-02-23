@@ -538,3 +538,18 @@ DEFAULT_ACRONYMS = {
     "prop": "property",
     "meta": "metadata",
 }
+
+NLP_PLACEHOLDER_TEXT = [
+    "Find the top 5 products by sales in the last quarter.",
+    "What is the monthly revenue trend for the past year?",
+    "Identify customer segments based on purchasing behavior.",
+    "Calculate the average order value for each region.",
+    "Which marketing channels are driving the most traffic?",
+    "Customer orders joined with payments and refunds.",
+    "Analyze the impact of discounts on sales performance.",
+    "Evaluate the effectiveness of marketing campaigns.",
+    "Assess customer satisfaction through survey responses.",
+    "Monitor inventory levels and stock movements.",
+    "Track employee performance and productivity.",
+    "Analyze financial statements and key performance indicators.",
+]

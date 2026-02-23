@@ -37,6 +37,7 @@ import random
 import os
 from nlp_table_selector import NLPTableSelector
 from constants import (
+    NLP_PLACEHOLDER_TEXT,
     PLACEHOLDER_PROJECT_NAMES,
     PLACEHOLDER_PROJECT_DESCRIPTIONS,
     DARK_THEME_STYLESHEET,
@@ -237,7 +238,7 @@ class CreateProjectDialog(QDialog):
         # Form layout for creating a new project (hidden until Create New Project clicked)
         form_layout = QFormLayout()
 
-        random_placeholder_index = random.randint(0, 9)
+        random_placeholder_index = random.randint(0, len(PLACEHOLDER_PROJECT_NAMES) - 1)
 
         self.project_name_input = QLineEdit()
         self.project_name_input.setPlaceholderText(
@@ -807,7 +808,7 @@ class NLPPromptDialog(QDialog):
 
         self.prompt_input = QLineEdit()
         self.prompt_input.setPlaceholderText(
-            "Example: customer orders joined with payments and refunds"
+            NLP_PLACEHOLDER_TEXT[random.randint(0, len(NLP_PLACEHOLDER_TEXT) - 1)]
         )
         self.prompt_input.returnPressed.connect(self.accept)
         layout.addWidget(self.prompt_input)
@@ -1792,131 +1793,145 @@ class DataWorkspaceGUI(QMainWindow):
     def connect_data_source(self):
         """Open dialog to connect to a data source"""
         logger.info("User initiated data source connection")
-        source_dialog = DataSourceDialog(self)
-        if source_dialog.exec() == QDialog.DialogCode.Accepted:
-            source_type = source_dialog.data_source_type
-            source_config = source_dialog.data_source_config
-            logger.info(f"Data source type selected: {source_type}")
+        
+        # Loop until data is successfully loaded or user cancels
+        while True:
+            source_dialog = DataSourceDialog(self)
+            if source_dialog.exec() == QDialog.DialogCode.Accepted:
+                source_type = source_dialog.data_source_type
+                source_config = source_dialog.data_source_config
+                logger.info(f"Data source type selected: {source_type}")
 
-            if source_type and source_config:
-                try:
-                    if source_type == "database":
-                        # Database connection flow
-                        db_type = source_config.get("db_type")
-                        credentials = source_config.get("credentials", {})
-                        selection_method = source_config.get(
-                            "table_selection_method",
-                            ConfigManager.get_table_selection_method(),
-                        )
-                        semantic_layer = source_config.get("semantic_layer")
-                        logger.debug(f"Attempting to connect to {db_type} database")
-                        connector = DatabaseConnector()
-                        success, message = connector.connect(db_type, credentials)
-
-                        if success:
-                            logger.info(f"Successfully connected to {db_type} database")
-                            tables = connector.get_tables()
-
-                            if not tables:
-                                connector.close()
-                                QMessageBox.warning(
-                                    self,
-                                    "No Tables Found",
-                                    "The database does not contain any tables.",
-                                )
-                                return
-
-                            if tables:
-                                selected_tables = select_tables_with_method(
-                                    self,
-                                    connector,
-                                    tables,
-                                    selection_method,
-                                    semantic_layer,
-                                )
-                                connector.close()
-
-                                if selected_tables:
-                                    # Use load_data from processing module
-                                    data_source_config = {
-                                        "db_type": db_type,
-                                        "credentials": credentials,
-                                        "table": (
-                                            selected_tables[0]
-                                            if len(selected_tables) == 1
-                                            else selected_tables
-                                        ),
-                                    }
-                                    data_context, status = load_data(
-                                        "database", data_source_config
-                                    )
-                                    if data_context is not None:
-                                        self.backend.data_context = data_context
-                                        self.data_context = data_context
-                                        logger.info(
-                                            f"Successfully loaded data from tables: {selected_tables}"
-                                        )
-                                        welcome_msg = self.backend.format_database_welcome_message(
-                                            db_type, selected_tables, data_context, status
-                                        )
-                                        self.conversation_display.setHtml(
-                                            markdown_to_html(welcome_msg)
-                                        )
-                                        # Store data source in project
-                                        if self.backend.active_project:
-                                            creds_to_store = credentials.copy()
-                                            if "password" in creds_to_store:
-                                                creds_to_store["password"] = ""
-                                            self.backend.active_project.data_source = {
-                                                "db_type": db_type,
-                                                "credentials": creds_to_store,
-                                                "table": selected_tables,
-                                                "table_selection_method": selection_method,
-                                                "semantic_layer": semantic_layer,
-                                            }
-                                        QMessageBox.information(
-                                            self,
-                                            "Data Loaded",
-                                            "Database data loaded successfully.",
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"Failed to load data from database: {status}"
-                                        )
-                                        QMessageBox.warning(self, "Load Failed", status)
-                        else:
-                            logger.warning(f"Database connection failed: {message}")
-                            QMessageBox.warning(self, "Connection Failed", message)
-
-                    elif source_type == "file":
-                        # File load flow
-                        file_paths = source_config.get("file_paths", [])
-                        logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
-                        if file_paths:
-                            data_context, welcome_msg = self.backend.load_file_data_with_ui(
-                                file_paths
+                if source_type and source_config:
+                    try:
+                        if source_type == "database":
+                            # Database connection flow
+                            db_type = source_config.get("db_type")
+                            credentials = source_config.get("credentials", {})
+                            selection_method = source_config.get(
+                                "table_selection_method",
+                                ConfigManager.get_table_selection_method(),
                             )
-                            if data_context is not None:
-                                self.data_context = data_context
-                                logger.info(
-                                    f"Successfully loaded {len(file_paths)} file(s)"
-                                )
-                                self.conversation_display.setHtml(
-                                    markdown_to_html(welcome_msg)
-                                )
-                                QMessageBox.information(
-                                    self, "Data Loaded", "Files loaded successfully."
-                                )
+                            semantic_layer = source_config.get("semantic_layer")
+                            logger.debug(f"Attempting to connect to {db_type} database")
+                            connector = DatabaseConnector()
+                            success, message = connector.connect(db_type, credentials)
+
+                            if success:
+                                logger.info(f"Successfully connected to {db_type} database")
+                                tables = connector.get_tables()
+
+                                if not tables:
+                                    connector.close()
+                                    QMessageBox.warning(
+                                        self,
+                                        "No Tables Found",
+                                        "The database does not contain any tables.",
+                                    )
+                                    continue
+
+                                if tables:
+                                    selected_tables = select_tables_with_method(
+                                        self,
+                                        connector,
+                                        tables,
+                                        selection_method,
+                                        semantic_layer,
+                                    )
+                                    connector.close()
+
+                                    if selected_tables is None:
+                                        logger.info("User cancelled table selection, returning to data source selection")
+                                        continue
+
+                                    if selected_tables:
+                                        # Use load_data from processing module
+                                        data_source_config = {
+                                            "db_type": db_type,
+                                            "credentials": credentials,
+                                            "table": (
+                                                selected_tables[0]
+                                                if len(selected_tables) == 1
+                                                else selected_tables
+                                            ),
+                                        }
+                                        data_context, status = load_data(
+                                            "database", data_source_config
+                                        )
+                                        if data_context is not None:
+                                            self.backend.data_context = data_context
+                                            self.data_context = data_context
+                                            logger.info(
+                                                f"Successfully loaded data from tables: {selected_tables}"
+                                            )
+                                            welcome_msg = self.backend.format_database_welcome_message(
+                                                db_type, selected_tables, data_context, status
+                                            )
+                                            self.conversation_display.setHtml(
+                                                markdown_to_html(welcome_msg)
+                                            )
+                                            # Store data source in project
+                                            if self.backend.active_project:
+                                                creds_to_store = credentials.copy()
+                                                if "password" in creds_to_store:
+                                                    creds_to_store["password"] = ""
+                                                self.backend.active_project.data_source = {
+                                                    "db_type": db_type,
+                                                    "credentials": creds_to_store,
+                                                    "table": selected_tables,
+                                                    "table_selection_method": selection_method,
+                                                    "semantic_layer": semantic_layer,
+                                                }
+                                            QMessageBox.information(
+                                                self,
+                                                "Data Loaded",
+                                                "Database data loaded successfully.",
+                                            )
+                                            return
+                                        else:
+                                            logger.warning(
+                                                f"Failed to load data from database: {status}"
+                                            )
+                                            QMessageBox.warning(self, "Load Failed", status)
+                                            continue
                             else:
-                                logger.warning(f"Failed to load files: {welcome_msg}")
-                                QMessageBox.warning(self, "Load Failed", welcome_msg)
-                except Exception as e:
-                    logger.error(f"Error loading data source: {str(e)}", exc_info=True)
-                    QMessageBox.critical(
-                        self, "Error", f"Failed to load data: {str(e)}"
-                    )
-        else:
-            logger.info("User cancelled data source connection")
+                                logger.warning(f"Database connection failed: {message}")
+                                QMessageBox.warning(self, "Connection Failed", message)
+                                continue
+
+                        elif source_type == "file":
+                            # File load flow
+                            file_paths = source_config.get("file_paths", [])
+                            logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
+                            if file_paths:
+                                data_context, welcome_msg = self.backend.load_file_data_with_ui(
+                                    file_paths
+                                )
+                                if data_context is not None:
+                                    self.data_context = data_context
+                                    logger.info(
+                                        f"Successfully loaded {len(file_paths)} file(s)"
+                                    )
+                                    self.conversation_display.setHtml(
+                                        markdown_to_html(welcome_msg)
+                                    )
+                                    QMessageBox.information(
+                                        self, "Data Loaded", "Files loaded successfully."
+                                    )
+                                    return
+                                else:
+                                    logger.warning(f"Failed to load files: {welcome_msg}")
+                                    QMessageBox.warning(self, "Load Failed", welcome_msg)
+                                    continue
+                    except Exception as e:
+                        logger.error(f"Error loading data source: {str(e)}", exc_info=True)
+                        QMessageBox.critical(
+                            self, "Error", f"Failed to load data: {str(e)}"
+                        )
+                        continue
+            else:
+                logger.info("User cancelled data source connection")
+                return
 
     def connect_additional_data_source(self):
         """Connect additional data sources without overwriting existing data."""
@@ -2284,14 +2299,8 @@ class DataWorkspaceGUI(QMainWindow):
         QMessageBox.about(self, "About AI Data Workspace", about_text)
 
 
-def start_application():
-    """Start the AI Data Workspace application."""
-    logger.info("=" * 60)
-    logger.info("Starting AI Data Workspace application")
-    logger.info("=" * 60)
-    app = QApplication(sys.argv)
-
-    # Preload theme before any dialogs are shown
+def _preload_theme(app: QApplication) -> None:
+    """Preload the saved theme before any dialogs are shown."""
     try:
         config = ConfigManager.load_config()
         saved_theme = config.get("theme", "system")
@@ -2305,13 +2314,13 @@ def start_application():
     except Exception as e:
         logger.warning(f"Failed to preload theme: {str(e)}")
 
-    # Check if API keys are configured, if not prompt user to set them up
+
+def _ensure_api_configured() -> bool:
+    """Ensure API keys are configured. Shows dialog if needed. Returns True if configured."""
     if not ConfigManager.has_any_api_key():
         logger.warning("No API keys configured, prompting user for setup")
-        # Show API key configuration dialog
         api_config_dialog = APIKeyConfigDialog()
         if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
-            # User cancelled API key setup
             logger.error("API key setup cancelled by user, application cannot start")
             QMessageBox.warning(
                 None,
@@ -2319,94 +2328,92 @@ def start_application():
                 "An API key is required to use this application.\n"
                 "Please configure your API key and try again.",
             )
-            return
+            return False
         logger.info("API key configured successfully")
+    return True
 
+
+def _show_project_dialog() -> Optional[tuple[DataWorkspaceGUI, str]]:
+    """Show project creation/load dialog. Returns (window, project_id) or None if cancelled."""
     project_dialog = CreateProjectDialog()
     if project_dialog.exec() != QDialog.DialogCode.Accepted:
         logger.info("Project dialog cancelled, exiting application")
-        return
+        return None
 
     logger.debug("Creating main application window")
     window = DataWorkspaceGUI()
     window.backend = project_dialog.backend
     window.project_id = project_dialog.project_id
     logger.info(f"Main window created with project ID: {window.project_id}")
+    return (window, window.project_id)
 
-    # Load the project and setup the UI
+
+def _load_project_and_chats(window: DataWorkspaceGUI) -> None:
+    """Load the project and display chat history."""
     if window.project_id is not None:
         window.backend.load_project(window.project_id)
-        # Load the first chat from the project
         if window.backend.active_project:
             logger.debug(f"Active project: {window.backend.active_project.title}")
             chats = window.backend.active_project.get_all_chats()
             if chats:
                 window.chat_id = chats[0].session_id
                 success, _ = window.backend.load_chat_session(window.chat_id)
-                logger.info(
-                    f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}"
-                )
-                # Display the chat history
+                logger.info(f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}")
                 if success:
                     history = window.backend.get_chat_history()
                     if history:
                         chat_history = window._format_chat_history(history)
-                        window.conversation_display.setHtml(
-                            markdown_to_html(chat_history)
-                        )
+                        window.conversation_display.setHtml(markdown_to_html(chat_history))
 
-    # Refresh the UI with project and chat info
     window.refresh_project_list()
-
-    # Select the first chat in the list
     if window.chat_list.count() > 0:
         window.chat_list.setCurrentRow(0)
 
-    # Check if data is already loaded from project (e.g., loading saved project with data source)
-    data_already_loaded = window.backend.data_context is not None
-    logger.info(f"Data already loaded from project: {data_already_loaded}")
 
-    # Only ask for data source if no data is already loaded
-    if data_already_loaded:
-        logger.info("Using data already loaded from project")
-        # Data was already loaded from project, generate welcome message
-        if window.backend.data_context is not None:
-            data_context = window.backend.data_context
-            logger.debug("Loaded SQL context from project")
-            # Check what type of source was used
-            if (
-                window.backend.active_project
-                and window.backend.active_project.data_source
-            ):
-                ds = window.backend.active_project.data_source
-                if ds.get("db_type"):
-                    # Database source
-                    selected_tables = ds.get("table", [])
-                    if not isinstance(selected_tables, list):
-                        selected_tables = [selected_tables]
-                    welcome_msg = window.backend.format_database_welcome_message(
-                        ds.get("db_type"),
-                        selected_tables,
-                        data_context,
-                        "Data loaded from project",
-                    )
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                elif ds.get("file_paths"):
-                    # File source
-                    welcome_msg = window.backend.format_file_welcome_message(
-                        ds.get("file_paths", []),
-                        data_context,
-                        "Data loaded from project",
-                    )
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-            window.data_context = data_context
-    else:
-        logger.info("No data loaded, prompting for data source")
-        # No data loaded yet, ask for data source
+def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
+    """Display welcome message for data that was already loaded from project."""
+    if window.backend.data_context is None:
+        return
+
+    data_context = window.backend.data_context
+    logger.debug("Loaded SQL context from project")
+    
+    if window.backend.active_project and window.backend.active_project.data_source:
+        ds = window.backend.active_project.data_source
+        if ds.get("db_type"):
+            selected_tables = ds.get("table", [])
+            if not isinstance(selected_tables, list):
+                selected_tables = [selected_tables]
+            welcome_msg = window.backend.format_database_welcome_message(
+                ds.get("db_type"),
+                selected_tables,
+                data_context,
+                "Data loaded from project",
+            )
+            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        elif ds.get("file_paths"):
+            welcome_msg = window.backend.format_file_welcome_message(
+                ds.get("file_paths", []),
+                data_context,
+                "Data loaded from project",
+            )
+            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+    
+    window.data_context = data_context
+
+
+def _load_initial_data(window: DataWorkspaceGUI) -> bool:
+    """
+    Load data source on startup. Loops until data is loaded or user cancels.
+    Returns True if data was successfully loaded, False if user cancelled.
+    """
+    logger.info("No data loaded, prompting for data source")
+    
+    while True:
         source_dialog = DataSourceDialog()
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
             logger.info("User cancelled data source selection")
-            return
+            return False
 
         source_type = source_dialog.data_source_type
         source_config = source_dialog.data_source_config
@@ -2414,143 +2421,176 @@ def start_application():
 
         try:
             if source_type == "database":
-                db_type: str = source_config["db_type"]
-                credentials: Dict[str, Any] = source_config["credentials"]
-                selection_method = source_config.get(
-                    "table_selection_method",
-                    ConfigManager.get_table_selection_method(),
-                )
-                semantic_layer = source_config.get("semantic_layer")
-                logger.info(f"Connecting to {db_type} database...")
-
-                connector = DatabaseConnector()
-                while True:
-                    success, message = connector.connect(db_type, credentials)
-                    if success:
-                        logger.info(f"Successfully connected to {db_type} database")
-                        break
-
-                    logger.warning(f"Database connection failed: {message}")
-
-                    retry = QMessageBox.question(
-                        None,
-                        "Database Connection Failed",
-                        f"{message}\n\nWould you like to try again?",
-                        QMessageBox.StandardButton.Retry
-                        | QMessageBox.StandardButton.Cancel,
-                    )
-
-                    if retry == QMessageBox.StandardButton.Retry:
-                        db_dialog = DatabaseConnectionDialog()
-                        if db_dialog.exec() != QDialog.DialogCode.Accepted:
-                            return
-                        source_config = db_dialog.get_config()
-                        db_type = source_config["db_type"]
-                        credentials = source_config["credentials"]
-                    else:
-                        logger.info("User cancelled database connection retry")
-                        return
-
-                try:
-                    tables = connector.get_tables()
-                    logger.debug(
-                        f"Retrieved {len(tables) if tables else 0} tables from database"
-                    )
-                except Exception as e:
-                    logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
-                    QMessageBox.critical(None, "Table Discovery Failed", str(e))
-                    connector.close()
-                    return
-
-                if not tables:
-                    QMessageBox.critical(
-                        None,
-                        "No Tables Found",
-                        "The database does not contain any tables.",
-                    )
-                    return
-
-                selected_tables = select_tables_with_method(
-                    window,
-                    connector,
-                    tables,
-                    selection_method,
-                    semantic_layer,
-                )
-                connector.close()
-                table_value: Any = (
-                    selected_tables if len(selected_tables) > 1 else selected_tables[0]
-                )
-                source_config["table"] = table_value
-
-                if not selected_tables:
-                    return
-
-                data_context, status = load_data("database", source_config)
-
-                if data_context is not None:
-                    logger.info("Successfully loaded database data")
-                    window.data_context = data_context
-                    window.backend.data_context = data_context
-                    # Store data source in the project
-                    if window.backend.active_project:
-                        creds_to_store = credentials.copy()
-                        if "password" in creds_to_store:
-                            creds_to_store["password"] = ""
-                        window.backend.active_project.data_source = {
-                            "db_type": db_type,
-                            "credentials": creds_to_store,
-                            "table": selected_tables,
-                            "table_selection_method": selection_method,
-                            "semantic_layer": semantic_layer,
-                        }
-                    welcome_msg = window.backend.format_database_welcome_message(
-                        db_type, selected_tables, data_context, status
-                    )
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                else:
-                    window.conversation_display.setHtml(
-                        markdown_to_html(
-                            f"Connected to {db_type} database, but no data loaded.\n"
-                            f"{status}\nYou can still ask questions!"
-                        )
-                    )
-
+                if _load_database_data(window, source_config):
+                    return True
             elif source_type == "file":
-                file_paths = source_config["file_paths"]
-                logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
-                data_context, welcome_msg = window.backend.load_file_data_with_ui(
-                    file_paths
-                )
-
-                if data_context is not None:
-                    window.data_context = data_context
-                    # Store file paths in the project
-                    if window.backend.active_project:
-                        window.backend.active_project.data_source = {
-                            "file_paths": file_paths
-                        }
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                else:
-                    logger.error(f"Failed to load file data: {welcome_msg}")
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                    QMessageBox.critical(
-                        window, "Data Loading Error", "Failed to load any files."
-                    )
-
+                if _load_file_data(window, source_config):
+                    return True
             else:
                 logger.error(f"Unknown data source type: {source_type}")
-                QMessageBox.critical(
-                    window, "Error", f"Unknown source type: {source_type}"
-                )
-                return
-
+                QMessageBox.critical(window, "Error", f"Unknown source type: {source_type}")
+                continue
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}", exc_info=True)
-            error_msg = (
-                "### Error Loading Data\n" f"{str(e)}\n" "Please restart and try again."
-            )
+            error_msg = f"### Error Loading Data\n{str(e)}\nPlease restart and try again."
             window.conversation_display.setHtml(markdown_to_html(error_msg))
+            continue
+
+
+def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any]) -> bool:
+    """
+    Load data from a database. Returns True if successful, False if user wants to retry.
+    """
+    db_type: str = source_config["db_type"]
+    credentials: Dict[str, Any] = source_config["credentials"]
+    selection_method = source_config.get(
+        "table_selection_method",
+        ConfigManager.get_table_selection_method(),
+    )
+    semantic_layer = source_config.get("semantic_layer")
+    logger.info(f"Connecting to {db_type} database...")
+
+    connector = DatabaseConnector()
+    while True:
+        success, message = connector.connect(db_type, credentials)
+        if success:
+            logger.info(f"Successfully connected to {db_type} database")
+            break
+
+        logger.warning(f"Database connection failed: {message}")
+        retry = QMessageBox.question(
+            None,
+            "Database Connection Failed",
+            f"{message}\n\nWould you like to try again?",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+        )
+
+        if retry == QMessageBox.StandardButton.Retry:
+            db_dialog = DatabaseConnectionDialog()
+            if db_dialog.exec() != QDialog.DialogCode.Accepted:
+                connector.close()
+                return False
+            source_config = db_dialog.get_config()
+            db_type = source_config["db_type"]
+            credentials = source_config["credentials"]
+        else:
+            logger.info("User cancelled database connection retry")
+            connector.close()
+            return False
+
+    try:
+        tables = connector.get_tables()
+        logger.debug(f"Retrieved {len(tables) if tables else 0} tables from database")
+    except Exception as e:
+        logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
+        QMessageBox.critical(None, "Table Discovery Failed", str(e))
+        connector.close()
+        return False
+
+    if not tables:
+        QMessageBox.critical(None, "No Tables Found", "The database does not contain any tables.")
+        connector.close()
+        return False
+
+    selected_tables = select_tables_with_method(
+        window,
+        connector,
+        tables,
+        selection_method,
+        semantic_layer,
+    )
+    connector.close()
+
+    if selected_tables is None:
+        logger.info("User cancelled table selection, returning to data source selection")
+        return False
+
+    table_value: Any = selected_tables if len(selected_tables) > 1 else selected_tables[0]
+    source_config["table"] = table_value
+
+    data_context, status = load_data("database", source_config)
+
+    if data_context is not None:
+        logger.info("Successfully loaded database data")
+        window.data_context = data_context
+        window.backend.data_context = data_context
+        
+        if window.backend.active_project:
+            creds_to_store = credentials.copy()
+            if "password" in creds_to_store:
+                creds_to_store["password"] = ""
+            window.backend.active_project.data_source = {
+                "db_type": db_type,
+                "credentials": creds_to_store,
+                "table": selected_tables,
+                "table_selection_method": selection_method,
+                "semantic_layer": semantic_layer,
+            }
+        
+        welcome_msg = window.backend.format_database_welcome_message(
+            db_type, selected_tables, data_context, status
+        )
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+    else:
+        window.conversation_display.setHtml(
+            markdown_to_html(
+                f"Connected to {db_type} database, but no data loaded.\n"
+                f"{status}\nYou can still ask questions!"
+            )
+        )
+        return True
+
+
+def _load_file_data(window: DataWorkspaceGUI, source_config: Dict[str, Any]) -> bool:
+    """
+    Load data from files. Returns True if successful, False if user wants to retry.
+    """
+    file_paths = source_config["file_paths"]
+    logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
+    data_context, welcome_msg = window.backend.load_file_data_with_ui(file_paths)
+
+    if data_context is not None:
+        window.data_context = data_context
+        if window.backend.active_project:
+            window.backend.active_project.data_source = {"file_paths": file_paths}
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+    else:
+        logger.error(f"Failed to load file data: {welcome_msg}")
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        QMessageBox.critical(window, "Data Loading Error", "Failed to load any files.")
+        return False
+
+
+def start_application():
+    """Start the AI Data Workspace application."""
+    logger.info("=" * 60)
+    logger.info("Starting AI Data Workspace application")
+    logger.info("=" * 60)
+    app = QApplication(sys.argv)
+
+    _preload_theme(app)
+
+    if not _ensure_api_configured():
+        return
+
+    result = _show_project_dialog()
+    if result is None:
+        return
+    window, _ = result
+
+    _load_project_and_chats(window)
+
+    data_already_loaded = window.backend.data_context is not None
+    logger.info(f"Data already loaded from project: {data_already_loaded}")
+
+    if data_already_loaded:
+        logger.info("Using data already loaded from project")
+        _display_loaded_project_data(window)
+    else:
+        if not _load_initial_data(window):
+            return
 
     logger.info("Displaying main application window")
     window.show()
