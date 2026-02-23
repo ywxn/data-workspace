@@ -519,8 +519,24 @@ class NLPTableSelector:
         # Aggregate to table scores
         table_scores = self._aggregate_to_tables(top_columns)
 
-        # Apply softmax to get confidences
-        confidences = self._softmax_scores(table_scores)
+        tokens = set(normalized_prompt.split())
+
+        # ---- lexical-only shortcut for short prompts ----
+        if len(tokens) <= 2:
+            lexical_tables = self._lexical_table_matches(tokens)
+            if len(lexical_tables) > 1:
+                return TableSelectionResult(
+                    status="success",
+                    tables=lexical_tables,
+                    confidences={t: 1.0 for t in lexical_tables},
+                    metadata={"mode": "lexical_keyword"},
+                )
+
+        # ---- hybrid lexical + semantic scoring ----
+        table_scores = self._apply_lexical_boost(table_scores, tokens)
+
+        # normalize instead of softmax
+        confidences = self._normalize_scores(table_scores)
 
         # Apply thresholds
         selected_tables, top_candidates = self._apply_thresholds(confidences, top_k)
@@ -620,6 +636,7 @@ class NLPTableSelector:
         Returns:
             Dict of normalized confidences (0-1)
         """
+        # deprecated: replaced by _normalize_scores
         if not scores:
             return {}
 
@@ -637,6 +654,56 @@ class NLPTableSelector:
         softmax = exp_scores / np.sum(exp_scores)
 
         return {table: float(prob) for table, prob in zip(tables, softmax)}
+
+    def _normalize_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
+        """
+        Normalize table scores relative to best score (no softmax).
+
+        This preserves multi-table matches for keyword prompts
+        where several tables are equally relevant.
+        """
+        if not scores:
+            return {}
+
+        max_score = max(scores.values())
+        if max_score == 0:
+            return {t: 0.0 for t in scores}
+
+        return {t: float(s / max_score) for t, s in scores.items()}
+
+    def _lexical_table_matches(self, tokens: Set[str]) -> List[str]:
+        """
+        Return tables whose normalized name contains any token.
+        """
+        matches = []
+        for table_name, meta in self.table_metadata.items():
+            if any(tok in meta.normalized_name for tok in tokens):
+                matches.append(table_name)
+        return matches
+
+    def _apply_lexical_boost(
+        self,
+        table_scores: Dict[str, float],
+        tokens: Set[str],
+        table_boost: float = 0.3,
+        column_boost: float = 0.15,
+    ) -> Dict[str, float]:
+        """
+        Boost table scores when prompt tokens appear in
+        table or column identifiers.
+        """
+        for table_name, meta in self.table_metadata.items():
+
+            # table name match
+            if any(tok in meta.normalized_name for tok in tokens):
+                table_scores[table_name] = table_scores.get(table_name, 0.0) + table_boost
+
+            # column name matches
+            for col in meta.columns.values():
+                if any(tok in col.normalized_name for tok in tokens):
+                    table_scores[table_name] = table_scores.get(table_name, 0.0) + column_boost
+
+        return table_scores
 
     def _apply_thresholds(
         self, confidences: Dict[str, float], top_k: int
