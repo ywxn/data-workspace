@@ -273,7 +273,11 @@ class NLPTableSelector:
         try:
             from sentence_transformers import SentenceTransformer
 
-            self.model = SentenceTransformer(model_name)
+            self.model = SentenceTransformer(
+                model_name,
+                cache_folder="models",
+                local_files_only=True,
+            )
         except ImportError:
             raise ImportError(
                 "sentence-transformers required. Install with: "
