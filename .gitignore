@@ -43,3 +43,6 @@ run_tests.py
 graphs/
 graph/
 temp_graphs/
+
+# ignore model files
+models/
