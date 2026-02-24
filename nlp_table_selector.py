@@ -631,34 +631,34 @@ class NLPTableSelector:
 
         return dict(table_scores)
 
-    def _softmax_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
-        """
-        Apply softmax to scores to get probabilities.
-
-        Args:
-            scores: Dict of table scores
-
-        Returns:
-            Dict of normalized confidences (0-1)
-        """
-        # deprecated: replaced by _normalize_scores
-        if not scores:
-            return {}
-
-        # Convert to array
-        tables = sorted(scores.keys())
-        score_array = np.array([scores[t] for t in tables])
-
-        # Subtract max for numerical stability
-        score_array = score_array - np.max(score_array)
-
-        # Apply exp
-        exp_scores = np.exp(score_array)
-
-        # Compute softmax
-        softmax = exp_scores / np.sum(exp_scores)
-
-        return {table: float(prob) for table, prob in zip(tables, softmax)}
+#    def _softmax_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
+#        """
+#        Apply softmax to scores to get probabilities.
+#
+#        Args:
+#            scores: Dict of table scores
+#
+#        Returns:
+#            Dict of normalized confidences (0-1)
+#        """
+#        # deprecated: replaced by _normalize_scores
+#        if not scores:
+#            return {}
+#
+#        # Convert to array
+#        tables = sorted(scores.keys())
+#        score_array = np.array([scores[t] for t in tables])
+#
+#        # Subtract max for numerical stability
+#        score_array = score_array - np.max(score_array)
+#
+#        # Apply exp
+#        exp_scores = np.exp(score_array)
+#
+#        # Compute softmax
+#        softmax = exp_scores / np.sum(exp_scores)
+#
+#        return {table: float(prob) for table, prob in zip(tables, softmax)}
 
     def _normalize_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
         """
