@@ -242,3 +242,34 @@ class ConfigManager:
         if "api_keys" not in config:
             return False
         return bool(config["api_keys"])
+
+    @staticmethod
+    def get_table_selection_method() -> str:
+        """
+        Get the preferred table selection method.
+
+        Returns:
+            "manual" or "nlp"
+        """
+        config = ConfigManager.load_config()
+        return config.get("table_selection_method", "manual")
+
+    @staticmethod
+    def set_table_selection_method(method: str) -> Tuple[bool, str]:
+        """
+        Set the preferred table selection method.
+
+        Args:
+            method: "manual" or "nlp"
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        normalized = method.lower().strip()
+        if normalized not in ["manual", "nlp"]:
+            return False, "Invalid table selection method. Use 'manual' or 'nlp'."
+
+        config = ConfigManager.load_config()
+        config["table_selection_method"] = normalized
+        ConfigManager._logger.info(f"Table selection method set to: {normalized}")
+        return ConfigManager.save_config(config)

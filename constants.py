@@ -5,6 +5,8 @@ Centralizes constants used across modules for easier maintenance
 and configuration changes.
 """
 
+from pathlib import Path
+
 # LLM Configuration
 DEFAULT_LLM_PROVIDER = "openai"
 LLM_MAX_TOKENS_DEFAULT = 800
@@ -156,16 +158,37 @@ SAMPLE_ROWS_INFO = 3
 
 # File Size / Performance
 MAX_DATAFRAME_ROWS_WARNING = 1_000_000
+DB_MAX_ROWS_IN_MEMORY = 200_000
+DB_READ_CHUNK_SIZE = 50_000
+
+# SQL Column Type Handling
+SQL_LARGE_TYPES = [
+    "blob",
+    "bytea",
+    "binary",
+    "varbinary",
+    "image",
+    "json",
+    "jsonb",
+    "xml",
+    "geography",
+    "geometry",
+]
 
 # HTML/Markdown Conversion
-MARKDOWN_CSS_TABLE_STYLE = (
-    "border-collapse: collapse; width: 100%; margin: 10px 0; font-family: monospace;"
-)
-MARKDOWN_CSS_TABLE_HEADER = "background-color: #f0f0f0;"
-MARKDOWN_CSS_TABLE_CELL = "border: 1px solid #999; padding: 10px;"
-MARKDOWN_CSS_TABLE_CELL_ALT = "#f9f9f9"
+_CSS_DIR = Path(__file__).resolve().parent / "css"
 
-MARKDOWN_CSS_CODE_BLOCK = "background-color: #f5f5f5; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;"
+
+def _read_css_file(filename: str) -> str:
+    return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
+
+
+MARKDOWN_CSS_TABLE_STYLE = _read_css_file("markdown_table_style.css")
+MARKDOWN_CSS_TABLE_HEADER = _read_css_file("markdown_table_header.css")
+MARKDOWN_CSS_TABLE_CELL = _read_css_file("markdown_table_cell.css")
+MARKDOWN_CSS_TABLE_CELL_ALT = _read_css_file("markdown_table_cell_alt.css")
+
+MARKDOWN_CSS_CODE_BLOCK = _read_css_file("markdown_code_block.css")
 
 # Image Handling
 SUPPORTED_IMAGE_FORMATS = {
@@ -217,279 +240,231 @@ LOG_DIR_NAME = "logs"
 # Theme Stylesheets
 # ============================================================================
 
-DARK_THEME_STYLESHEET = """
-    QMainWindow, QDialog, QWidget {
-        background-color: #1e1e1e;
-        color: #e0e0e0;
-    }
-    
-    QLabel {
-        color: #e0e0e0;
-    }
-    
-    QTextEdit, QLineEdit {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        border: 1px solid #3d3d3d;
-        border-radius: 4px;
-        padding: 5px;
-    }
-    
-    QTextEdit:focus, QLineEdit:focus {
-        border: 1px solid #0d47a1;
-    }
-    
-    QPushButton {
-        background-color: #0d47a1;
-        color: #ffffff;
-        border: none;
-        border-radius: 4px;
-        padding: 5px 15px;
-        font-weight: bold;
-    }
-    
-    QPushButton:hover {
-        background-color: #1565c0;
-    }
-    
-    QPushButton:pressed {
-        background-color: #0d3f8f;
-    }
-    
-    QPushButton:disabled {
-        background-color: #424242;
-        color: #666666;
-    }
-    
-    QComboBox {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        border: 1px solid #3d3d3d;
-        border-radius: 4px;
-        padding: 5px;
-    }
-    
-    QComboBox::drop-down {
-        border: none;
-    }
-    
-    QComboBox QAbstractItemView {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        selection-background-color: #0d47a1;
-    }
-    
-    QListWidget {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        border: 1px solid #3d3d3d;
-        border-radius: 4px;
-    }
-    
-    QListWidget::item:selected {
-        background-color: #0d47a1;
-    }
-    
-    QListWidget::item:hover {
-        background-color: #383838;
-    }
-    
-    QScrollBar:vertical {
-        background-color: #2d2d2d;
-        width: 12px;
-        border: none;
-    }
-    
-    QScrollBar::handle:vertical {
-        background-color: #505050;
-        border-radius: 6px;
-        min-height: 20px;
-    }
-    
-    QScrollBar::handle:vertical:hover {
-        background-color: #606060;
-    }
-    
-    QScrollBar:horizontal {
-        background-color: #2d2d2d;
-        height: 12px;
-        border: none;
-    }
-    
-    QScrollBar::handle:horizontal {
-        background-color: #505050;
-        border-radius: 6px;
-        min-width: 20px;
-    }
-    
-    QScrollBar::handle:horizontal:hover {
-        background-color: #606060;
-    }
-    
-    QMenuBar {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        border-bottom: 1px solid #3d3d3d;
-    }
-    
-    QMenuBar::item:selected {
-        background-color: #0d47a1;
-    }
-    
-    QMenu {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        border: 1px solid #3d3d3d;
-    }
-    
-    QMenu::item:selected {
-        background-color: #0d47a1;
-    }
-    
-    QHeaderView::section {
-        background-color: #2d2d2d;
-        color: #e0e0e0;
-        padding: 5px;
-        border: 1px solid #3d3d3d;
-    }
-"""
+DARK_THEME_STYLESHEET = _read_css_file("dark_theme.qss")
+LIGHT_THEME_STYLESHEET = _read_css_file("light_theme.qss")
 
-LIGHT_THEME_STYLESHEET = """
-    QMainWindow, QDialog, QWidget {
-        background-color: #ffffff;
-        color: #000000;
-    }
-    
-    QLabel {
-        color: #000000;
-    }
-    
-    QTextEdit, QLineEdit {
-        background-color: #f5f5f5;
-        color: #000000;
-        border: 1px solid #d0d0d0;
-        border-radius: 4px;
-        padding: 5px;
-    }
-    
-    QTextEdit:focus, QLineEdit:focus {
-        border: 1px solid #1976d2;
-    }
-    
-    QPushButton {
-        background-color: #1976d2;
-        color: #ffffff;
-        border: none;
-        border-radius: 4px;
-        padding: 5px 15px;
-        font-weight: bold;
-    }
-    
-    QPushButton:hover {
-        background-color: #1565c0;
-    }
-    
-    QPushButton:pressed {
-        background-color: #0d47a1;
-    }
-    
-    QPushButton:disabled {
-        background-color: #e0e0e0;
-        color: #999999;
-    }
-    
-    QComboBox {
-        background-color: #f5f5f5;
-        color: #000000;
-        border: 1px solid #d0d0d0;
-        border-radius: 4px;
-        padding: 5px;
-    }
-    
-    QComboBox::drop-down {
-        border: none;
-    }
-    
-    QComboBox QAbstractItemView {
-        background-color: #ffffff;
-        color: #000000;
-        selection-background-color: #1976d2;
-    }
-    
-    QListWidget {
-        background-color: #f5f5f5;
-        color: #000000;
-        border: 1px solid #d0d0d0;
-        border-radius: 4px;
-    }
-    
-    QListWidget::item:selected {
-        background-color: #1976d2;
-        color: #ffffff;
-    }
-    
-    QListWidget::item:hover {
-        background-color: #eeeeee;
-    }
-    
-    QScrollBar:vertical {
-        background-color: #f5f5f5;
-        width: 12px;
-        border: none;
-    }
-    
-    QScrollBar::handle:vertical {
-        background-color: #c0c0c0;
-        border-radius: 6px;
-        min-height: 20px;
-    }
-    
-    QScrollBar::handle:vertical:hover {
-        background-color: #a0a0a0;
-    }
-    
-    QScrollBar:horizontal {
-        background-color: #f5f5f5;
-        height: 12px;
-        border: none;
-    }
-    
-    QScrollBar::handle:horizontal {
-        background-color: #c0c0c0;
-        border-radius: 6px;
-        min-width: 20px;
-    }
-    
-    QScrollBar::handle:horizontal:hover {
-        background-color: #a0a0a0;
-    }
-    
-    QMenuBar {
-        background-color: #f5f5f5;
-        color: #000000;
-        border-bottom: 1px solid #d0d0d0;
-    }
-    
-    QMenuBar::item:selected {
-        background-color: #1976d2;
-        color: #ffffff;
-    }
-    
-    QMenu {
-        background-color: #ffffff;
-        color: #000000;
-        border: 1px solid #d0d0d0;
-    }
-    
-    QMenu::item:selected {
-        background-color: #1976d2;
-        color: #ffffff;
-    }
-    
-    QHeaderView::section {
-        background-color: #f5f5f5;
-        color: #000000;
-        padding: 5px;
-        border: 1px solid #d0d0d0;
-    }
-"""
+# ============================================================================
+# NLP Table Selector
+# ============================================================================
+
+# Default acronym dictionary for database schemas
+DEFAULT_ACRONYMS = {
+    # --- Quantities / numeric ---
+    "amt": "amount",
+    "qty": "quantity",
+    "num": "number",
+    "cnt": "count",
+    "val": "value",
+    "pct": "percent",
+    "avg": "average",
+    "sum": "total",
+    "tot": "total",
+    "max": "maximum",
+    "min": "minimum",
+    "ratio": "ratio",
+    "rate": "rate",
+    "diff": "difference",
+    "chg": "change",
+    "bal": "balance",
+    "calc": "calculated",
+    # --- Identifiers / keys ---
+    "id": "identifier",
+    "pk": "primary_key",
+    "fk": "foreign_key",
+    "uid": "unique_identifier",
+    "guid": "global_identifier",
+    "seq": "sequence",
+    "key": "key",
+    "ref": "reference",
+    "xref": "cross_reference",
+    # --- Dates / time ---
+    "dt": "date",
+    "ts": "timestamp",
+    "tm": "time",
+    "yr": "year",
+    "yrmo": "year_month",
+    "mo": "month",
+    "wk": "week",
+    "qtr": "quarter",
+    "fy": "fiscal_year",
+    "fym": "fiscal_month",
+    "dow": "day_of_week",
+    "doy": "day_of_year",
+    "start": "start",
+    "end": "end",
+    "dur": "duration",
+    "age": "age",
+    # --- Status / flags ---
+    "status": "status",
+    "stat": "status",
+    "st": "state",
+    "flag": "flag",
+    "ind": "indicator",
+    "active": "active",
+    "inactive": "inactive",
+    "pend": "pending",
+    "comp": "completed",
+    "fail": "failed",
+    "succ": "successful",
+    "valid": "valid",
+    "invalid": "invalid",
+    "req": "required",
+    "opt": "optional",
+    # --- Text / description ---
+    "desc": "description",
+    "msg": "message",
+    "note": "note",
+    "comment": "comment",
+    "title": "title",
+    "label": "label",
+    "name": "name",
+    "alias": "alias",
+    "abbr": "abbreviation",
+    "txt": "text",
+    # --- Categories / grouping ---
+    "type": "type",
+    "cat": "category",
+    "grp": "group",
+    "class": "classification",
+    "seg": "segment",
+    "dept": "department",
+    "div": "division",
+    "region": "region",
+    "zone": "zone",
+    # --- Financial / sales ---
+    "acct": "account",
+    "txn": "transaction",
+    "gl": "general_ledger",
+    "ar": "accounts_receivable",
+    "ap": "accounts_payable",
+    "rev": "revenue",
+    "exp": "expense",
+    "inc": "income",
+    "cost": "cost",
+    "price": "price",
+    "amt_due": "amount_due",
+    "disc": "discount",
+    "tax": "tax",
+    "fee": "fee",
+    "margin": "margin",
+    "profit": "profit",
+    "sale": "sale",
+    "sales": "sales",
+    "purchase": "purchase",
+    "purch": "purchase",
+    # --- Orders / inventory / logistics ---
+    "ord": "order",
+    "po": "purchase_order",
+    "so": "sales_order",
+    "inv": "invoice",
+    "ship": "shipment",
+    "rcv": "received",
+    "recv": "received",
+    "deliv": "delivered",
+    "qty_on_hand": "quantity_on_hand",
+    "qty_avail": "quantity_available",
+    "qty_alloc": "quantity_allocated",
+    "sku": "stock_keeping_unit",
+    "item": "item",
+    "prod": "product",
+    "inventory": "inventory",
+    "stock": "stock",
+    "wh": "warehouse",
+    "bin": "bin",
+    "lot": "lot",
+    "batch": "batch",
+    "uom": "unit_of_measure",
+    "pack": "package",
+    # --- People / org ---
+    "cust": "customer",
+    "client": "client",
+    "user": "user",
+    "usr": "user",
+    "emp": "employee",
+    "empl": "employee",
+    "mgr": "manager",
+    "sup": "supervisor",
+    "owner": "owner",
+    "vendor": "vendor",
+    "supp": "supplier",
+    "partner": "partner",
+    # --- Location / address ---
+    "addr": "address",
+    "street": "street",
+    "apt": "apartment",
+    "suite": "suite",
+    "bldg": "building",
+    "fl": "floor",
+    "rm": "room",
+    "loc": "location",
+    "city": "city",
+    "state": "state",
+    "prov": "province",
+    "region": "region",
+    "country": "country",
+    "zip": "zipcode",
+    "postal": "postal_code",
+    "lat": "latitude",
+    "lon": "longitude",
+    "lng": "longitude",
+    "geo": "geolocation",
+    # --- Contact ---
+    "phone": "phone",
+    "tel": "telephone",
+    "fax": "fax",
+    "mobile": "mobile",
+    "cell": "cellular",
+    "email": "email",
+    "ext": "extension",
+    "home": "home",
+    "work": "work",
+    "other": "other",
+    # --- File / system / metadata ---
+    "src": "source",
+    "dst": "destination",
+    "path": "path",
+    "url": "url",
+    "uri": "uri",
+    "file": "file",
+    "fname": "filename",
+    "fpath": "filepath",
+    "dir": "directory",
+    "size": "size",
+    "len": "length",
+    "hash": "hash",
+    "chk": "checksum",
+    "enc": "encoding",
+    "fmt": "format",
+    # --- Versioning / lifecycle ---
+    "ver": "version",
+    "rev": "revision",
+    "iter": "iteration",
+    "stage": "stage",
+    "step": "step",
+    "init": "initial",
+    "final": "final",
+    "curr": "current",
+    "prev": "previous",
+    "next": "next",
+    "crt": "created",
+    "upd": "updated",
+    "mod": "modified",
+    "del": "deleted",
+    "arch": "archive",
+    "hist": "history",
+    # --- Quality / metrics ---
+    "score": "score",
+    "metric": "metric",
+    "kpi": "key_performance_indicator",
+    "sla": "service_level_agreement",
+    "err": "error",
+    "warn": "warning",
+    "info": "information",
+    # --- Misc ---
+    "std": "standard",
+    "cfg": "configuration",
+    "param": "parameter",
+    "attr": "attribute",
+    "prop": "property",
+    "meta": "metadata",
+}

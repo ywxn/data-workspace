@@ -2,8 +2,9 @@ import sys
 import asyncio
 import pandas as pd
 import webbrowser
+import json
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup
+from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -27,7 +28,7 @@ from PyQt6.QtWidgets import (
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
-from processing import load_data
+from processing import load_data, merge_dataframes
 from connector import DatabaseConnector
 from config import ConfigManager
 from markdown_converter import markdown_to_html
@@ -35,6 +36,7 @@ from PyQt6.QtGui import QPalette
 from typing import Optional, Dict, Any, List
 import random
 import os
+from nlp_table_selector import NLPTableSelector
 from constants import (
     PLACEHOLDER_PROJECT_NAMES,
     PLACEHOLDER_PROJECT_DESCRIPTIONS,
@@ -77,6 +79,8 @@ class APIKeyConfigDialog(QDialog):
         self.setWindowTitle("API Key Configuration")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
@@ -136,6 +140,7 @@ class APIKeyConfigDialog(QDialog):
 
     def on_provider_changed(self, provider):
         """Clear input when provider changes."""
+        logger.debug(f"API provider changed to: {provider}")
         self.api_key_input.clear()
         self.key_is_visible = False
         self.toggle_visibility_btn.setText("Show Key")
@@ -145,6 +150,7 @@ class APIKeyConfigDialog(QDialog):
     def toggle_key_visibility(self):
         """Toggle visibility of API key."""
         self.key_is_visible = not self.key_is_visible
+        logger.debug(f"API key visibility toggled to: {self.key_is_visible}")
         if self.key_is_visible:
             self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
             self.toggle_visibility_btn.setText("Hide Key")
@@ -156,8 +162,10 @@ class APIKeyConfigDialog(QDialog):
         """Validate and save the API key."""
         provider = self.provider_combo.currentText()
         api_key = self.api_key_input.text().strip()
+        logger.debug(f"Validating API key for provider: {provider}")
 
         if not api_key:
+            logger.warning(f"Empty API key provided for provider: {provider}")
             QMessageBox.warning(
                 self, "Empty API Key", f"Please enter a valid {provider} API key."
             )
@@ -165,6 +173,7 @@ class APIKeyConfigDialog(QDialog):
 
         # Save to config
         success, message = ConfigManager.set_api_key(provider.lower(), api_key)
+        logger.info(f"API key save attempt for {provider}: {success}")
 
         if success:
             # Set as default API if it's the first one
@@ -174,11 +183,13 @@ class APIKeyConfigDialog(QDialog):
             ):
                 ConfigManager.set_default_api(provider.lower())
 
+            logger.info(f"{provider} API key configured successfully")
             QMessageBox.information(
                 self, "Success", f"{provider} API key configured successfully!"
             )
             self.accept()
         else:
+            logger.error(f"Failed to save {provider} API key: {message}")
             QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
 
 
@@ -190,6 +201,8 @@ class CreateProjectDialog(QDialog):
         self.setWindowTitle("Create or Load Project")
         self.setModal(True)
         self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self.project_id: Optional[str] = None
         self.backend = DataWorkspaceBackend()
@@ -233,11 +246,11 @@ class CreateProjectDialog(QDialog):
         )
         form_layout.addRow("Project Name:", self.project_name_input)
 
-        self.project_desc_input = QTextEdit()
+        self.project_desc_input = QLineEdit()
         self.project_desc_input.setPlaceholderText(
             PLACEHOLDER_PROJECT_DESCRIPTIONS[random_placeholder_index]
         )
-        self.project_desc_input.setMaximumHeight(100)
+        self.project_desc_input.returnPressed.connect(self.create_project)
         form_layout.addRow("Description:", self.project_desc_input)
 
         # Put form in a container so we can show/hide easily
@@ -252,6 +265,7 @@ class CreateProjectDialog(QDialog):
 
     def show_create_form(self):
         """Show the create project form when the user clicks the Create button."""
+        logger.debug("Showing project creation form")
         self.form_container.setVisible(True)
         self.project_name_input.setFocus()
 
@@ -270,20 +284,25 @@ class CreateProjectDialog(QDialog):
 
     def open_load_dialog(self):
         """Open a dialog that lists local saved projects and attempt to load the selected one."""
+        logger.debug("Opening project load dialog")
         files = self.backend.list_saved_projects()
         projects_dir = os.path.abspath("projects")
         if not files:
+            logger.info(f"No saved projects found in {projects_dir}")
             QMessageBox.information(
                 self, "No Projects", f"No saved projects found in {projects_dir}"
             )
             return
 
+        logger.debug(f"Found {len(files)} saved project(s)")
         proj_dialog = ProjectLoadDialog(files, self)
         if proj_dialog.exec() != QDialog.DialogCode.Accepted:
+            logger.debug("User cancelled project load dialog")
             return
 
         file_name = proj_dialog.get_selected_file()
         if not file_name:
+            logger.warning("Project file selected but name is empty")
             QMessageBox.warning(self, "Error", "No project file selected.")
             return
 
@@ -348,13 +367,18 @@ class CreateProjectDialog(QDialog):
                 connector.close()
                 return
 
-            connector.close()
-
             if not tables:
+                connector.close()
                 QMessageBox.critical(
                     self, "No Tables Found", "The database does not contain any tables."
                 )
                 return
+
+            selection_method = ds.get(
+                "table_selection_method",
+                ConfigManager.get_table_selection_method(),
+            )
+            semantic_layer = ds.get("semantic_layer")
 
             # If the project previously stored a table selection, try to reuse it
             saved_table = ds.get("table")
@@ -362,11 +386,18 @@ class CreateProjectDialog(QDialog):
                 selected_tables = (
                     saved_table if isinstance(saved_table, list) else [saved_table]
                 )
+                connector.close()
             else:
-                table_dialog = TableSelectionDialog(tables)
-                if table_dialog.exec() != QDialog.DialogCode.Accepted:
+                selected_tables = select_tables_with_method(
+                    self,
+                    connector,
+                    tables,
+                    selection_method,
+                    semantic_layer,
+                )
+                connector.close()
+                if not selected_tables:
                     return
-                selected_tables = table_dialog.get_selected_tables()
 
             source_config = {
                 "db_type": new_config["db_type"],
@@ -385,6 +416,8 @@ class CreateProjectDialog(QDialog):
                     "db_type": new_config["db_type"],
                     "credentials": credentials_to_store,
                     "table": selected_tables,
+                    "table_selection_method": selection_method,
+                    "semantic_layer": semantic_layer,
                 }
                 QMessageBox.information(
                     self,
@@ -430,24 +463,32 @@ class CreateProjectDialog(QDialog):
 
     def create_project(self):
         """Create project, save it to disk, and close dialog"""
+        logger.debug("Creating new project from dialog")
         project_name = self.project_name_input.text().strip()
-        description = self.project_desc_input.toPlainText().strip()
+        description = self.project_desc_input.text().strip()
 
         if not project_name:
+            logger.warning("Project creation attempted without project name")
             QMessageBox.warning(self, "Validation Error", "Project name is required!")
             return
 
+        logger.info(f"Creating project: '{project_name}'")
         success, message, project_id = self.backend.create_project(
             project_name, description
         )
 
         if not success:
+            logger.error(f"Project creation failed: {message}")
             QMessageBox.critical(self, "Project Creation Failed", message)
             return
 
+        logger.info(f"Project created successfully: {project_id}")
+
         # Create an initial chat for the new project
+        logger.debug(f"Creating initial chat for project {project_id}")
         success, msg, chat_id = self.backend.create_chat_session("Chat 1")
         if not success:
+            logger.warning(f"Failed to create initial chat: {msg}")
             QMessageBox.warning(
                 self,
                 "Warning",
@@ -455,14 +496,17 @@ class CreateProjectDialog(QDialog):
             )
 
         # Attempt to persist project to ./projects
+        logger.debug(f"Saving project {project_id} to disk")
         saved, save_msg = self.backend.save_project_to_disk(project_id)
         if not saved:
+            logger.warning(f"Failed to save project to disk: {save_msg}")
             QMessageBox.warning(
                 self,
                 "Project Saved (Memory Only)",
                 f"Project created but failed to save to disk: {save_msg}",
             )
         else:
+            logger.info(f"Project saved to disk successfully: {save_msg}")
             QMessageBox.information(self, "Project Saved", save_msg)
 
         self.project_id = project_id
@@ -490,6 +534,8 @@ class DataSourceDialog(QDialog):
         self.setWindowTitle("Select Data Source")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self.data_source_type = None  # 'database', 'file', or None (cancelled)
         self.data_source_config = {}
@@ -528,14 +574,17 @@ class DataSourceDialog(QDialog):
 
     def select_database(self):
         """Show database connection dialog"""
+        logger.debug("Opening database connection dialog")
         db_dialog = DatabaseConnectionDialog(self)
         if db_dialog.exec() == QDialog.DialogCode.Accepted:
+            logger.info("Database connection configuration accepted")
             self.data_source_type = "database"
             self.data_source_config = db_dialog.get_config()
             self.accept()
 
     def select_files(self):
         """Show file selection dialog"""
+        logger.debug("Opening file selection dialog")
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Data File(s)",
@@ -544,6 +593,7 @@ class DataSourceDialog(QDialog):
         )
 
         if files:
+            logger.info(f"User selected {len(files)} data file(s)")
             self.data_source_type = "file"
             self.data_source_config = {"file_paths": files}
             self.accept()
@@ -557,6 +607,10 @@ class DatabaseConnectionDialog(QDialog):
         self.setWindowTitle("Database Connection")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        self.semantic_layer: Optional[Dict[str, Any]] = None
 
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
@@ -568,6 +622,14 @@ class DatabaseConnectionDialog(QDialog):
         )
         self.db_type_combo.currentTextChanged.connect(self.on_db_type_changed)
         form_layout.addRow("Database Type:", self.db_type_combo)
+
+        # Table selection method
+        self.selection_method_combo = QComboBox()
+        self.selection_method_combo.addItems(["Manual", "NLP (semantic)"])
+        method_pref = ConfigManager.get_table_selection_method()
+        if method_pref == "nlp":
+            self.selection_method_combo.setCurrentIndex(1)
+        form_layout.addRow("Table Selection:", self.selection_method_combo)
 
         # Common fields
         self.host_input = QLineEdit()
@@ -591,6 +653,13 @@ class DatabaseConnectionDialog(QDialog):
         self.password_input.setPlaceholderText("Password")
         self.password_label = form_layout.addRow("Password:", self.password_input)
 
+        # Semantic layer import
+        self.semantic_layer_label = QLabel("No semantic layer loaded")
+        self.semantic_layer_button = QPushButton("Import Semantic Layer (JSON)")
+        self.semantic_layer_button.clicked.connect(self.import_semantic_layer)
+        form_layout.addRow("", self.semantic_layer_button)
+        form_layout.addRow("", self.semantic_layer_label)
+
         layout.addLayout(form_layout)
 
         # Buttons
@@ -606,6 +675,7 @@ class DatabaseConnectionDialog(QDialog):
 
     def on_db_type_changed(self, db_type):
         """Show/hide fields based on database type"""
+        logger.debug(f"Database type changed to: {db_type}")
         is_sqlite = db_type == "sqlite"
 
         # Hide host/port/user/password for SQLite
@@ -622,18 +692,28 @@ class DatabaseConnectionDialog(QDialog):
 
     def validate_and_accept(self):
         """Validate inputs before accepting"""
+        logger.debug(
+            f"Validating database connection for type: {self.db_type_combo.currentText()}"
+        )
         db_type = self.db_type_combo.currentText()
         database = self.database_input.text().strip()
 
         if not database:
+            logger.warning("Database validation failed: missing database name/path")
             QMessageBox.warning(self, "Validation Error", "Database field is required!")
             return
 
         if db_type != "sqlite":
             host = self.host_input.text().strip()
             if not host:
+                logger.warning("Database validation failed: missing host")
                 QMessageBox.warning(self, "Validation Error", "Host is required!")
                 return
+
+        method_text = self.selection_method_combo.currentText().lower()
+        method = "nlp" if "nlp" in method_text else "manual"
+        ConfigManager.set_table_selection_method(method)
+        logger.info(f"Table selection method set to: {method}")
 
         self.accept()
 
@@ -657,17 +737,94 @@ class DatabaseConnectionDialog(QDialog):
             if port:
                 credentials["port"] = int(port)
 
-        return {"db_type": db_type, "credentials": credentials}
+        method_text = self.selection_method_combo.currentText().lower()
+        method = "nlp" if "nlp" in method_text else "manual"
+
+        return {
+            "db_type": db_type,
+            "credentials": credentials,
+            "table_selection_method": method,
+            "semantic_layer": self.semantic_layer,
+        }
+
+    def import_semantic_layer(self) -> None:
+        """Load semantic layer mapping from JSON file."""
+        logger.debug("Attempting to import semantic layer")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Semantic Layer JSON",
+            "",
+            "JSON Files (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            logger.debug("Semantic layer import cancelled by user")
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Semantic layer must be a JSON object")
+            self.semantic_layer = data
+            self.semantic_layer_label.setText(f"Loaded: {os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Semantic Layer Error",
+                f"Failed to load semantic layer: {str(e)}",
+            )
+
+
+class NLPPromptDialog(QDialog):
+    """Dialog to capture an NLP prompt for table selection."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Describe the Data You Need")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("Describe the tables you want to analyze")
+        title.setFont(QFont("Roboto", 12, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        self.prompt_input = QLineEdit()
+        self.prompt_input.setPlaceholderText(
+            "Example: customer orders joined with payments and refunds"
+        )
+        self.prompt_input.returnPressed.connect(self.accept)
+        layout.addWidget(self.prompt_input)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_prompt(self) -> str:
+        return self.prompt_input.text().strip()
 
 
 class TableSelectionDialog(QDialog):
     """Dialog to select one or more database tables."""
 
-    def __init__(self, table_names: List[str], parent=None):
+    def __init__(
+        self,
+        table_names: List[str],
+        parent=None,
+        preselected: Optional[List[str]] = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Select Tables")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         self._table_names = table_names
 
@@ -686,8 +843,12 @@ class TableSelectionDialog(QDialog):
 
         self.table_list = QListWidget()
         self.table_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        preselected_set = set(preselected or [])
         for table_name in table_names:
-            self.table_list.addItem(QListWidgetItem(table_name))
+            item = QListWidgetItem(table_name)
+            if table_name in preselected_set:
+                item.setSelected(True)
+            self.table_list.addItem(item)
         layout.addWidget(self.table_list)
 
         layout.addSpacing(10)
@@ -719,6 +880,8 @@ class ProjectLoadDialog(QDialog):
         self.setWindowTitle("Load Local Project")
         self.setModal(True)
         self.setMinimumWidth(450)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
@@ -762,6 +925,75 @@ class ProjectLoadDialog(QDialog):
         return items[0].text()
 
 
+def select_tables_with_method(
+    parent: QWidget,
+    connector: DatabaseConnector,
+    tables: List[str],
+    selection_method: str,
+    semantic_layer: Optional[Dict[str, Any]] = None,
+) -> Optional[List[str]]:
+    """Select tables using manual list or NLP-based selection."""
+    method = (selection_method or "manual").lower()
+
+    if method == "nlp":
+        prompt_dialog = NLPPromptDialog(parent)
+        if prompt_dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        prompt = prompt_dialog.get_prompt()
+        if not prompt:
+            QMessageBox.warning(
+                parent,
+                "Missing Prompt",
+                "Please provide a description to select tables.",
+            )
+            return None
+
+        try:
+            selector = NLPTableSelector(
+                connector,
+                semantic_layer=semantic_layer or {},
+            )
+            result = selector.select_tables(prompt, top_k=3)
+        except Exception as e:
+            QMessageBox.warning(
+                parent,
+                "NLP Table Selection Failed",
+                f"{str(e)}\n\nFalling back to manual selection.",
+            )
+            method = "manual"
+        else:
+            if result.status == "no_match" or not result.tables:
+                QMessageBox.information(
+                    parent,
+                    "No Matches",
+                    "No relevant tables found. Please select manually.",
+                )
+                method = "manual"
+            else:
+                candidate_tables = result.tables[:]
+                if result.top_candidates:
+                    candidate_tables = list(
+                        dict.fromkeys(result.tables + result.top_candidates)
+                    )
+
+                table_dialog = TableSelectionDialog(
+                    candidate_tables, parent, preselected=result.tables
+                )
+                if table_dialog.exec() != QDialog.DialogCode.Accepted:
+                    return None
+                return table_dialog.get_selected_tables()
+
+    if method == "manual":
+        table_dialog = TableSelectionDialog(tables, parent)
+        if table_dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return table_dialog.get_selected_tables()
+
+    QMessageBox.warning(parent, "Selection Error", "Invalid table selection method.")
+    return None
+
+
 class QueryWorker(QThread):
     """Worker thread to handle long-running queries without blocking UI"""
 
@@ -776,18 +1008,28 @@ class QueryWorker(QThread):
 
     def run(self):
         try:
+            logger.debug(
+                f"QueryWorker starting execution for query: {self.query[:100]}..."
+            )
             # Run async agent methods in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # Use the new orchestrated execute_query method
+            logger.debug(
+                f"Executing query asynchronously (dataframe shape: {self.df.shape})"
+            )
             result = loop.run_until_complete(
                 self.agent.execute_query(self.query, self.df)
+            )
+            logger.info(
+                f"Query execution completed successfully (result length: {len(result)} chars)"
             )
             self.result_signal.emit(result)
 
             loop.close()
         except Exception as e:
+            logger.error(f"Query execution failed: {str(e)}", exc_info=True)
             self.error_signal.emit(f"Error: {str(e)}")
 
 
@@ -796,6 +1038,8 @@ class DataWorkspaceGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("AI Data Workspace")
         self.setGeometry(100, 100, 1400, 800)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
 
         # Create menu bar
         menu_bar = self.menuBar()
@@ -823,6 +1067,10 @@ class DataWorkspaceGUI(QMainWindow):
         connect_data_action = QAction("Connect Data Source...", self)
         connect_data_action.triggered.connect(self.connect_data_source)
         file_menu.addAction(connect_data_action)
+
+        connect_additional_action = QAction("Connect Additional Data Source...", self)
+        connect_additional_action.triggered.connect(self.connect_additional_data_source)
+        file_menu.addAction(connect_additional_action)
 
         api_settings_action = QAction("API Settings...", self)
         api_settings_action.triggered.connect(self.change_api_settings)
@@ -1009,8 +1257,10 @@ class DataWorkspaceGUI(QMainWindow):
 
     def show_chat_context_menu(self, position):
         """Show context menu for chat item on right-click"""
+        logger.debug("Chat context menu requested")
         item = self.chat_list.itemAt(position)
         if not item:
+            logger.debug("Chat context menu requested but no item at position")
             return
 
         menu = QMenu(self)
@@ -1258,11 +1508,12 @@ class DataWorkspaceGUI(QMainWindow):
 
     def stop_query(self):
         """Stop the currently running query"""
-        logger.info("Stopping query worker thread")
+        logger.info("User requested query cancellation")
         if self.worker and self.worker.isRunning():
+            logger.debug("Terminating running query worker thread")
             self.worker.terminate()
             self.worker.wait()
-            logger.info("Query worker thread terminated")
+            logger.info("Query worker thread successfully terminated")
 
             # Display cancellation message
             current_md = self.conversation_display.toMarkdown()
@@ -1322,9 +1573,11 @@ class DataWorkspaceGUI(QMainWindow):
 
     def clear_fields(self):
         """Clear conversation"""
+        logger.debug(f"Clearing chat fields for chat_id: {self.chat_id}")
         self.conversation_display.clear()
         self.query_input.clear()
         self.backend.clear_session()
+        logger.info("Chat fields cleared successfully")
 
     def save_project(self):
         """Save current project with all chats"""
@@ -1343,33 +1596,39 @@ class DataWorkspaceGUI(QMainWindow):
                 logger.error(f"Failed to save project: {msg}")
                 QMessageBox.warning(self, "Save Failed", msg)
         else:
-            logger.error(f"Project ID {self.project_id} not found in backend")
-            QMessageBox.warning(self, "No Project", "Project not found.")
+            logger.error(f"Project ID {self.project_id} not found in backend storage")
             QMessageBox.warning(
                 self, "Project Not Found", "Could not find project to save."
             )
 
     def refresh_chat_list(self):
         """Refresh the chat list in the sidebar for the active project."""
+        logger.debug("Refreshing chat list for active project")
         self.chat_list.clear()
 
         if self.backend.active_project is None:
+            logger.debug("No active project, chat list cleared")
             return
 
         # Populate chat list with all chats in the active project
-        for chat in self.backend.active_project.get_all_chats():
+        chats = self.backend.active_project.get_all_chats()
+        logger.debug(f"Loading {len(chats)} chats into chat list")
+        for chat in chats:
             item = QListWidgetItem(chat.title)
             item.setData(Qt.ItemDataRole.UserRole, chat.session_id)
             self.chat_list.addItem(item)
+        logger.info(f"Chat list refreshed with {len(chats)} chats")
 
     def refresh_project_list(self):
         """Refresh the entire UI when a project is loaded."""
+        logger.debug("Refreshing project UI")
         # Update project name label
         if self.backend.active_project:
-            self.project_name_label.setText(
-                f"Project: {self.backend.active_project.title}"
-            )
+            project_title = self.backend.active_project.title
+            logger.info(f"Loading project into UI: {project_title}")
+            self.project_name_label.setText(f"Project: {project_title}")
         else:
+            logger.debug("No active project, clearing project name label")
             self.project_name_label.setText("No Project Loaded")
 
         # Refresh chat list
@@ -1515,6 +1774,11 @@ class DataWorkspaceGUI(QMainWindow):
                         # Database connection flow
                         db_type = source_config.get("db_type")
                         credentials = source_config.get("credentials", {})
+                        selection_method = source_config.get(
+                            "table_selection_method",
+                            ConfigManager.get_table_selection_method(),
+                        )
+                        semantic_layer = source_config.get("semantic_layer")
                         logger.debug(f"Attempting to connect to {db_type} database")
                         connector = DatabaseConnector()
                         success, message = connector.connect(db_type, credentials)
@@ -1522,50 +1786,74 @@ class DataWorkspaceGUI(QMainWindow):
                         if success:
                             logger.info(f"Successfully connected to {db_type} database")
                             tables = connector.get_tables()
-                            connector.close()  # Close connector before using load_data
+
+                            if not tables:
+                                connector.close()
+                                QMessageBox.warning(
+                                    self,
+                                    "No Tables Found",
+                                    "The database does not contain any tables.",
+                                )
+                                return
 
                             if tables:
-                                table_dialog = TableSelectionDialog(tables, self)
-                                if table_dialog.exec() == QDialog.DialogCode.Accepted:
-                                    selected_tables = table_dialog.get_selected_tables()
-                                    if selected_tables:
-                                        # Use load_data from processing module
-                                        data_source_config = {
-                                            "db_type": db_type,
-                                            "credentials": credentials,
-                                            "table": (
-                                                selected_tables[0]
-                                                if len(selected_tables) == 1
-                                                else selected_tables
-                                            ),
-                                        }
-                                        df, status = load_data(
-                                            "database", data_source_config
+                                selected_tables = select_tables_with_method(
+                                    self,
+                                    connector,
+                                    tables,
+                                    selection_method,
+                                    semantic_layer,
+                                )
+                                connector.close()
+
+                                if selected_tables:
+                                    # Use load_data from processing module
+                                    data_source_config = {
+                                        "db_type": db_type,
+                                        "credentials": credentials,
+                                        "table": (
+                                            selected_tables[0]
+                                            if len(selected_tables) == 1
+                                            else selected_tables
+                                        ),
+                                    }
+                                    df, status = load_data(
+                                        "database", data_source_config
+                                    )
+                                    if df is not None:
+                                        self.backend.loaded_dataframe = df
+                                        self.dataframe = df
+                                        logger.info(
+                                            f"Successfully loaded data from tables: {selected_tables}, shape: {df.shape}"
                                         )
-                                        if df is not None:
-                                            self.backend.loaded_dataframe = df
-                                            self.dataframe = df
-                                            logger.info(
-                                                f"Successfully loaded data from tables: {selected_tables}, shape: {df.shape}"
-                                            )
-                                            welcome_msg = self.backend.format_database_welcome_message(
-                                                db_type, selected_tables, df, status
-                                            )
-                                            self.conversation_display.setHtml(
-                                                markdown_to_html(welcome_msg)
-                                            )
-                                            QMessageBox.information(
-                                                self,
-                                                "Data Loaded",
-                                                "Database data loaded successfully.",
-                                            )
-                                        else:
-                                            logger.warning(
-                                                f"Failed to load data from database: {status}"
-                                            )
-                                            QMessageBox.warning(
-                                                self, "Load Failed", status
-                                            )
+                                        welcome_msg = self.backend.format_database_welcome_message(
+                                            db_type, selected_tables, df, status
+                                        )
+                                        self.conversation_display.setHtml(
+                                            markdown_to_html(welcome_msg)
+                                        )
+                                        # Store data source in project
+                                        if self.backend.active_project:
+                                            creds_to_store = credentials.copy()
+                                            if "password" in creds_to_store:
+                                                creds_to_store["password"] = ""
+                                            self.backend.active_project.data_source = {
+                                                "db_type": db_type,
+                                                "credentials": creds_to_store,
+                                                "table": selected_tables,
+                                                "table_selection_method": selection_method,
+                                                "semantic_layer": semantic_layer,
+                                            }
+                                        QMessageBox.information(
+                                            self,
+                                            "Data Loaded",
+                                            "Database data loaded successfully.",
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"Failed to load data from database: {status}"
+                                        )
+                                        QMessageBox.warning(self, "Load Failed", status)
                         else:
                             logger.warning(f"Database connection failed: {message}")
                             QMessageBox.warning(self, "Connection Failed", message)
@@ -1599,6 +1887,156 @@ class DataWorkspaceGUI(QMainWindow):
                     )
         else:
             logger.info("User cancelled data source connection")
+
+    def connect_additional_data_source(self):
+        """Connect additional data sources without overwriting existing data."""
+        logger.info("User initiated additional data source connection")
+
+        if self.dataframe is None:
+            QMessageBox.information(
+                self,
+                "No Data Loaded",
+                "No data is currently loaded. Use Connect Data Source first.",
+            )
+            self.connect_data_source()
+            return
+
+        source_dialog = DataSourceDialog(self)
+        if source_dialog.exec() != QDialog.DialogCode.Accepted:
+            logger.info("User cancelled additional data source connection")
+            return
+
+        source_type = source_dialog.data_source_type
+        source_config = source_dialog.data_source_config
+        logger.info(f"Additional data source type selected: {source_type}")
+
+        new_df: Optional[pd.DataFrame] = None
+        source_label = ""
+        source_entry: Dict[str, Any] = {}
+
+        try:
+            if source_type == "database":
+                db_type = source_config.get("db_type")
+                credentials = source_config.get("credentials", {})
+                selection_method = source_config.get(
+                    "table_selection_method",
+                    ConfigManager.get_table_selection_method(),
+                )
+                semantic_layer = source_config.get("semantic_layer")
+                connector = DatabaseConnector()
+                success, message = connector.connect(db_type, credentials)
+
+                if not success:
+                    QMessageBox.warning(self, "Connection Failed", message)
+                    return
+
+                tables = connector.get_tables()
+                if not tables:
+                    connector.close()
+                    QMessageBox.warning(
+                        self,
+                        "No Tables Found",
+                        "The database does not contain any tables.",
+                    )
+                    return
+
+                selected_tables = select_tables_with_method(
+                    self,
+                    connector,
+                    tables,
+                    selection_method,
+                    semantic_layer,
+                )
+                connector.close()
+
+                if not selected_tables:
+                    return
+
+                data_source_config = {
+                    "db_type": db_type,
+                    "credentials": credentials,
+                    "table": (
+                        selected_tables[0]
+                        if len(selected_tables) == 1
+                        else selected_tables
+                    ),
+                }
+                new_df, status = load_data("database", data_source_config)
+                if new_df is None:
+                    QMessageBox.warning(self, "Load Failed", status)
+                    return
+
+                source_label = (
+                    f"Database ({db_type}) tables: {', '.join(selected_tables)}"
+                )
+                creds_to_store = credentials.copy()
+                if "password" in creds_to_store:
+                    creds_to_store["password"] = ""
+                source_entry = {
+                    "db_type": db_type,
+                    "credentials": creds_to_store,
+                    "table": selected_tables,
+                    "table_selection_method": selection_method,
+                    "semantic_layer": semantic_layer,
+                }
+
+            elif source_type == "file":
+                file_paths = source_config.get("file_paths", [])
+                if not file_paths:
+                    QMessageBox.warning(self, "Load Failed", "No files selected.")
+                    return
+
+                new_df, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
+                if new_df is None:
+                    QMessageBox.warning(self, "Load Failed", welcome_msg)
+                    return
+
+                source_label = (
+                    f"Files: {', '.join([os.path.basename(p) for p in file_paths])}"
+                )
+                source_entry = {"file_paths": file_paths}
+
+            else:
+                QMessageBox.warning(self, "Error", "Unknown source type.")
+                return
+
+            merged_df, merge_strategy = merge_dataframes([self.dataframe, new_df])
+            self.dataframe = merged_df
+            self.backend.loaded_dataframe = merged_df
+
+            if self.backend.active_project is not None:
+                project_ds = self.backend.active_project.data_source
+                if not isinstance(project_ds, dict):
+                    project_ds = {}
+                additional_sources = project_ds.get("additional_sources", [])
+                additional_sources.append(source_entry)
+                project_ds["additional_sources"] = additional_sources
+                self.backend.active_project.data_source = project_ds
+
+            merge_label = merge_strategy or "Merged with existing data"
+            combined_msg = self.backend._join_markdown_blocks(
+                [
+                    "### Additional Data Loaded",
+                    f"**Previous Data Source:** {self.backend.active_project.data_source if self.backend.active_project else 'N/A'}",
+                    f"**Added:** {source_label}",
+                    f"**Merge Strategy:** {merge_label}",
+                    f"**Combined Shape:** {len(merged_df)} rows, {len(merged_df.columns)} columns",
+                ]
+            )
+            self.conversation_display.setHtml(markdown_to_html(combined_msg))
+            QMessageBox.information(
+                self,
+                "Data Loaded",
+                "Additional data loaded and merged successfully.",
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error loading additional data source: {str(e)}", exc_info=True
+            )
+            QMessageBox.critical(
+                self, "Error", f"Failed to load additional data: {str(e)}"
+            )
 
     def change_api_settings(self):
         """Open API settings dialog"""
@@ -1727,14 +2165,14 @@ class DataWorkspaceGUI(QMainWindow):
             current_size = font.pointSize()
             new_size = max(6, current_size + delta)
             logger.info(
-                f"Adjusting font size from {current_size} to {new_size} (delta: {delta})"
+                f"Adjusting font size from {current_size}pt to {new_size}pt (delta: {delta})"
             )
             font.setPointSize(new_size)
             self.setFont(font)
             QApplication.instance().setFont(font)
             logger.debug("Font size adjusted successfully")
         except Exception as e:
-            logger.error(f"Error adjusting font size: {str(e)}", exc_info=True)
+            logger.error(f"Failed to adjust font size: {str(e)}", exc_info=True)
 
     def open_docs(self):
         """Open documentation in default browser"""
@@ -1903,6 +2341,11 @@ def start_application():
             if source_type == "database":
                 db_type: str = source_config["db_type"]
                 credentials: Dict[str, Any] = source_config["credentials"]
+                selection_method = source_config.get(
+                    "table_selection_method",
+                    ConfigManager.get_table_selection_method(),
+                )
+                semantic_layer = source_config.get("semantic_layer")
                 logger.info(f"Connecting to {db_type} database...")
 
                 connector = DatabaseConnector()
@@ -1941,9 +2384,8 @@ def start_application():
                 except Exception as e:
                     logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
                     QMessageBox.critical(None, "Table Discovery Failed", str(e))
-                    return
-                finally:
                     connector.close()
+                    return
 
                 if not tables:
                     QMessageBox.critical(
@@ -1953,15 +2395,21 @@ def start_application():
                     )
                     return
 
-                table_dialog = TableSelectionDialog(tables)
-                if table_dialog.exec() != QDialog.DialogCode.Accepted:
-                    return
-
-                selected_tables = table_dialog.get_selected_tables()
+                selected_tables = select_tables_with_method(
+                    window,
+                    connector,
+                    tables,
+                    selection_method,
+                    semantic_layer,
+                )
+                connector.close()
                 table_value: Any = (
                     selected_tables if len(selected_tables) > 1 else selected_tables[0]
                 )
                 source_config["table"] = table_value
+
+                if not selected_tables:
+                    return
 
                 merged_dataframe, status = load_data("database", source_config)
 
@@ -1980,6 +2428,8 @@ def start_application():
                             "db_type": db_type,
                             "credentials": creds_to_store,
                             "table": selected_tables,
+                            "table_selection_method": selection_method,
+                            "semantic_layer": semantic_layer,
                         }
                     welcome_msg = window.backend.format_database_welcome_message(
                         db_type, selected_tables, merged_dataframe, status

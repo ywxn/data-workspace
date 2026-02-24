@@ -2,6 +2,8 @@ from typing import Any, Dict, Optional, Tuple
 import os
 from urllib.parse import quote_plus
 
+from security_validators import validate_sql_security
+
 
 class DatabaseConnector:
     """
@@ -256,6 +258,10 @@ class DatabaseConnector:
 
         from sqlalchemy import text
 
+        is_safe, error_msg = validate_sql_security(query)
+        if not is_safe:
+            raise RuntimeError(error_msg)
+
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text(query), params or {})
@@ -298,6 +304,9 @@ class DatabaseConnector:
                 executed_count = 0
                 with self.engine.begin() as conn:  # type: ignore
                     for statement in statements:
+                        is_safe, error_msg = validate_sql_security(statement)
+                        if not is_safe:
+                            return False, error_msg
                         if statement:
                             conn.execute(text(statement))
                             executed_count += 1
