@@ -273,6 +273,7 @@ class NLPTableSelector:
         try:
             from sentence_transformers import SentenceTransformer
 
+            # TODO: If the model is not downloaded already, this will raise an error.
             self.model = SentenceTransformer(
                 model_name,
                 cache_folder="models",
