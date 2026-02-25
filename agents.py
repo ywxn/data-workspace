@@ -571,6 +571,11 @@ class AIAgent:
                 )
                 query_result = self._execute_sql_query(generated_sql, context)
 
+                # Check for SQL execution errors and stop pipeline
+                if query_result and "error" in query_result:
+                    logger.error(f"SQL execution failed: {query_result['error']}")
+                    return f"### Error\n\n{query_result['error']}\n\nPlease try rephrasing your question or check your query."
+
                 # Step 3: Generate visualization if needed
                 requires_viz = plan.get("requires_visualization", False)
                 if requires_viz and query_result and "error" not in query_result:
