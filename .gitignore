@@ -16,8 +16,8 @@ __pycache__/
 # Ignore projects
 projects/
 
-# Ignore testing.py (contains sensitive information)
-testing.py
+# Ignore test files
+tests/
 
 # vscode
 .vscode/
@@ -40,9 +40,7 @@ nlp_table_selector_examples.py
 run_tests.py
 
 # graphs
-graphs/
 graph/
-temp_graphs/
 
 # ignore model files
 models/
