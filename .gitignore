@@ -44,3 +44,6 @@ graph/
 
 # ignore model files
 models/
+
+# ignore dist
+dist/
