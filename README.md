@@ -9,7 +9,7 @@ An intelligent application for data analysis and visualization with AI assistanc
 - **Project management** - Create and organize multiple projects with persistent chat sessions
 - **NLP table selection** - Automatically discover relevant tables using semantic understanding
 - **Theme support** - Dark, light, and system theme options
-- **Cross-platform** - Built with PyQt6 for Windows, macOS, and Linux
+- **Cross-platform** - Built with PySide6 for Windows, macOS, and Linux
 
 ## Requirements
 
