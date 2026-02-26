@@ -2,9 +2,9 @@ import sys
 import asyncio
 import webbrowser
 import json
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
+from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
@@ -31,7 +31,7 @@ from processing import load_data, add_files_to_sqlite
 from connector import DatabaseConnector
 from config import ConfigManager
 from markdown_converter import markdown_to_html
-from PyQt6.QtGui import QPalette
+from PySide6.QtGui import QPalette
 from typing import Optional, Dict, Any, List
 import random
 import os
@@ -52,7 +52,7 @@ logger = get_logger(__name__)
 class MessageTextEdit(QTextEdit):
     """Custom QTextEdit that submits on Enter and adds newline on Shift+Enter"""
 
-    submit_signal = pyqtSignal()
+    submit_signal = Signal()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1026,8 +1026,8 @@ def select_tables_with_method(
 class QueryWorker(QThread):
     """Worker thread to handle long-running queries without blocking UI"""
 
-    result_signal = pyqtSignal(str)
-    error_signal = pyqtSignal(str)
+    result_signal = Signal(str)
+    error_signal = Signal(str)
 
     def __init__(self, query: str, data_context: Dict[str, Any]):
         super().__init__()
