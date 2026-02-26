@@ -1,16 +1,3 @@
-# AI Data Workspace
-
-An intelligent application for data analysis and visualization with AI assistance. Connect to databases or local files, analyze data with natural language queries, and manage project sessions seamlessly.
-
-## Features
-
-- **Multi-source data loading** - Connect to databases (SQLite, MySQL, PostgreSQL, Oracle, SQL Server, MariaDB, ODBC) or load local CSV/Excel files
-- **AI-powered analysis** - Query your data using natural language with OpenAI or Claude AI
-- **Project management** - Create and organize multiple projects with persistent chat sessions
-- **NLP table selection** - Automatically discover relevant tables using semantic understanding
-- **Theme support** - Dark, light, and system theme options
-- **Cross-platform** - Built with PyQt6 for Windows, macOS, and Linux
-
 ## Requirements
 
 - Python 3.10 or higher
@@ -21,7 +8,8 @@ An intelligent application for data analysis and visualization with AI assistanc
 
 1. Clone or download the project:
 ```bash
-cd Projects
+git clone https://github.com/ywxn/data-workspace.git
+cd data-workspace
 ```
 
 2. Install dependencies:
@@ -105,11 +93,4 @@ For detailed information, see:
 - Use `--follow-imports` flag to ensure all imports are included
 - For Windows, use `--windows-console-mode=hide` to hide console window
 - Use `-O` flag for optimizations (slower build but faster runtime)
-
-## License
-
-This project is licensed under the GNU General Public License v3.0.
-
-## Support
-
-For issues or questions, refer to the documentation in the `docs/` directory or contact support.
+- Enable QT6 support.
