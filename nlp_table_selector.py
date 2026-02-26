@@ -217,7 +217,7 @@ class NLPTableSelector:
     def __init__(
         self,
         db_connector: Any,
-        model_name: str = "all-MiniLM-L6-v2", # TODO: try changing to all-mpnet-base-v2 (17/21 -> 19/21 test cases passed)
+        model_name: str = "all-MiniLM-L6-v2",
         confidence_threshold: float = 0.55,
         tie_threshold: float = 0.10,
         table_synonyms: Optional[Dict[str, List[str]]] = None,
