@@ -44,13 +44,13 @@ To compile the application into a standalone executable:
 ### Prerequisites
 
 ```bash
-pip install nuitka
+pip install pyinstaller
 ```
 
 ### Compile for Windows
 
 ```bash
-nuitka main.py --standalone --windows-console-mode=hide --enable-plugin=pyside6 --enable-plugin=anti-bloat --follow-imports --nofollow-import-to=torch._dynamo --nofollow-import-to=torch._inductor --nofollow-import-to=torch.fx --include-data-dir=css=css --include-data-files=icon.svg=icon.svg --lto=yes --clang --assume-yes-for-downloads --remove-output --output-dir=dist --python-flag=no_site --python-flag=no_asserts --python-flag=-O
+pyinstaller main.py --name "Data Workspace" --onedir --noconsole --add-data "css;css" --add-data "icon.svg;." --add-data "models;models" --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui --hidden-import=PySide6.QtWidgets --hidden-import=anthropic --hidden-import=openai --hidden-import=altair --hidden-import=sqlalchemy --hidden-import=sqlalchemy.dialects.sqlite --hidden-import=sqlalchemy.dialects.mysql --hidden-import=sqlalchemy.dialects.postgresql --hidden-import=sqlalchemy.dialects.mssql --hidden-import=sqlalchemy.dialects.oracle --hidden-import=pandas --hidden-import=sentence_transformers --hidden-import=torch --hidden-import=transformers --hidden-import=markdown --hidden-import=pymysql --hidden-import=psycopg2 --hidden-import=pyodbc --hidden-import=cx_Oracle --hidden-import=oracledb --exclude-module=torch._dynamo --exclude-module=torch._inductor --exclude-module=torch.fx --exclude-module=torch.compiler --exclude-module=torch.distributed --exclude-module=torch.testing --exclude-module=torch.utils.tensorboard --exclude-module=transformers.models --exclude-module=transformers.generation --exclude-module=transformers.pipelines --exclude-module=transformers.trainer --exclude-module=transformers.training_args --exclude-module=tensorboard --exclude-module=tensorflow --exclude-module=keras --exclude-module=scipy --exclude-module=matplotlib --exclude-module=PIL --exclude-module=cv2 --exclude-module=IPython --exclude-module=jupyter --exclude-module=notebook --exclude-module=pytest --exclude-module=unittest --exclude-module=setuptools --exclude-module=pip --exclude-module=torchaudio --exclude-module=torchvision --exclude-module=triton --exclude-module=sympy --exclude-module=networkx --exclude-module=flash_attn --exclude-module=apex --exclude-module=bitsandbytes --exclude-module=datasets --exclude-module=evaluate --exclude-module=accelerate --exclude-module=tkinter --exclude-module=tcl --exclude-module=tk --distpath=dist --workpath=build --clean
 ```
 
 API keys are insecurely stored in the config file. This is a temporary measure, users are encouraged to store their API keys as environment variables for better security. Future versions will implement a more secure key management system.
