@@ -30,6 +30,7 @@ tests/
 *.cmd
 *.exe
 *.dll
+*.spec
 
 # ignore docs for now
 docs/
@@ -47,3 +48,4 @@ models/
 
 # ignore dist
 dist/
+build/
