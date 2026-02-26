@@ -37,7 +37,7 @@ Or run the compiled executable (see Compilation section below)
 4. Connect a data source (database or files)
 5. Use the chat interface to query your data with natural language
 
-## Compilation with Nuitka
+## Compilation
 
 To compile the application into a standalone executable:
 
