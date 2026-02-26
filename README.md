@@ -50,47 +50,7 @@ pip install nuitka
 ### Compile for Windows
 
 ```bash
-nuitka --onefile --windows-console-mode=hide --follow-imports main.py
+nuitka main.py --standalone --windows-console-mode=hide --enable-plugin=pyside6 --enable-plugin=anti-bloat --follow-imports --nofollow-import-to=torch._dynamo --nofollow-import-to=torch._inductor --nofollow-import-to=torch.fx --include-data-dir=css=css --include-data-files=icon.svg=icon.svg --lto=yes --clang --assume-yes-for-downloads --remove-output --output-dir=dist --python-flag=no_site --python-flag=no_asserts --python-flag=-O
 ```
-
-This creates a standalone `.exe` file in the `main.dist` directory.
-
-### Compile with Optimizations
-
-```bash
-nuitka --onefile --follow-imports -O main.py
-```
-
-## Configuration
-
-Configuration is stored in `config.json`. You can:
-- Set your default AI provider (openai or claude)
-- Configure table selection method (manual or nlp)
-- Save theme preference
 
 API keys are insecurely stored in the config file. This is a temporary measure, users are encouraged to store their API keys as environment variables for better security. Future versions will implement a more secure key management system.
-
-## Documentation
-
-For detailed information, see:
-- [API Setup Guide](docs/API_SETUP.md)
-- [Database Setup Guide](docs/DATABASE_SETUP.md)
-- [Installation Instructions](docs/INSTALLATION.md)
-- [NLP Table Selector](docs/NLP_TABLE_SELECTOR_GUIDE.md)
-
-## Troubleshooting
-
-### API Key Issues
-- Ensure your API key is valid and has proper permissions
-- Check `config.json` in the application directory for stored keys
-
-### Database Connection Failures
-- Verify database credentials and network connectivity
-- Check that the database server is running
-- Ensure the specified database/tables exist
-
-### Compilation Issues
-- Use `--follow-imports` flag to ensure all imports are included
-- For Windows, use `--windows-console-mode=hide` to hide console window
-- Use `-O` flag for optimizations (slower build but faster runtime)
-- Enable QT6 support.
