@@ -11,7 +11,11 @@ openai>=1.0.0
 anthropic>=0.7.0
 
 # GUI Framework
+<<<<<<< HEAD
 PySide6>=6.6.0
+=======
+PySide6>=6.10.2
+>>>>>>> da18a134bcb02328b8af47da0c60aac347d7eb5f
 
 # Database Support
 SQLAlchemy>=2.0.0
