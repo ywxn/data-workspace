@@ -776,9 +776,7 @@ class DatabaseConnectionDialog(QDialog):
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
-                raise ValueError("Semantic layer must be a list of JSON objects")
+                data = json.load(f) # if this fails it will raise an exception so we don't need to check
             self.semantic_layer = data
             self.semantic_layer_label.setText(f"Loaded: {os.path.basename(file_path)}")
         except Exception as e:

@@ -217,7 +217,7 @@ class NLPTableSelector:
     def __init__(
         self,
         db_connector: Any,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "all-MiniLM-L6-v2", # TODO: try changing to all-mpnet-base-v2 (17/21 -> 19/21 test cases passed)
         confidence_threshold: float = 0.55,
         tie_threshold: float = 0.10,
         table_synonyms: Optional[Dict[str, List[str]]] = None,
@@ -281,11 +281,9 @@ class NLPTableSelector:
         try:
             from sentence_transformers import SentenceTransformer
 
-            # TODO: If the model is not downloaded already, this will raise an error.
             self.model = SentenceTransformer(
                 model_name,
-                cache_folder="models",
-                local_files_only=True,
+                cache_folder="models", # will download unless file exists
             )
         except ImportError:
             raise ImportError(
