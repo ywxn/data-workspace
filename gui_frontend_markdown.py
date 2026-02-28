@@ -161,36 +161,167 @@ class InteractionModeDialog(QDialog):
         return self.selected_mode or "analyst"
 
 
-class APIKeyConfigDialog(QDialog):
-    """Dialog to set up API keys on first startup."""
+class APIKeyDialog(QDialog):
+    """Simple dialog to configure cloud API keys (OpenAI / Claude)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, first_time_setup: bool = False):
         super().__init__(parent)
         self.setWindowTitle("API Key Configuration")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+        self._first_time_setup = first_time_setup
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Configure API Key")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Instructions
+        instructions = QLabel(
+            "Enter your API key for the selected cloud provider.\n\n"
+            "• OpenAI: https://platform.openai.com/api-keys\n"
+            "• Claude (Anthropic): https://console.anthropic.com/account/keys"
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(15)
+
+        # Form layout
+        form_layout = QFormLayout()
+
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["OpenAI", "Claude"])
+        self.provider_combo.currentTextChanged.connect(self._load_existing_key)
+        form_layout.addRow("Provider:", self.provider_combo)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setPlaceholderText("Paste your API key here")
+        form_layout.addRow("API Key:", self.api_key_input)
+
+        self.toggle_visibility_btn = QPushButton("Show Key")
+        self.toggle_visibility_btn.setMaximumWidth(100)
+        self.toggle_visibility_btn.clicked.connect(self._toggle_key_visibility)
+        form_layout.addRow("", self.toggle_visibility_btn)
+
+        layout.addLayout(form_layout)
+
+        layout.addSpacing(10)
+
+        # Set as default checkbox — only visible on first-time setup
+        self.set_default_checkbox = QCheckBox("Set as default provider")
+        self.set_default_checkbox.setChecked(True)
+        self.set_default_checkbox.setVisible(first_time_setup)
+        layout.addWidget(self.set_default_checkbox)
+
+        layout.addSpacing(5)
+
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._validate_and_save)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._key_visible = False
+        self._load_existing_key(self.provider_combo.currentText())
+
+    def _load_existing_key(self, provider: str):
+        """Load the existing API key for a cloud provider into the input field."""
+        provider_map = {"OpenAI": "openai", "Claude": "claude"}
+        key_name = provider_map.get(provider)
+        if key_name:
+            existing = ConfigManager.get_api_key(key_name)
+            self.api_key_input.setText(existing or "")
+        else:
+            self.api_key_input.clear()
+        # Reset visibility on provider change
+        self._key_visible = False
+        self.toggle_visibility_btn.setText("Show Key")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _toggle_key_visibility(self):
+        """Toggle visibility of API key."""
+        self._key_visible = not self._key_visible
+        if self._key_visible:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.toggle_visibility_btn.setText("Hide Key")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.toggle_visibility_btn.setText("Show Key")
+
+    def _validate_and_save(self):
+        """Validate and save the API key."""
+        provider = self.provider_combo.currentText()
+        api_key = self.api_key_input.text().strip()
+
+        if not api_key:
+            logger.warning(f"Empty API key provided for provider: {provider}")
+            QMessageBox.warning(
+                self, "Empty API Key", f"Please enter a valid {provider} API key."
+            )
+            return
+
+        success, message = ConfigManager.set_api_key(provider.lower(), api_key)
+        logger.info(f"API key save attempt for {provider}: {success}")
+
+        if success:
+            if self._first_time_setup and self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api(provider.lower())
+            logger.info(f"{provider} API key configured successfully")
+            QMessageBox.information(
+                self, "Success", f"{provider} API key configured successfully!"
+            )
+            self.accept()
+        else:
+            logger.error(f"Failed to save {provider} API key: {message}")
+            QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
+
+
+class AIHostConfigDialog(QDialog):
+    """Dialog to configure AI host settings.
+
+    When *include_cloud* is True the combo also offers OpenAI / Claude so the
+    user can switch the active host to a cloud provider.  This is the only
+    place where the active AI host can be changed.
+    """
+
+    def __init__(self, parent=None, include_cloud: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("AI Host Configuration")
         self.setModal(True)
         self.setMinimumWidth(560)
         self.windowIcon = QIcon("icon.svg")
         self.setWindowIcon(self.windowIcon)
 
+        self._include_cloud = include_cloud
         self._download_thread: Optional[ModelDownloadThread] = None
         self._server_thread: Optional[ServerStartThread] = None
 
         layout = QVBoxLayout(self)
 
         # Title
-        title = QLabel("Configure API Keys")
+        title = QLabel("Configure AI Host")
         title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         # Instructions
+        cloud_lines = (
+            "• OpenAI: Use your OpenAI API key (cloud)\n"
+            "• Claude: Use your Anthropic API key (cloud)\n"
+        ) if include_cloud else ""
         self.instructions = QLabel(
-            "Configure your AI provider.\n\n"
-            "Cloud Providers:\n"
-            "• OpenAI: https://platform.openai.com/api-keys\n"
-            "• Claude (Anthropic): https://console.anthropic.com/account/keys\n\n"
-            "Local Options:\n"
-            "• Local LLM: Connect to an existing server (Ollama, llama-cpp-python, etc.)\n"
+            "Configure your AI host.\n\n"
+            + cloud_lines
+            + "• Local LLM: Connect to an existing server (Ollama, llama-cpp-python, etc.)\n"
             "• Self-Host Model: Download & run a model locally with built-in server management"
         )
         self.instructions.setWordWrap(True)
@@ -201,26 +332,17 @@ class APIKeyConfigDialog(QDialog):
         # Form layout
         form_layout = QFormLayout()
 
-        # Provider selection
+        # Host type selection
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["OpenAI", "Claude", "Local LLM", "Self-Host Model"])
-        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
-        form_layout.addRow("AI Provider:", self.provider_combo)
+        items = []
+        if include_cloud:
+            items += ["OpenAI", "Claude"]
+        items += ["Local LLM", "Self-Host Model"]
+        self.provider_combo.addItems(items)
+        # Signal connected later, after all widgets are created
+        form_layout.addRow("Host Type:", self.provider_combo)
 
-        # API Key input (shown for cloud providers)
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_input.setPlaceholderText("Paste your API key here")
-        self.api_key_label = QLabel("API Key:")
-        form_layout.addRow(self.api_key_label, self.api_key_input)
-
-        # Show/hide key toggle
-        self.toggle_visibility_btn = QPushButton("Show Key")
-        self.toggle_visibility_btn.setMaximumWidth(100)
-        self.toggle_visibility_btn.clicked.connect(self.toggle_key_visibility)
-        form_layout.addRow("", self.toggle_visibility_btn)
-
-        # Local LLM fields (hidden by default)
+        # Local LLM fields
         local_llm_config = ConfigManager.get_local_llm_config()
 
         self.local_url_input = QLineEdit()
@@ -234,12 +356,6 @@ class APIKeyConfigDialog(QDialog):
         self.local_model_input.setText(local_llm_config["local_llm_model"])
         self.local_model_label = QLabel("Model Name:")
         form_layout.addRow(self.local_model_label, self.local_model_input)
-
-        # Hide local fields initially
-        self.local_url_label.hide()
-        self.local_url_input.hide()
-        self.local_model_label.hide()
-        self.local_model_input.hide()
 
         layout.addLayout(form_layout)
 
@@ -269,7 +385,22 @@ class APIKeyConfigDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        self.key_is_visible = False
+        # All widgets are now created — pre-select the current host and
+        # connect the signal so on_provider_changed can safely reference
+        # every widget.
+        current_default = ConfigManager.get_default_api()
+        default_map = {"openai": "OpenAI", "claude": "Claude", "local": "Local LLM"}
+        preselect = default_map.get(current_default, items[0])
+        if preselect:
+            idx = self.provider_combo.findText(preselect)
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+
+        # Apply initial visibility for the pre-selected host
+        self.on_provider_changed(self.provider_combo.currentText())
+
+        # Now connect the signal for future changes
+        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
 
     # ------------------------------------------------------------------
     #  Self-Host UI builder
@@ -392,17 +523,16 @@ class APIKeyConfigDialog(QDialog):
         """Check if the current provider selection is Self-Host Model."""
         return self.provider_combo.currentText() == "Self-Host Model"
 
+    def _is_cloud_mode(self) -> bool:
+        """Check if the current selection is a cloud provider."""
+        return self.provider_combo.currentText() in ("OpenAI", "Claude")
+
     def on_provider_changed(self, provider):
-        """Toggle between cloud API key fields, local LLM fields, and self-host panel."""
-        logger.debug(f"API provider changed to: {provider}")
+        """Toggle between cloud, local LLM fields and self-host panel."""
+        logger.debug(f"AI host changed to: {provider}")
+        is_cloud = provider in ("OpenAI", "Claude")
         is_local = provider == "Local LLM"
         is_self_host = provider == "Self-Host Model"
-        is_cloud = not is_local and not is_self_host
-
-        # Cloud fields
-        self.api_key_label.setVisible(is_cloud)
-        self.api_key_input.setVisible(is_cloud)
-        self.toggle_visibility_btn.setVisible(is_cloud)
 
         # Local fields
         self.local_url_label.setVisible(is_local)
@@ -415,23 +545,8 @@ class APIKeyConfigDialog(QDialog):
         if is_self_host:
             self._sh_refresh_server_status()
 
-        if is_cloud:
-            self.api_key_input.clear()
-            self.key_is_visible = False
-            self.toggle_visibility_btn.setText("Show Key")
-            if self.api_key_input.echoMode() == QLineEdit.EchoMode.Normal:
-                self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-
-    def toggle_key_visibility(self):
-        """Toggle visibility of API key."""
-        self.key_is_visible = not self.key_is_visible
-        logger.debug(f"API key visibility toggled to: {self.key_is_visible}")
-        if self.key_is_visible:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.toggle_visibility_btn.setText("Hide Key")
-        else:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.toggle_visibility_btn.setText("Show Key")
+        # Resize dialog to fit current content
+        self.adjustSize()
 
     # ------------------------------------------------------------------
     #  Self-Host: model helpers
@@ -623,9 +738,34 @@ class APIKeyConfigDialog(QDialog):
             self.sh_stop_btn.setEnabled(False)
 
     def validate_and_save(self):
-        """Validate and save the API key, local LLM, or self-host settings."""
+        """Validate and save the host settings."""
         provider = self.provider_combo.currentText()
-        logger.debug(f"Validating settings for provider: {provider}")
+        logger.debug(f"Validating settings for host type: {provider}")
+
+        if self._is_cloud_mode():
+            # --- Cloud provider path (just switch the default host) ---
+            provider_key = provider.lower()
+            # Check that the user actually has an API key stored for this provider
+            existing_key = ConfigManager.get_api_key(provider_key)
+            if not existing_key:
+                QMessageBox.warning(
+                    self, "No API Key",
+                    f"No API key is configured for {provider}.\n\n"
+                    "Please set your API key first via\n"
+                    "File \u2192 API Key Settings."
+                )
+                return
+
+            if self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api(provider_key)
+            logger.info(f"AI host switched to cloud provider: {provider}")
+            QMessageBox.information(
+                self, "Success",
+                f"AI host set to {provider}.\n\n"
+                "The existing API key will be used."
+            )
+            self.accept()
+            return
 
         if self._is_self_host_mode():
             # --- Self-Host path ---
@@ -715,33 +855,6 @@ class APIKeyConfigDialog(QDialog):
                     self, "Error", f"Failed to save settings: {message}"
                 )
             return
-
-        # --- Cloud provider path ---
-        api_key = self.api_key_input.text().strip()
-
-        if not api_key:
-            logger.warning(f"Empty API key provided for provider: {provider}")
-            QMessageBox.warning(
-                self, "Empty API Key", f"Please enter a valid {provider} API key."
-            )
-            return
-
-        # Save to config
-        success, message = ConfigManager.set_api_key(provider.lower(), api_key)
-        logger.info(f"API key save attempt for {provider}: {success}")
-
-        if success:
-            if self.set_default_checkbox.isChecked():
-                ConfigManager.set_default_api(provider.lower())
-
-            logger.info(f"{provider} API key configured successfully")
-            QMessageBox.information(
-                self, "Success", f"{provider} API key configured successfully!"
-            )
-            self.accept()
-        else:
-            logger.error(f"Failed to save {provider} API key: {message}")
-            QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
 
 
 class ModelDownloadThread(QThread):
@@ -2506,9 +2619,13 @@ class DataWorkspaceGUI(QMainWindow):
         connect_additional_action.triggered.connect(self.connect_additional_data_source)
         file_menu.addAction(connect_additional_action)
 
-        api_settings_action = QAction("API Settings...", self)
+        api_settings_action = QAction("API Key Settings...", self)
         api_settings_action.triggered.connect(self.change_api_settings)
         file_menu.addAction(api_settings_action)
+
+        ai_host_settings_action = QAction("AI Host Settings...", self)
+        ai_host_settings_action.triggered.connect(self.change_ai_host_settings)
+        file_menu.addAction(ai_host_settings_action)
 
         file_menu.addSeparator()
 
@@ -3783,21 +3900,39 @@ class DataWorkspaceGUI(QMainWindow):
             )
 
     def change_api_settings(self):
-        """Open API settings dialog"""
-        logger.info("User opened API settings dialog")
+        """Open API key settings dialog"""
+        logger.info("User opened API key settings dialog")
         try:
-            api_dialog = APIKeyConfigDialog(self)
+            api_dialog = APIKeyDialog(self)
             if api_dialog.exec() == QDialog.DialogCode.Accepted:
-                logger.info("API settings updated successfully")
+                logger.info("API key settings updated successfully")
                 QMessageBox.information(
-                    self, "API Settings", "API settings updated successfully."
+                    self, "API Settings", "API key settings updated successfully."
                 )
             else:
-                logger.info("User cancelled API settings change")
+                logger.info("User cancelled API key settings change")
         except Exception as e:
-            logger.error(f"Error changing API settings: {str(e)}", exc_info=True)
+            logger.error(f"Error changing API key settings: {str(e)}", exc_info=True)
             QMessageBox.critical(
-                self, "Error", f"Failed to update API settings: {str(e)}"
+                self, "Error", f"Failed to update API key settings: {str(e)}"
+            )
+
+    def change_ai_host_settings(self):
+        """Open AI host settings dialog"""
+        logger.info("User opened AI host settings dialog")
+        try:
+            host_dialog = AIHostConfigDialog(self, include_cloud=True)
+            if host_dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("AI host settings updated successfully")
+                QMessageBox.information(
+                    self, "AI Host Settings", "AI host settings updated successfully."
+                )
+            else:
+                logger.info("User cancelled AI host settings change")
+        except Exception as e:
+            logger.error(f"Error changing AI host settings: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to update AI host settings: {str(e)}"
             )
 
     def clear_conversation(self):
@@ -4075,17 +4210,48 @@ def _ensure_api_configured() -> bool:
 
     if not ConfigManager.has_any_api_key():
         logger.warning("No API keys configured, prompting user for setup")
-        api_config_dialog = APIKeyConfigDialog()
-        if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
-            logger.error("API key setup cancelled by user, application cannot start")
-            QMessageBox.warning(
-                None,
-                "API Key Required",
-                "An API key (or local LLM) is required to use this application.\n"
-                "Please configure your API key and try again.",
-            )
+
+        # Ask user whether they want cloud API keys or a local AI host
+        choice = QMessageBox.question(
+            None,
+            "AI Provider Setup",
+            "No AI provider is configured yet.\n\n"
+            "Would you like to set up a Cloud API Key (OpenAI / Claude)?\n\n"
+            "Click 'Yes' for a cloud API key, or 'No' to configure a local AI host instead.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if choice == QMessageBox.StandardButton.Cancel:
+            logger.error("AI provider setup cancelled by user")
             return False
-        logger.info("API key configured successfully")
+
+        if choice == QMessageBox.StandardButton.No:
+            # Show AI Host config (Local LLM / Self-Host)
+            host_dialog = AIHostConfigDialog()
+            if host_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.error("AI host setup cancelled by user, application cannot start")
+                QMessageBox.warning(
+                    None,
+                    "AI Provider Required",
+                    "An AI provider (cloud API key or local LLM) is required.\n"
+                    "Please configure one and try again.",
+                )
+                return False
+            logger.info("AI host configured successfully")
+        else:
+            # Show API Key dialog (OpenAI / Claude)
+            api_config_dialog = APIKeyDialog(first_time_setup=True)
+            if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.error("API key setup cancelled by user, application cannot start")
+                QMessageBox.warning(
+                    None,
+                    "API Key Required",
+                    "An API key (or local LLM) is required to use this application.\n"
+                    "Please configure your API key and try again.",
+                )
+                return False
+            logger.info("API key configured successfully")
     return True
 
 
