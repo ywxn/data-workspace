@@ -31,6 +31,9 @@ from constants import (
     LLM_TEMPERATURE_CODE,
     LLM_TEMPERATURE_ANALYSIS,
     LLM_MODELS,
+    LOCAL_LLM_DEFAULT_URL,
+    LOCAL_LLM_DEFAULT_MODEL,
+    LOCAL_LLM_REQUEST_TIMEOUT,
     DB_MAX_ROWS_IN_MEMORY,
     DB_READ_CHUNK_SIZE,
     SAMPLE_ROWS_INFO,
@@ -60,6 +63,7 @@ ANALYSIS_TEMPERATURE = LLM_TEMPERATURE_ANALYSIS
 # Supported LLM models (from constants mapping)
 CLAUDE_MODEL = LLM_MODELS.get("claude")
 OPENAI_MODEL = LLM_MODELS.get("openai")
+LOCAL_MODEL = LLM_MODELS.get("local")
 
 # Visualization configuration
 VISUALIZATION_MAX_TOKENS = 800
@@ -307,9 +311,49 @@ class AIAgent:
                     "OpenAI API key not configured. Please set up your API key in the application settings."
                 )
             self.client = AsyncOpenAI(api_key=openai_key)
+        elif self.api_provider == "local":
+            # No API key needed for local LLM — just validate connectivity config
+            self.client = None
+            config = ConfigManager.load_config()
+            self._local_llm_url = config.get("local_llm_url", LOCAL_LLM_DEFAULT_URL)
+            self._local_llm_model = config.get("local_llm_model", LOCAL_LLM_DEFAULT_MODEL)
+
+            # Auto-start the built-in model server if configured
+            if config.get("hosted_auto_start", False):
+                hosted_model = config.get("hosted_model_path", "")
+                if hosted_model and os.path.isfile(hosted_model):
+                    try:
+                        from model_manager import (
+                            is_server_running,
+                            start_model_server,
+                            get_hosted_url,
+                        )
+
+                        if not is_server_running():
+                            hosted_port = config.get("hosted_port", 8911)
+                            hosted_gpu = config.get("hosted_gpu_layers", 0)
+                            logger.info(
+                                f"Auto-starting hosted model server: {hosted_model}"
+                            )
+                            ok, msg = start_model_server(
+                                hosted_model,
+                                port=hosted_port,
+                                n_gpu_layers=hosted_gpu,
+                            )
+                            if ok:
+                                self._local_llm_url = get_hosted_url(port=hosted_port)
+                                logger.info(f"Hosted server started: {msg}")
+                            else:
+                                logger.warning(f"Failed to auto-start hosted server: {msg}")
+                    except Exception as e:
+                        logger.warning(f"Could not auto-start hosted model server: {e}")
+
+            logger.info(
+                f"Local LLM configured: url={self._local_llm_url}, model={self._local_llm_model}"
+            )
         else:
             raise ValueError(
-                f"Unknown API provider: {self.api_provider}. Use 'openai' or 'claude'"
+                f"Unknown API provider: {self.api_provider}. Use 'openai', 'claude', or 'local'"
             )
 
         self.execution_context: Dict[str, Any] = {}
@@ -340,6 +384,8 @@ class AIAgent:
         try:
             if self.api_provider == "claude":
                 return self._call_claude(messages, max_tokens, temperature)
+            elif self.api_provider == "local":
+                return self._call_local(messages, max_tokens, temperature)
             else:  # openai
                 return await self._call_openai(messages, max_tokens, temperature)
         except Exception as e:
@@ -379,6 +425,48 @@ class AIAgent:
             temperature=temperature,
         )
         return response.choices[0].message.content or ""
+
+    def _call_local(
+        self, messages: List[Dict[str, str]], max_tokens: int, temperature: float
+    ) -> str:
+        """Call a local LLM via an OpenAI-compatible HTTP endpoint (e.g. Ollama)."""
+        import httpx
+
+        base_url = getattr(self, "_local_llm_url", LOCAL_LLM_DEFAULT_URL)
+        model_name = getattr(self, "_local_llm_model", LOCAL_LLM_DEFAULT_MODEL)
+
+        logger.info(f"Calling local LLM at {base_url} with model {model_name}")
+
+        try:
+            response = httpx.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+                timeout=LOCAL_LLM_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+            logger.info(f"Local LLM response received ({len(content)} chars)")
+            return content
+        except httpx.ConnectError:
+            raise RuntimeError(
+                f"Could not connect to local LLM at {base_url}. "
+                "Make sure your local LLM server (e.g. Ollama) is running."
+            )
+        except httpx.TimeoutException:
+            raise RuntimeError(
+                f"Local LLM request timed out after {LOCAL_LLM_REQUEST_TIMEOUT}s. "
+                "The model may be loading or the request may be too large."
+            )
+        except (KeyError, IndexError) as e:
+            raise RuntimeError(
+                f"Unexpected response format from local LLM: {e}"
+            )
 
     @staticmethod
     def _build_schema_metadata(context: Dict[str, Any]) -> Dict[str, Any]:

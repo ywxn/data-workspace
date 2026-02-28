@@ -2,7 +2,7 @@
 
 - Python 3.10 or higher
 - PostgreSQL/MySQL/SQLite/Oracle/SQL Server (optional, for database connections)
-- API key for OpenAI or Anthropic Claude
+- API key for OpenAI or Anthropic Claude, **or** a local LLM server (e.g. Ollama)
 
 ## Installation
 
@@ -54,3 +54,94 @@ pyinstaller main.py --name "Data Workspace" --onedir --noconsole --add-data "css
 ```
 
 API keys are insecurely stored in the config file. This is a temporary measure, users are encouraged to store their API keys as environment variables for better security. Future versions will implement a more secure key management system.
+
+## Fully Local Setup (No Cloud APIs)
+
+You can run the entire pipeline without any cloud API calls by using a local LLM server.
+
+### 1. Install and start Ollama
+
+Download and install [Ollama](https://ollama.com/), then pull a model:
+
+```bash
+ollama pull mistral
+```
+
+Other recommended models: `llama3`, `codellama`, `mixtral`.
+
+### 2. Set provider to Local
+
+In the application:
+
+- Go to **File → API Settings** and select **Local LLM** as the provider
+- Or go to **Settings → Local LLM Settings** to configure the URL and model name
+
+Default settings:
+
+| Field | Default |
+|---|---|
+| Server URL | `http://localhost:11434/v1` |
+| Model | `mistral` |
+
+You can also edit `config.json` directly:
+
+```json
+{
+  "default_api": "local",
+  "local_llm_url": "http://localhost:11434/v1",
+  "local_llm_model": "mistral"
+}
+```
+
+### 3. NLP Table Selector
+
+The NLP table selector already uses a local embedding model (`sentence-transformers/all-MiniLM-L6-v2`) — no cloud dependency. The model is downloaded automatically on first use and cached in the `./models/` directory.
+
+### 4. Built-in Model Hosting (no separate server needed)
+
+If you don't have Ollama or another local LLM server, the application can **download and host a model for you** using `llama-cpp-python`.
+
+#### One-time setup
+
+```bash
+pip install llama-cpp-python
+```
+
+For NVIDIA GPU acceleration:
+```bash
+CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+```
+
+#### Using the built-in host
+
+1. Go to **Settings → Local LLM Settings** and open the **"Host a Model"** tab.
+2. Select a model from the catalog (e.g. *Mistral 7B Instruct Q4_K_M*) or browse for your own `.gguf` file.
+3. Click **Download Selected Model** — the model is saved to `./models/`.
+4. Click **Start Server** — the application starts an OpenAI-compatible server on `http://127.0.0.1:8911/v1`.
+5. Enable **"Auto-start server when app launches"** for a fully hands-off experience.
+
+The server URL is automatically configured; no manual URL/model editing is needed.
+
+| Setting | Default |
+|---|---|
+| Port | `8911` |
+| GPU Layers | `0` (CPU only) |
+| Context Size | `4096` tokens |
+
+Available models in the built-in catalog:
+
+| Model | Size | Notes |
+|---|---|---|
+| Mistral 7B Instruct v0.3 Q4_K_M | 4.4 GB | Recommended — fast, capable |
+| Llama 3 8B Instruct Q4_K_M | 4.9 GB | Strong general-purpose |
+| Phi-3 Mini 4K Instruct Q4 | 2.4 GB | Small & fast, low-resource machines |
+
+### 5. Alternative local servers
+
+Any OpenAI-compatible API server works. Examples:
+
+- **Ollama** — `ollama pull mistral` then point at `http://localhost:11434/v1`
+- **LM Studio** — Enable the local server in settings
+- **vLLM** — `vllm serve mistral --api-key token-abc123`
+
+Set the matching URL in the Local LLM settings (Connect to Server tab).

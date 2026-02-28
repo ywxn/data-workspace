@@ -49,3 +49,5 @@ models/
 # ignore dist
 dist/
 build/
+
+bak.config.json
