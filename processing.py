@@ -655,6 +655,8 @@ def load_data(
 
         if source_type == "database":
             return _load_from_database(source_config)
+        if source_type == "multi_database":
+            return load_multi_database(source_config.get("connections", []))
         if source_type == "file":
             return _load_from_files(source_config)
         if source_type == "csv":
@@ -716,6 +718,87 @@ def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
         return context, "Schema loaded successfully"
     finally:
         connector.close()
+
+
+def load_multi_database(
+    configs: List[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Load and merge schema contexts from multiple database configs.
+
+    Each config follows the same shape as a single-database config
+    (db_type, credentials, table_selection_method, semantic_layer, alias).
+    Tables are prefixed with a connection alias to avoid name collisions.
+    All connection details are stored in the returned context so the SQL
+    agent can route queries to the correct engine.
+
+    Args:
+        configs: List of per-database configuration dicts. Each must contain
+                 at least ``db_type``, ``credentials``, and ``alias``.
+
+    Returns:
+        Tuple of (merged context or None, status message)
+    """
+    if not configs or len(configs) < 2:
+        return None, "At least two database configurations are required."
+
+    merged_context: Dict[str, Any] = {
+        "source_type": "multi_database",
+        "connections": {},       # alias -> sub-context dict
+        "tables": [],
+        "table_info": {},
+        "table_to_connection": {},  # qualified table name -> alias
+    }
+
+    for i, config in enumerate(configs):
+        alias = config.get("alias", f"db{i + 1}")
+        db_type = config.get("db_type")
+        credentials = config.get("credentials", {})
+
+        logger.info(f"[{alias}] Connecting to {db_type} database...")
+        connector = DatabaseConnector()
+        success, message = connector.connect(db_type, credentials)
+        if not success:
+            return None, f"[{alias}] {message}"
+
+        try:
+            tables = connector.get_tables()
+            if not tables:
+                return None, f"[{alias}] No tables found in database."
+
+            table_info: Dict[str, Any] = {}
+            skipped_cols_by_table: Dict[str, List[str]] = {}
+            for table_name in tables:
+                info, skipped_cols = _collect_table_info(connector, table_name)
+                table_info[table_name] = info
+                if skipped_cols:
+                    skipped_cols_by_table[table_name] = skipped_cols
+
+            sub_context = {
+                "source_type": "database",
+                "db_type": db_type,
+                "credentials": credentials,
+                "tables": tables,
+                "table_info": table_info,
+                "skipped_columns": skipped_cols_by_table,
+            }
+
+            for table in tables:
+                qualified = f"{alias}__{table}"
+                merged_context["tables"].append(qualified)
+                merged_context["table_info"][qualified] = table_info.get(table, {})
+                merged_context["table_to_connection"][qualified] = alias
+
+            merged_context["connections"][alias] = sub_context
+
+        finally:
+            connector.close()
+
+    logger.info(
+        f"Multi-database load complete: {len(merged_context['tables'])} tables "
+        f"across {len(merged_context['connections'])} connections"
+    )
+    return merged_context, "All databases loaded successfully"
 
 
 def _load_from_files(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:

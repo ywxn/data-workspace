@@ -320,3 +320,51 @@ class ConfigManager:
         config["table_selection_method"] = normalized
         ConfigManager._logger.info(f"Table selection method set to: {normalized}")
         return ConfigManager.save_config(config)
+
+    @staticmethod
+    def save_multi_db_config(
+        configs: List[Dict[str, Any]],
+    ) -> Tuple[bool, str]:
+        """
+        Persist a list of multi-database connection descriptors to config.json.
+
+        Passwords are stripped before saving for security.
+
+        Args:
+            configs: List of connection config dicts (db_type, credentials, alias, …)
+
+        Returns:
+            Tuple of (success, message)
+        """
+        safe_configs: List[Dict[str, Any]] = []
+        for cfg in configs:
+            safe_cfg = {
+                "alias": cfg.get("alias", ""),
+                "db_type": cfg.get("db_type", ""),
+                "table_selection_method": cfg.get("table_selection_method", "manual"),
+            }
+            creds = cfg.get("credentials", {})
+            safe_creds = {k: v for k, v in creds.items() if k != "password"}
+            safe_cfg["credentials"] = safe_creds
+            # Include semantic layer path/data if present
+            if cfg.get("semantic_layer"):
+                safe_cfg["semantic_layer"] = cfg["semantic_layer"]
+            safe_configs.append(safe_cfg)
+
+        config = ConfigManager.load_config()
+        config["multi_db_connections"] = safe_configs
+        ConfigManager._logger.info(
+            f"Saving {len(safe_configs)} multi-db connection descriptors"
+        )
+        return ConfigManager.save_config(config)
+
+    @staticmethod
+    def load_multi_db_config() -> List[Dict[str, Any]]:
+        """
+        Load saved multi-database connection descriptors from config.json.
+
+        Returns:
+            List of connection config dicts (passwords will be empty strings)
+        """
+        config = ConfigManager.load_config()
+        return config.get("multi_db_connections", [])
