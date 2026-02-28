@@ -84,7 +84,7 @@ def get_model_info(model_path: str) -> Optional[dict]:
             return None
 
         file_size = os.path.getsize(model_path)
-        file_size_gb = file_size / (1024 ** 3)
+        file_size_gb = file_size / (1024**3)
 
         return {
             "path": model_path,
@@ -113,8 +113,9 @@ def check_disk_space(required_gb: float) -> bool:
             models_dir = os.path.dirname(models_dir)
 
         import shutil
+
         stat = shutil.disk_usage(models_dir)
-        available_gb = stat.free / (1024 ** 3)
+        available_gb = stat.free / (1024**3)
 
         return available_gb >= required_gb
     except Exception as e:
@@ -123,9 +124,7 @@ def check_disk_space(required_gb: float) -> bool:
         return True
 
 
-def download_model(
-    url: str, model_name: str, callback=None
-) -> Tuple[bool, str]:
+def download_model(url: str, model_name: str, callback=None) -> Tuple[bool, str]:
     """
     Download a GGUF model to the models directory.
 
@@ -213,7 +212,10 @@ def validate_model_file(model_path: str) -> Tuple[bool, str]:
         min_size = 100 * 1024 * 1024  # 100MB
 
         if file_size < min_size:
-            return False, f"File too small ({file_size / 1024 / 1024:.1f}MB) - may not be a valid model"
+            return (
+                False,
+                f"File too small ({file_size / 1024 / 1024:.1f}MB) - may not be a valid model",
+            )
 
         # Try reading the first few bytes to check for GGUF header
         with open(model_path, "rb") as f:

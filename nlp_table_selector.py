@@ -43,7 +43,7 @@ class SchemaNormalizer:
     """
 
     DEFAULT_ACRONYMS = DEFAULT_ACRONYMS
-    
+
     def __init__(self, acronym_map: Optional[Dict[str, str]] = None):
         """
         Initialize the schema normalizer.
@@ -283,7 +283,7 @@ class NLPTableSelector:
 
             self.model = SentenceTransformer(
                 model_name,
-                cache_folder="models", # will download unless file exists
+                cache_folder="models",  # will download unless file exists
             )
         except ImportError:
             raise ImportError(
@@ -496,7 +496,9 @@ class NLPTableSelector:
 
             # If FK graph is sparse, infer relationships from naming patterns
             if len(self.fk_graph) < len(tables) * 0.3:
-                logger.info("FK graph sparse, inferring relationships from naming patterns")
+                logger.info(
+                    "FK graph sparse, inferring relationships from naming patterns"
+                )
                 self._infer_fk_from_names()
 
         except Exception as e:
@@ -518,9 +520,9 @@ class NLPTableSelector:
             table_lower = table.lower()
 
             # Header-detail pattern (_hdr + _dtl)
-            if '_hdr' in table_lower:
-                base = table_lower.replace('_hdr', '')
-                detail_name = base + '_dtl'
+            if "_hdr" in table_lower:
+                base = table_lower.replace("_hdr", "")
+                detail_name = base + "_dtl"
                 for other in tables:
                     if other.lower() == detail_name:
                         self.fk_graph[table].add(other)
@@ -530,14 +532,16 @@ class NLPTableSelector:
             # Master-detail pattern (table + table_dtl)
             for other in tables:
                 other_lower = other.lower()
-                if other_lower.startswith(table_lower + '_dtl'):
+                if other_lower.startswith(table_lower + "_dtl"):
                     self.fk_graph[table].add(other)
                     self.fk_graph[other].add(table)
-                elif table_lower.startswith(other_lower + '_dtl'):
+                elif table_lower.startswith(other_lower + "_dtl"):
                     self.fk_graph[table].add(other)
                     self.fk_graph[other].add(table)
 
-        logger.info(f"Inferred FK relationships, graph now has {len(self.fk_graph)} nodes")
+        logger.info(
+            f"Inferred FK relationships, graph now has {len(self.fk_graph)} nodes"
+        )
 
     def _compute_schema_hash(self, tables: List[str]) -> None:
         """Compute hash of schema for change detection."""
@@ -639,7 +643,8 @@ class NLPTableSelector:
                 synonyms = [s.lower() for s in entity.get("synonyms", [])]
                 matched = any(
                     stem == syn or stem in syn.split()
-                    for stem in syn_stems for syn in synonyms
+                    for stem in syn_stems
+                    for syn in synonyms
                 )
                 if matched:
                     for pt in entity.get("physical_tables", []):
@@ -654,7 +659,8 @@ class NLPTableSelector:
         # Require minimum confidence (except for synonym-forced anchors)
         min_anchor_conf = 0.15
         anchors = [
-            t for t in anchors
+            t
+            for t in anchors
             if confidences.get(t, 0.0) >= min_anchor_conf or t in synonym_forced
         ]
 
@@ -690,7 +696,9 @@ class NLPTableSelector:
                 selected_tables.append(t)
 
         # Step 6: Filter noise
-        selected_tables = [t for t in selected_tables if not self._is_structurally_peripheral(t)]
+        selected_tables = [
+            t for t in selected_tables if not self._is_structurally_peripheral(t)
+        ]
         selected_tables = self._filter_secondary_tables(selected_tables, confidences)
         selected_tables = self._prefer_canonical_variants(selected_tables, confidences)
 
@@ -714,8 +722,7 @@ class NLPTableSelector:
         # Fallback: if no tables pass, return top non-peripheral candidates
         if not selected_tables and confidences:
             all_non_peripheral = [
-                t for t in confidences.keys()
-                if not self._is_structurally_peripheral(t)
+                t for t in confidences.keys() if not self._is_structurally_peripheral(t)
             ]
             if all_non_peripheral:
                 selected_tables = sorted(
@@ -829,34 +836,34 @@ class NLPTableSelector:
 
         return dict(table_scores)
 
-#    def _softmax_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
-#        """
-#        Apply softmax to scores to get probabilities.
-#
-#        Args:
-#            scores: Dict of table scores
-#
-#        Returns:
-#            Dict of normalized confidences (0-1)
-#        """
-#        # deprecated: replaced by _normalize_scores
-#        if not scores:
-#            return {}
-#
-#        # Convert to array
-#        tables = sorted(scores.keys())
-#        score_array = np.array([scores[t] for t in tables])
-#
-#        # Subtract max for numerical stability
-#        score_array = score_array - np.max(score_array)
-#
-#        # Apply exp
-#        exp_scores = np.exp(score_array)
-#
-#        # Compute softmax
-#        softmax = exp_scores / np.sum(exp_scores)
-#
-#        return {table: float(prob) for table, prob in zip(tables, softmax)}
+    #    def _softmax_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
+    #        """
+    #        Apply softmax to scores to get probabilities.
+    #
+    #        Args:
+    #            scores: Dict of table scores
+    #
+    #        Returns:
+    #            Dict of normalized confidences (0-1)
+    #        """
+    #        # deprecated: replaced by _normalize_scores
+    #        if not scores:
+    #            return {}
+    #
+    #        # Convert to array
+    #        tables = sorted(scores.keys())
+    #        score_array = np.array([scores[t] for t in tables])
+    #
+    #        # Subtract max for numerical stability
+    #        score_array = score_array - np.max(score_array)
+    #
+    #        # Apply exp
+    #        exp_scores = np.exp(score_array)
+    #
+    #        # Compute softmax
+    #        softmax = exp_scores / np.sum(exp_scores)
+    #
+    #        return {table: float(prob) for table, prob in zip(tables, softmax)}
 
     def _normalize_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
         """
@@ -894,18 +901,18 @@ class NLPTableSelector:
         - Progressive: moving → move
         """
         stems = {word}
-        if word.endswith('ies') and len(word) > 4:
-            stems.add(word[:-3] + 'y')
-        if word.endswith('es') and len(word) > 3:
+        if word.endswith("ies") and len(word) > 4:
+            stems.add(word[:-3] + "y")
+        if word.endswith("es") and len(word) > 3:
             stems.add(word[:-2])
-        if word.endswith('s') and not word.endswith('ss') and len(word) > 2:
+        if word.endswith("s") and not word.endswith("ss") and len(word) > 2:
             stems.add(word[:-1])
-        if word.endswith('ed') and len(word) > 4:
+        if word.endswith("ed") and len(word) > 4:
             stems.add(word[:-2])
             stems.add(word[:-1])  # "issued" → "issue"
-        if word.endswith('ing') and len(word) > 5:
+        if word.endswith("ing") and len(word) > 5:
             stems.add(word[:-3])
-            stems.add(word[:-3] + 'e')  # "moving" → "move"
+            stems.add(word[:-3] + "e")  # "moving" → "move"
         return stems
 
     def _apply_lexical_boost(
@@ -929,7 +936,10 @@ class NLPTableSelector:
             table_lower = table_name.lower()
 
             # Direct table name match (with stems)
-            if any(stem in meta.normalized_name or stem in table_lower for stem in token_stems):
+            if any(
+                stem in meta.normalized_name or stem in table_lower
+                for stem in token_stems
+            ):
                 table_scores[table_name] = (
                     table_scores.get(table_name, 0.0) + table_boost
                 )
@@ -956,7 +966,8 @@ class NLPTableSelector:
                 # Check with stemmed tokens for morphological variants
                 matched = any(
                     stem == syn or stem in syn.split()
-                    for stem in token_stems for syn in synonyms
+                    for stem in token_stems
+                    for syn in synonyms
                 )
                 if not matched:
                     matched = any(stem in business_words for stem in token_stems)
@@ -1108,18 +1119,21 @@ class NLPTableSelector:
             table_lower = table.lower()
 
             # Detail table → find its header
-            if '_dtl' in table_lower:
-                base = table_lower.replace('_dtl', '')
+            if "_dtl" in table_lower:
+                base = table_lower.replace("_dtl", "")
                 for candidate in all_tables:
                     cand_lower = candidate.lower()
-                    if cand_lower == base or cand_lower == base.replace('_dtl', '') + '_hdr':
+                    if (
+                        cand_lower == base
+                        or cand_lower == base.replace("_dtl", "") + "_hdr"
+                    ):
                         expanded.add(candidate)
 
             # Header table → find its detail
-            if '_hdr' in table_lower:
-                base = table_lower.replace('_hdr', '')
+            if "_hdr" in table_lower:
+                base = table_lower.replace("_hdr", "")
                 for candidate in all_tables:
-                    if candidate.lower() == base + '_dtl':
+                    if candidate.lower() == base + "_dtl":
                         expanded.add(candidate)
 
         return expanded
@@ -1148,7 +1162,7 @@ class NLPTableSelector:
                     return True
 
         # Fallback: naming convention
-        return table.lower().startswith('mst_')
+        return table.lower().startswith("mst_")
 
     def _infer_structural_links(self) -> None:
         """
@@ -1258,9 +1272,9 @@ class NLPTableSelector:
 
         # Normalize FK and structural degrees using smooth scaling
         return (
-            0.5 * canonical +
-            0.3 * (fk_degree / (1 + fk_degree)) +
-            0.2 * (structural_degree / (1 + structural_degree))
+            0.5 * canonical
+            + 0.3 * (fk_degree / (1 + fk_degree))
+            + 0.2 * (structural_degree / (1 + structural_degree))
         )
 
     def _is_structurally_peripheral(self, table: str) -> bool:
@@ -1286,11 +1300,26 @@ class NLPTableSelector:
 
         # Name-based detection (high confidence)
         peripheral_patterns = [
-            'bkp_', '_bkp', '_backup', 'backup_',
-            '_log', 'log_', '_audit', 'audit_',
-            'temp_', '_temp', '_tmp', 'tmp_',
-            '_old', 'old_', '_archive', 'archive_',
-            '_copy', 'copy_', '_test', 'test_'
+            "bkp_",
+            "_bkp",
+            "_backup",
+            "backup_",
+            "_log",
+            "log_",
+            "_audit",
+            "audit_",
+            "temp_",
+            "_temp",
+            "_tmp",
+            "tmp_",
+            "_old",
+            "old_",
+            "_archive",
+            "archive_",
+            "_copy",
+            "copy_",
+            "_test",
+            "test_",
         ]
 
         for pattern in peripheral_patterns:
@@ -1298,7 +1327,7 @@ class NLPTableSelector:
                 return True
 
         # Date-stamped variants (e.g., bkp300725_mst_item)
-        if re.search(r'bkp\d{6,8}', table_lower):
+        if re.search(r"bkp\d{6,8}", table_lower):
             return True
 
         # Structural detection (lower confidence)
@@ -1306,11 +1335,7 @@ class NLPTableSelector:
         fk_degree = len(self.fk_graph.get(table, []))
         structural_degree = len(self.structural_links.get(table, []))
 
-        return (
-            canonical < 0.35 and
-            fk_degree <= 1 and
-            structural_degree == 0
-        )
+        return canonical < 0.35 and fk_degree <= 1 and structural_degree == 0
 
     def _expand_structural(self, tables: List[str]) -> List[str]:
         """
@@ -1354,7 +1379,9 @@ class NLPTableSelector:
 
         return dims
 
-    def _filter_secondary_tables(self, tables: List[str], confidences: Dict[str, float], threshold: float = 0.4) -> List[str]:
+    def _filter_secondary_tables(
+        self, tables: List[str], confidences: Dict[str, float], threshold: float = 0.4
+    ) -> List[str]:
         """
         Filter out secondary tables unless they have high confidence.
 
@@ -1369,7 +1396,7 @@ class NLPTableSelector:
         Returns:
             Filtered list of tables
         """
-        secondary_patterns = ['_plan', '_release', '_return', '_queue', '_staging']
+        secondary_patterns = ["_plan", "_release", "_return", "_queue", "_staging"]
 
         filtered = []
         for table in tables:
@@ -1385,7 +1412,9 @@ class NLPTableSelector:
 
         return filtered
 
-    def _prefer_canonical_variants(self, tables: List[str], confidences: Dict[str, float]) -> List[str]:
+    def _prefer_canonical_variants(
+        self, tables: List[str], confidences: Dict[str, float]
+    ) -> List[str]:
         """
         When multiple table variants exist (e.g., mst_item, bkp_mst_item),
         prefer the canonical version.
@@ -1408,14 +1437,32 @@ class NLPTableSelector:
         def get_base_name(table: str) -> str:
             """Extract base name by removing common prefixes/suffixes."""
             name = table.lower()
-            for prefix in ['bkp_', 'temp_', 'tmp_', 'old_', 'backup_', 'archive_', 'copy_', 'test_']:
+            for prefix in [
+                "bkp_",
+                "temp_",
+                "tmp_",
+                "old_",
+                "backup_",
+                "archive_",
+                "copy_",
+                "test_",
+            ]:
                 if name.startswith(prefix):
-                    name = name[len(prefix):]
+                    name = name[len(prefix) :]
             # Remove date stamps like bkp300725_
-            name = re.sub(r'^bkp\d{6,8}_', '', name)
-            for suffix in ['_bkp', '_backup', '_temp', '_tmp', '_old', '_archive', '_copy', '_test']:
+            name = re.sub(r"^bkp\d{6,8}_", "", name)
+            for suffix in [
+                "_bkp",
+                "_backup",
+                "_temp",
+                "_tmp",
+                "_old",
+                "_archive",
+                "_copy",
+                "_test",
+            ]:
                 if name.endswith(suffix):
-                    name = name[:-len(suffix)]
+                    name = name[: -len(suffix)]
             return name
 
         # Group variants
@@ -1431,11 +1478,14 @@ class NLPTableSelector:
                 selected.append(variants[0])
             else:
                 # Multiple variants - choose canonical
-                best = max(variants, key=lambda t: (
-                    not self._is_structurally_peripheral(t),
-                    self._canonical_weight(t),
-                    confidences.get(t, 0.0)
-                ))
+                best = max(
+                    variants,
+                    key=lambda t: (
+                        not self._is_structurally_peripheral(t),
+                        self._canonical_weight(t),
+                        confidences.get(t, 0.0),
+                    ),
+                )
                 selected.append(best)
 
         return selected
@@ -1507,9 +1557,9 @@ class NLPTableSelector:
     def _is_rich_semantic_layer(self) -> bool:
         """Check if semantic layer uses the rich dict format with entities/relationships."""
         return isinstance(self.semantic_layer, dict) and (
-            "entities" in self.semantic_layer or
-            "relationships" in self.semantic_layer or
-            "columns" in self.semantic_layer
+            "entities" in self.semantic_layer
+            or "relationships" in self.semantic_layer
+            or "columns" in self.semantic_layer
         )
 
     def _build_semantic_maps(self) -> Tuple[Dict[str, str], Dict[str, str]]:
@@ -1517,7 +1567,7 @@ class NLPTableSelector:
         Build lookup maps for semantic table and column descriptions.
 
         Handles both simple list format and rich dict format.
-        
+
         Returns:
             Tuple of (table_description_map, column_description_map)
         """
@@ -1555,7 +1605,7 @@ class NLPTableSelector:
         - entities: table descriptions (applied to each physical_table)
         - columns: column business names and synonyms
         - measures: column-level descriptions from measure definitions
-        
+
         Returns:
             Tuple of (table_description_map, column_description_map)
         """
@@ -1717,7 +1767,7 @@ class NLPTableSelector:
         for entity in self.semantic_layer.get("entities", []):
             phys_tables = entity.get("physical_tables", [])
             for i, t1 in enumerate(phys_tables):
-                for t2 in phys_tables[i + 1:]:
+                for t2 in phys_tables[i + 1 :]:
                     if t1 in self.table_metadata and t2 in self.table_metadata:
                         if t2 not in self.fk_graph.get(t1, set()):
                             self.fk_graph[t1].add(t2)
@@ -1725,7 +1775,9 @@ class NLPTableSelector:
                             added += 1
 
         if added > 0:
-            logger.info(f"Enriched FK graph with {added} relationships from semantic layer")
+            logger.info(
+                f"Enriched FK graph with {added} relationships from semantic layer"
+            )
 
     def _build_table_embeddings_for_tables(self, table_names: List[str]) -> None:
         """Rebuild documents and embeddings for specific tables."""

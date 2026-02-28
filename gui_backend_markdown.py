@@ -212,7 +212,9 @@ class DataWorkspaceBackend:
                     content, pattern, temp_dir, graph_dir, allowed_ext
                 )
                 if updated != content:
-                    logger.debug(f"Chart paths rewritten in message: {message.get('role')}")
+                    logger.debug(
+                        f"Chart paths rewritten in message: {message.get('role')}"
+                    )
                     message["content"] = updated
 
     @staticmethod
@@ -225,7 +227,7 @@ class DataWorkspaceBackend:
     ) -> str:
         def replace(match: re.Match) -> str:
             alt_text = match.group(1)
-            raw_path = match.group(2).strip().strip("\"").strip("'")
+            raw_path = match.group(2).strip().strip('"').strip("'")
             lower = raw_path.lower()
             if lower.startswith("http://") or lower.startswith("https://"):
                 logger.debug(f"Skipping remote URL: {raw_path}")
@@ -259,7 +261,9 @@ class DataWorkspaceBackend:
                     rel_path = rel_path.replace("\\", "/")
                     logger.debug(f"Using relative path from graph dir: {rel_path}")
                     return f"![{alt_text}]({rel_path})"
-                logger.debug(f"Chart path outside temp/graph directories: {path_candidate}")
+                logger.debug(
+                    f"Chart path outside temp/graph directories: {path_candidate}"
+                )
                 return match.group(0)
 
             base_name = os.path.basename(path_candidate)
@@ -271,13 +275,17 @@ class DataWorkspaceBackend:
                     while os.path.exists(target):
                         target = os.path.join(graph_dir, f"{name}_{counter}{ext_name}")
                         counter += 1
-                    logger.debug(f"File exists with different size, using new name: {target}")
+                    logger.debug(
+                        f"File exists with different size, using new name: {target}"
+                    )
 
             try:
                 shutil.copy2(path_candidate, target)
                 logger.info(f"Chart asset copied: {path_candidate} -> {target}")
             except Exception as e:
-                logger.error(f"Failed to copy chart asset: {path_candidate}", exc_info=True)
+                logger.error(
+                    f"Failed to copy chart asset: {path_candidate}", exc_info=True
+                )
                 return match.group(0)
 
             rel_path = os.path.relpath(target, os.getcwd())
@@ -445,8 +453,7 @@ class DataWorkspaceBackend:
             schema = {
                 "tables": self.data_context.get("tables", []),
                 "columns": {
-                    table: info.get("columns", [])
-                    for table, info in table_info.items()
+                    table: info.get("columns", []) for table, info in table_info.items()
                 },
                 "dtypes": {
                     table: info.get("column_types", {})
@@ -611,16 +618,14 @@ class DataWorkspaceBackend:
         return {
             "tables": self.data_context.get("tables", []),
             "columns": {
-                table: info.get("columns", [])
-                for table, info in table_info.items()
+                table: info.get("columns", []) for table, info in table_info.items()
             },
             "dtypes": {
                 table: info.get("column_types", {})
                 for table, info in table_info.items()
             },
             "row_counts": {
-                table: info.get("row_count", 0)
-                for table, info in table_info.items()
+                table: info.get("row_count", 0) for table, info in table_info.items()
             },
         }
 
@@ -670,16 +675,16 @@ class DataWorkspaceBackend:
         table_info = data_context.get("table_info", {})
         qualified_columns: List[str] = []
         for table, info in table_info.items():
-            qualified_columns.extend([f"{table}.{col}" for col in info.get("columns", [])])
+            qualified_columns.extend(
+                [f"{table}.{col}" for col in info.get("columns", [])]
+            )
 
         if len(qualified_columns) <= 50:
             columns_list = ", ".join(qualified_columns)
         else:
             first_cols = ", ".join(qualified_columns[:30])
             last_cols = ", ".join(qualified_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
-            )
+            columns_list = f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
 
         # Prepare example questions list (compact bullets)
         example_questions = [
@@ -734,16 +739,16 @@ class DataWorkspaceBackend:
         table_info = data_context.get("table_info", {})
         qualified_columns: List[str] = []
         for table, info in table_info.items():
-            qualified_columns.extend([f"{table}.{col}" for col in info.get("columns", [])])
+            qualified_columns.extend(
+                [f"{table}.{col}" for col in info.get("columns", [])]
+            )
 
         if len(qualified_columns) <= 50:
             columns_list = ", ".join(qualified_columns)
         else:
             first_cols = ", ".join(qualified_columns[:30])
             last_cols = ", ".join(qualified_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
-            )
+            columns_list = f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
 
         # Prepare example questions list (compact bullets)
         example_questions = [
@@ -755,12 +760,7 @@ class DataWorkspaceBackend:
 
         file_count = len(file_paths)
         file_word = "file" if file_count == 1 else "files"
-        files_detail = "\n".join(
-            [
-                f"- {os.path.basename(fp)}"
-                for fp in file_paths
-            ]
-        )
+        files_detail = "\n".join([f"- {os.path.basename(fp)}" for fp in file_paths])
 
         table_detail = "\n".join(
             [

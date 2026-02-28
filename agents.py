@@ -31,10 +31,6 @@ from constants import (
     LLM_TEMPERATURE_CODE,
     LLM_TEMPERATURE_ANALYSIS,
     LLM_MODELS,
-    PLANNER_SYSTEM_PROMPT_TEMPLATE,
-    CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE,
-    ANALYSIS_SYSTEM_PROMPT_TEMPLATE,
-    VISUALIZATION_SYSTEM_PROMPT_TEMPLATE,
     DB_MAX_ROWS_IN_MEMORY,
     DB_READ_CHUNK_SIZE,
     SAMPLE_ROWS_INFO,
@@ -42,7 +38,9 @@ from constants import (
 
 # Load API keys from configuration
 OPENAI_API_KEY = ConfigManager.get_api_key("openai") or os.getenv("OPENAI_API_KEY", "")
-CLAUDE_API_KEY = ConfigManager.get_api_key("claude") or os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_API_KEY = ConfigManager.get_api_key("claude") or os.getenv(
+    "ANTHROPIC_API_KEY", ""
+)
 
 # Default API to use: "openai" or "claude"
 DEFAULT_API = ConfigManager.get_default_api()
@@ -66,10 +64,196 @@ OPENAI_MODEL = LLM_MODELS.get("openai")
 # Visualization configuration
 VISUALIZATION_MAX_TOKENS = 800
 VISUALIZATION_TEMPERATURE = 0.3
-VISUALIZATION_TEMP_DIR = os.path.join(
-    tempfile.gettempdir(), "ai_data_workspace_charts"
-)
+VISUALIZATION_TEMP_DIR = os.path.join(tempfile.gettempdir(), "ai_data_workspace_charts")
 ANALYSIS_CONTEXT_RESULT_MAX_CHARS = 2000
+
+# ============================================================================
+# Agent Prompt Templates
+# ============================================================================
+
+PLANNER_SYSTEM_PROMPT_TEMPLATE = """You are a senior data analysis planner responsible for translating a user's question into a precise, executable analysis plan based ONLY on the provided SQL schema and samples.
+
+You do NOT write SQL. You ONLY produce a structured plan.
+
+SCHEMA METADATA
+Tables: $tables
+Columns (qualified): $columns
+Columns by table: $columns_by_table
+Row counts: $row_counts
+Column types: $dtypes
+Sample rows:
+${sample}
+
+USER QUESTION
+$user_query
+
+PLANNING RULES
+- Base all reasoning ONLY on the provided tables and columns
+- NEVER assume columns or data that are not listed
+- If the question cannot be answered with available data, mark task_type="unsupported"
+- Prefer the simplest valid approach
+- Visualization is required only if it meaningfully improves interpretation
+- SQL is required if computation, grouping, filtering, statistics, or joins are needed
+- Summary-only tasks require no query
+
+OUTPUT SCHEMA (STRICT JSON ONLY)
+{
+    "task_type": "analysis" | "visualization" | "summary" | "transformation" | "unsupported",
+    "objective": "one-sentence description of what will be computed or examined",
+    "analysis_focus": ["specific metrics, segments, or relationships to evaluate"],
+    "steps": ["ordered atomic actions referencing exact table and column names"],
+    "requires_sql": true | false,
+    "requires_visualization": true | false,
+    "expected_result_type": "scalar" | "table" | "chart" | "text" | "unknown"
+}
+
+Return ONLY valid JSON. No markdown. No commentary.
+"""
+
+CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade SQL generation engine that produces safe, deterministic SQL from an approved analysis plan.
+
+SCHEMA METADATA
+Tables: $tables
+Columns (qualified): $columns
+Columns by table: $columns_by_table
+Row counts: $row_counts
+Column types: $dtypes
+Sample rows:
+${sample}
+
+APPROVED PLAN
+$plan
+
+SQL CONTRACT
+- Output ONLY a single SELECT query
+- Use only the listed tables and columns
+- Fully qualify columns when joins are involved
+- Prefer explicit JOINs with clear ON conditions
+- Avoid SELECT *
+- Include ORDER BY for ranked or time-series results
+- Limit results when it improves performance, unless full output is required
+
+SECURITY RULES (MANDATORY)
+- FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
+- FORBIDDEN: multiple statements
+- FORBIDDEN: comments or dynamic SQL
+- FORBIDDEN: external or network access
+
+FAILURE HANDLING
+If the plan cannot be executed with given data:
+Return a SQL query that yields a single row with a clear error message in a column named error.
+
+OUTPUT
+Return ONLY SQL. No markdown. No explanations.
+"""
+
+ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """You are a clear, practical data analyst explaining results from a SQL analysis to non-technical stakeholders.
+
+CONTEXT
+$context
+
+Write a concise explanation that:
+
+1. Answers the user's question directly in 1\u20132 sentences.
+2. Summarizes the key supporting values, comparisons, or trends from the result.
+3. Explains what the finding means in plain language and why it matters.
+4. Notes any important limitations, assumptions, or missing data if relevant.
+5. Do not mention temporary file paths.
+6. Query details can be mentioned ONLY if they aid understanding.
+
+STYLE
+- Use concrete numbers from the result
+- Do not speculate beyond provided data
+- Prefer clarity over technical jargon
+- Keep length moderate (\u2248120\u2013180 words)
+GUARDRAILS (MANDATORY)
+- Do NOT describe the schema or table structure
+- Do NOT restate obvious counts like "the query returned X rows"
+- Focus on patterns, trends, anomalies, comparisons, and insights
+- If the dataset is large, rely only on summary statistics and profiles
+- If there is insufficient signal, say so briefly
+- Do NOT invent observations that are not supported by the data"""
+
+VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Altair visualization engine that generates a single, valid chart from SQL query results.
+
+You MUST return Python code that creates exactly ONE Altair chart object named 'chart'.
+
+DATASET METADATA
+Columns: $columns
+Sample rows (first 5): $sample_rows
+
+USER REQUIREMENTS
+$requirements
+
+AVAILABLE DATA
+A pandas DataFrame named df contains the full query result.
+Columns available: $columns
+
+OBJECTIVE
+Create the most appropriate Altair visualization that best answers the user requirement or represents the dataset structure.
+
+CHART SELECTION RULES (STRICT)
+Select chart type based on column semantics:
+
+- Temporal trend (date/time + numeric) -> line or area
+- Categorical comparison -> bar
+- Ranking / top-N -> sorted bar
+- Part-to-whole -> arc (pie/donut)
+- Numeric vs numeric -> scatter
+- Distribution of numeric -> binned bar (histogram)
+- If only one numeric column -> aggregated bar or histogram
+- If only categorical columns -> count bar chart
+
+AGGREGATION RULES (MANDATORY)
+If multiple rows share the same category or time value:
+- Aggregate numeric fields using sum() unless requirement specifies otherwise
+- Use count() when measuring frequency
+- Never plot duplicate raw rows over categories
+
+TYPE INFERENCE RULES
+You MUST assign correct Vega-Lite types:
+
+- Date/time columns -> :T
+- Numeric columns -> :Q
+- Categorical/text columns -> :N
+
+If needed, convert:
+- df[col] = pd.to_datetime(df[col]) for temporal
+- df[col] = pd.to_numeric(df[col], errors="coerce") for numeric
+
+ENCODING RULES
+- X = category or time
+- Y = numeric measure
+- Color = secondary category (only if useful)
+- Tooltip MUST include key fields
+- Sort categorical axes by descending value when meaningful
+
+VISUAL QUALITY RULES
+- width and height between 300 and 600
+- Title describing what is shown
+- No overlapping marks
+- No excessive categories (>50) without aggregation
+- Prefer clear readable axes
+
+ALTAIR CONTRACT (MANDATORY)
+- Use ONLY altair (imported as alt)
+- Do NOT print df
+- Do NOT output tables or text
+- Do NOT create multiple charts
+- Do NOT use display()
+- Do NOT return Vega JSON
+- Final object MUST be assigned to variable: chart
+
+FAILSAFE
+If visualization is impossible with given columns:
+Create a simple count bar chart of the first categorical column.
+
+OUTPUT FORMAT
+Return ONLY valid Python code.
+No markdown.
+No explanations.
+The code must define exactly one Altair chart assigned to variable 'chart'.
+"""
 
 
 class AIAgent:
@@ -232,6 +416,50 @@ class AIAgent:
             "row_counts": row_counts,
             "sample_rows": samples,
         }
+
+    async def prompt_expansion_agent(
+        self,
+        user_prompt: str,
+        schema_metadata: Dict[str, Any],
+        semantic_layer: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Expand a short/colloquial user prompt into precise business terms
+        suitable for NLP table selection.
+
+        Returns an enriched prompt string (not SQL).
+        """
+        entity_names = []
+        glossary_terms = []
+        if semantic_layer:
+            entity_names = [
+                e.get("business_name", e["name"])
+                for e in semantic_layer.get("entities", [])
+            ]
+            glossary_terms = list((semantic_layer.get("term_glossary") or {}).keys())
+
+        system_message = (
+            "Rewrite the user request using ONLY schema vocabulary.\n"
+            "Replace synonyms with exact entity, glossary, or table terms.\n"
+            "Add implied schema tokens (entity, measure, dimension, time).\n"
+            "Remove all conversational words.\n"
+            "Output a short keyword-style phrase.\n\n"
+            f"ENTITIES: {entity_names}\n"
+            f"GLOSSARY: {glossary_terms}\n"
+            f"TABLES: {schema_metadata['tables']}\n\n"
+            "Return ONLY the rewritten phrase."
+        )
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        return await self._call_llm(
+            messages,
+            max_tokens=200,
+            temperature=LLM_TEMPERATURE_DEFAULT,
+        )
 
     async def planner_agent(
         self, user_query: str, context: Dict[str, Any]
@@ -496,11 +724,35 @@ class AIAgent:
         # Provide structured result summary instead of raw data
         if code_output is not None:
             summary = self._summarize_query_result(code_output)
-            context_parts.append(f"\nQuery Result Summary: {json.dumps(summary, indent=2)}")
+            context_parts.append(
+                f"\nQuery Result Summary: {json.dumps(summary, indent=2)}"
+            )
 
         system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
             context="\n".join(context_parts)
         )
+
+        # Append mode-aware audience instructions
+        mode = ConfigManager.get_interaction_mode()
+        if mode == "cxo":
+            system_message += (
+                "\n\nAUDIENCE MODE: CxO (Executive)\n"
+                "- Write for an executive audience.\n"
+                "- Lead with the headline insight in the first sentence.\n"
+                "- Use plain, non-technical language throughout.\n"
+                "- Omit all technical details, SQL references, table names, and column names.\n"
+                "- Focus on business impact, trends, and actionable takeaways.\n"
+                "- Keep the response brief (80\u2013120 words).\n"
+                "- Use bullet points for key metrics if helpful."
+            )
+        else:
+            system_message += (
+                "\n\nAUDIENCE MODE: Analyst\n"
+                "- Write for a data-literate analyst.\n"
+                "- Include specific column names, metrics, and methodology notes where relevant.\n"
+                "- Detailed breakdowns and caveats are welcome.\n"
+                "- Keep length moderate (120\u2013180 words)."
+            )
 
         # Limit to 6 messages (3 exchanges) to keep context manageable
         messages: List[Dict[str, str]] = [
@@ -543,6 +795,8 @@ class AIAgent:
         """
         try:
             logger.info(f"Starting execute_query with query: {user_query}")
+            mode = ConfigManager.get_interaction_mode()
+            logger.info(f"Interaction mode: {mode}")
 
             # Step 1: Plan the task
             plan = await self.planner_agent(user_query, context)
@@ -592,8 +846,11 @@ class AIAgent:
                 user_query, context, plan, query_result
             )
 
-            # Step 5: Format response
-            return self._format_response(query_result, analysis, chart_path)
+            # Step 5: Format response based on mode
+            if mode == "cxo":
+                return self._format_cxo_response(analysis, chart_path)
+            else:
+                return self._format_response(query_result, analysis, chart_path)
 
         except Exception as e:
             logger.error(f"Error in execute_query: {str(e)}", exc_info=True)
@@ -759,6 +1016,27 @@ class AIAgent:
         if len(columns) == 1 and len(rows) == 1:
             return True
         return False
+
+    def _format_cxo_response(
+        self, analysis: str, chart_path: Optional[str] = None
+    ) -> str:
+        """
+        Format a CxO-friendly response: insight + optional chart, no SQL or raw data.
+
+        Args:
+            analysis: Text analysis from the analyzer agent
+            chart_path: Optional path to generated chart
+
+        Returns:
+            Formatted response string for executive audience
+        """
+        parts = []
+        if chart_path:
+            parts.append(f"![Chart]({chart_path})")
+            parts.append("")
+        if analysis:
+            parts.append(analysis)
+        return "\n".join(parts) if parts else "No insights available for this query."
 
     def _format_response(
         self, code_result: Any, analysis: str, chart_path: Optional[str] = None

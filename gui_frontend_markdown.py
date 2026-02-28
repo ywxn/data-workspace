@@ -71,6 +71,91 @@ class MessageTextEdit(QTextEdit):
             super().keyPressEvent(e)
 
 
+class InteractionModeDialog(QDialog):
+    """Dialog to select interaction mode at startup (CxO or Analyst)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Interaction Mode")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Choose Your Interaction Mode")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        # Description
+        description = QLabel("Select how you'd like to interact with your data:\n")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        layout.addSpacing(5)
+
+        # CxO mode button
+        self.cxo_btn = QPushButton("CxO Mode")
+        self.cxo_btn.setFont(QFont("Roboto", 11, QFont.Weight.Bold))
+        self.cxo_btn.setMinimumHeight(60)
+        self.cxo_btn.setToolTip(
+            "Executive-friendly: concise insights and charts.\n"
+            "No SQL or technical details shown."
+        )
+        self.cxo_btn.clicked.connect(self._select_cxo)
+        layout.addWidget(self.cxo_btn)
+
+        cxo_desc = QLabel(
+            "  \u2022 One-step insights written for executives\n"
+            "  \u2022 Charts and visualizations without technical detail\n"
+            "  \u2022 No SQL or intermediate steps shown"
+        )
+        cxo_desc.setStyleSheet("color: gray;")
+        cxo_desc.setWordWrap(True)
+        layout.addWidget(cxo_desc)
+
+        layout.addSpacing(10)
+
+        # Analyst mode button
+        self.analyst_btn = QPushButton("Analyst Mode")
+        self.analyst_btn.setFont(QFont("Roboto", 11, QFont.Weight.Bold))
+        self.analyst_btn.setMinimumHeight(60)
+        self.analyst_btn.setToolTip(
+            "Full detail: SQL queries, intermediate results,\n" "and detailed analysis."
+        )
+        self.analyst_btn.clicked.connect(self._select_analyst)
+        layout.addWidget(self.analyst_btn)
+
+        analyst_desc = QLabel(
+            "  \u2022 Full data analysis workflow with SQL visibility\n"
+            "  \u2022 Intermediate results and detailed breakdowns\n"
+            "  \u2022 Technical details available for deeper exploration"
+        )
+        analyst_desc.setStyleSheet("color: gray;")
+        analyst_desc.setWordWrap(True)
+        layout.addWidget(analyst_desc)
+
+        layout.addSpacing(15)
+
+        self.selected_mode: Optional[str] = None
+
+    def _select_cxo(self):
+        self.selected_mode = "cxo"
+        self.accept()
+
+    def _select_analyst(self):
+        self.selected_mode = "analyst"
+        self.accept()
+
+    def get_selected_mode(self) -> str:
+        return self.selected_mode or "analyst"
+
+
 class APIKeyConfigDialog(QDialog):
     """Dialog to set up API keys on first startup."""
 
@@ -317,7 +402,9 @@ class CreateProjectDialog(QDialog):
             db_type = ds.get("db_type")
             credentials = ds.get("credentials", {})
 
-            db_dialog = DatabaseConnectionDialog(self)
+            db_dialog = DatabaseConnectionDialog(
+                self, force_nlp=ConfigManager.get_interaction_mode() == "cxo"
+            )
             # Pre-fill known fields; avoid pre-filling password for security
             db_dialog.db_type_combo.setCurrentText(db_type)
             if "host" in credentials:
@@ -379,64 +466,98 @@ class CreateProjectDialog(QDialog):
                 ConfigManager.get_table_selection_method(),
             )
             semantic_layer = ds.get("semantic_layer")
+            is_cxo = ConfigManager.get_interaction_mode() == "cxo"
 
-            # If the project previously stored a table selection, try to reuse it
-            saved_table = ds.get("table")
-            if saved_table:
-                selected_tables = (
-                    saved_table if isinstance(saved_table, list) else [saved_table]
-                )
+            # CxO mode: skip table selection, store lightweight context for NLP at query time
+            if is_cxo:
                 connector.close()
-            else:
-                selected_tables = select_tables_with_method(
-                    self,
-                    connector,
-                    tables,
-                    selection_method,
-                    semantic_layer,
+                logger.info(
+                    f"CxO mode: skipping table selection on project load. {len(tables)} tables available."
                 )
-                connector.close()
-                if not selected_tables:
-                    return
-
-            source_config = {
-                "db_type": new_config["db_type"],
-                "credentials": new_config["credentials"],
-                "table": selected_tables,
-            }
-            data_context, status = load_data("database", source_config)
-
-            if data_context is not None:
-                self.backend.data_context = data_context
-                # Update project data_source to reflect the used config (save host/port but don't store password)
+                cxo_context = {
+                    "source_type": "database",
+                    "cxo_mode": True,
+                    "db_type": new_config["db_type"],
+                    "credentials": new_config["credentials"],
+                    "all_tables": tables,
+                    "tables": [],
+                    "table_info": {},
+                    "semantic_layer": semantic_layer,
+                }
+                self.backend.data_context = cxo_context
                 credentials_to_store = new_config["credentials"].copy()
                 if "password" in credentials_to_store:
                     credentials_to_store["password"] = ""
                 project.data_source = {
                     "db_type": new_config["db_type"],
                     "credentials": credentials_to_store,
-                    "table": selected_tables,
-                    "table_selection_method": selection_method,
+                    "table_selection_method": "nlp",
                     "semantic_layer": semantic_layer,
+                    "cxo_mode": True,
                 }
                 QMessageBox.information(
                     self,
                     "Project Loaded",
-                    f"Project '{project.title}' loaded and data connected.",
+                    f"Project '{project.title}' loaded and database connected in CxO mode.",
                 )
+
             else:
-                QMessageBox.warning(
-                    self,
-                    "Data Load",
-                    f"Project loaded but failed to load data: {status}",
-                )
+                # Analyst mode: normal table selection flow
+                # If the project previously stored a table selection, try to reuse it
+                saved_table = ds.get("table")
+                if saved_table:
+                    selected_tables = (
+                        saved_table if isinstance(saved_table, list) else [saved_table]
+                    )
+                    connector.close()
+                else:
+                    selected_tables = select_tables_with_method(
+                        self,
+                        connector,
+                        tables,
+                        selection_method,
+                        semantic_layer,
+                    )
+                    connector.close()
+                    if not selected_tables:
+                        return
+
+                source_config = {
+                    "db_type": new_config["db_type"],
+                    "credentials": new_config["credentials"],
+                    "table": selected_tables,
+                }
+                data_context, status = load_data("database", source_config)
+
+                if data_context is not None:
+                    self.backend.data_context = data_context
+                    # Update project data_source to reflect the used config (save host/port but don't store password)
+                    credentials_to_store = new_config["credentials"].copy()
+                    if "password" in credentials_to_store:
+                        credentials_to_store["password"] = ""
+                    project.data_source = {
+                        "db_type": new_config["db_type"],
+                        "credentials": credentials_to_store,
+                        "table": selected_tables,
+                        "table_selection_method": selection_method,
+                        "semantic_layer": semantic_layer,
+                    }
+                    QMessageBox.information(
+                        self,
+                        "Project Loaded",
+                        f"Project '{project.title}' loaded and data connected.",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Data Load",
+                        f"Project loaded but failed to load data: {status}",
+                    )
 
         elif ds and isinstance(ds, dict) and ds.get("file_paths"):
             # Try to load files recorded in the saved project
             file_paths = ds.get("file_paths", [])
-            data_context, welcome_msg = self.backend.load_file_data_with_ui(
-                file_paths
-            )
+            data_context, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
             if data_context is not None:
                 self.backend.data_context = data_context
                 QMessageBox.information(
@@ -575,7 +696,8 @@ class DataSourceDialog(QDialog):
     def select_database(self):
         """Show database connection dialog"""
         logger.debug("Opening database connection dialog")
-        db_dialog = DatabaseConnectionDialog(self)
+        is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
         if db_dialog.exec() == QDialog.DialogCode.Accepted:
             logger.info("Database connection configuration accepted")
             self.data_source_type = "database"
@@ -602,13 +724,15 @@ class DataSourceDialog(QDialog):
 class DatabaseConnectionDialog(QDialog):
     """Dialog for database connection details"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, force_nlp: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Database Connection")
         self.setModal(True)
         self.setMinimumWidth(500)
         self.windowIcon = QIcon("icon.svg")
         self.setWindowIcon(self.windowIcon)
+
+        self.force_nlp = force_nlp
 
         self.semantic_layer: Optional[Dict[str, Any]] = None
 
@@ -626,13 +750,23 @@ class DatabaseConnectionDialog(QDialog):
         # Table selection method
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "NLP (semantic)"])
-        method_pref = ConfigManager.get_table_selection_method()
-        if method_pref == "nlp":
+        if self.force_nlp:
             self.selection_method_combo.setCurrentIndex(1)
+            self.selection_method_combo.setEnabled(False)
+        else:
+            method_pref = ConfigManager.get_table_selection_method()
+            if method_pref == "nlp":
+                self.selection_method_combo.setCurrentIndex(1)
         self.selection_method_combo.currentTextChanged.connect(
             self.on_selection_method_changed
         )
-        form_layout.addRow("Table Selection:", self.selection_method_combo)
+        self.selection_method_row_label = QLabel("Table Selection:")
+        form_layout.addRow(self.selection_method_row_label, self.selection_method_combo)
+
+        # In CxO / force_nlp mode, hide the table selection row entirely
+        if self.force_nlp:
+            self.selection_method_combo.setVisible(False)
+            self.selection_method_row_label.setVisible(False)
 
         # Common fields
         self.host_input = QLineEdit()
@@ -681,6 +815,9 @@ class DatabaseConnectionDialog(QDialog):
         self.on_db_type_changed(self.db_type_combo.currentText())
         self.on_selection_method_changed(self.selection_method_combo.currentText())
 
+        # Auto-load semantic layer from config if available
+        self._try_autoload_semantic_layer()
+
     def on_db_type_changed(self, db_type):
         """Show/hide fields based on database type"""
         logger.debug(f"Database type changed to: {db_type}")
@@ -701,7 +838,7 @@ class DatabaseConnectionDialog(QDialog):
     def on_selection_method_changed(self, method_text):
         """Show/hide semantic layer controls based on selection method."""
         logger.debug(f"Table selection method changed to: {method_text}")
-        is_nlp = "nlp" in method_text.lower()
+        is_nlp = "nlp" in method_text.lower() or self.force_nlp
         self.semantic_layer_container.setVisible(is_nlp)
 
     def validate_and_accept(self):
@@ -776,15 +913,37 @@ class DatabaseConnectionDialog(QDialog):
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f) # if this fails it will raise an exception so we don't need to check
+                data = json.load(
+                    f
+                )  # if this fails it will raise an exception so we don't need to check
             self.semantic_layer = data
             self.semantic_layer_label.setText(f"Loaded: {os.path.basename(file_path)}")
+            # Persist the path so it can be auto-loaded next time
+            ConfigManager.set_semantic_layer_path(file_path)
+            logger.info(f"Semantic layer loaded and path saved: {file_path}")
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Semantic Layer Error",
                 f"Failed to load semantic layer: {str(e)}",
             )
+
+    def _try_autoload_semantic_layer(self) -> None:
+        """Auto-load semantic layer from the saved config path if available."""
+        saved_path = ConfigManager.get_semantic_layer_path()
+        if not saved_path or not os.path.isfile(saved_path):
+            return
+
+        try:
+            with open(saved_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.semantic_layer = data
+            self.semantic_layer_label.setText(
+                f"Auto-loaded: {os.path.basename(saved_path)}"
+            )
+            logger.info(f"Semantic layer auto-loaded from config: {saved_path}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-load semantic layer from {saved_path}: {e}")
 
 
 class NLPPromptDialog(QDialog):
@@ -948,9 +1107,7 @@ class ProjectLoadDialog(QDialog):
             if isinstance(description, str) and description.strip():
                 return description.strip()
         except Exception as e:
-            logger.debug(
-                f"Failed to read description for project '{file_name}': {e}"
-            )
+            logger.debug(f"Failed to read description for project '{file_name}': {e}")
         return "No description available."
 
 
@@ -977,6 +1134,29 @@ def select_tables_with_method(
                 "Please provide a description to select tables.",
             )
             return None
+
+        # --- Expand prompt via LLM middleman if enabled ---
+        if ConfigManager.get_prompt_expansion_enabled():
+            try:
+                import asyncio
+
+                agent = AIAgent()
+                schema_meta = {"tables": tables}
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    expanded = loop.run_until_complete(
+                        agent.prompt_expansion_agent(
+                            prompt, schema_meta, semantic_layer
+                        )
+                    )
+                finally:
+                    loop.close()
+                if expanded and len(expanded) > len(prompt):
+                    logger.info(f"Expanded prompt: {expanded[:200]}")
+                    prompt = expanded
+            except Exception as e:
+                logger.warning(f"Prompt expansion failed, using original: {e}")
 
         try:
             selector = NLPTableSelector(
@@ -1040,17 +1220,28 @@ class QueryWorker(QThread):
             logger.debug(
                 f"QueryWorker starting execution for query: {self.query[:100]}..."
             )
+
+            # CxO mode: run NLP table selection first, then build context
+            if self.data_context.get("cxo_mode"):
+                effective_context = self._build_cxo_context()
+                if effective_context is None:
+                    self.error_signal.emit(
+                        "Could not identify relevant tables for your question. "
+                        "Please try rephrasing with more specific terms."
+                    )
+                    return
+            else:
+                effective_context = self.data_context
+
             # Run async agent methods in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # Use the new orchestrated execute_query method
-            tables = self.data_context.get("tables", [])
-            logger.debug(
-                f"Executing query asynchronously (tables: {tables})"
-            )
+            tables = effective_context.get("tables", [])
+            logger.debug(f"Executing query asynchronously (tables: {tables})")
             result = loop.run_until_complete(
-                self.agent.execute_query(self.query, self.data_context)
+                self.agent.execute_query(self.query, effective_context)
             )
             logger.info(
                 f"Query execution completed successfully (result length: {len(result)} chars)"
@@ -1061,6 +1252,94 @@ class QueryWorker(QThread):
         except Exception as e:
             logger.error(f"Query execution failed: {str(e)}", exc_info=True)
             self.error_signal.emit(f"Error: {str(e)}")
+
+    def _build_cxo_context(self) -> Optional[Dict[str, Any]]:
+        """
+        In CxO mode, connect to the database, run NLP table selection on the
+        user's prompt, collect table info for the selected tables, and return
+        a complete data context ready for execute_query.
+        """
+        from processing import _collect_table_info
+
+        db_type = self.data_context["db_type"]
+        credentials = self.data_context["credentials"]
+        semantic_layer = self.data_context.get("semantic_layer")
+
+        logger.info(f"CxO mode: connecting to {db_type} for NLP table selection...")
+        connector = DatabaseConnector()
+        success, message = connector.connect(db_type, credentials)
+        if not success:
+            logger.error(f"CxO mode: DB connection failed: {message}")
+            connector.close()
+            return None
+
+        try:
+            # --- Expand prompt via LLM middleman if enabled ---
+            effective_prompt = self.query
+            if ConfigManager.get_prompt_expansion_enabled():
+                try:
+                    all_tables = self.data_context.get("all_tables", [])
+                    schema_meta = {"tables": all_tables}
+                    exp_agent = AIAgent()
+                    exp_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(exp_loop)
+                    try:
+                        expanded = exp_loop.run_until_complete(
+                            exp_agent.prompt_expansion_agent(
+                                self.query, schema_meta, semantic_layer
+                            )
+                        )
+                    finally:
+                        exp_loop.close()
+                    if expanded and len(expanded) > len(self.query):
+                        logger.info(f"CxO prompt expanded: {expanded[:200]}")
+                        effective_prompt = expanded
+                except Exception as e:
+                    logger.warning(f"CxO prompt expansion failed, using original: {e}")
+
+            # Run NLP table selector
+            selector = NLPTableSelector(
+                connector,
+                semantic_layer=semantic_layer or {},
+            )
+            result = selector.select_tables(effective_prompt, top_k=5)
+
+            if result.status == "no_match" or not result.tables:
+                logger.warning("CxO mode: NLP found no matching tables")
+                connector.close()
+                return None
+
+            # Use all selected + top candidates
+            selected_tables = result.tables[:]
+            if result.top_candidates:
+                selected_tables = list(
+                    dict.fromkeys(result.tables + result.top_candidates)
+                )
+
+            logger.info(f"CxO mode: NLP selected tables: {selected_tables}")
+
+            # Collect table info for the selected tables
+            table_info: Dict[str, Any] = {}
+            for table_name in selected_tables:
+                info, _skipped = _collect_table_info(connector, table_name)
+                table_info[table_name] = info
+
+            context = {
+                "source_type": "database",
+                "db_type": db_type,
+                "credentials": credentials,
+                "tables": selected_tables,
+                "table_info": table_info,
+            }
+
+            logger.info(f"CxO mode: built context with {len(selected_tables)} tables")
+            return context
+
+        except Exception as e:
+            logger.error(f"CxO mode: NLP table selection failed: {e}", exc_info=True)
+            return None
+        finally:
+            connector.close()
 
 
 class DataWorkspaceGUI(QMainWindow):
@@ -1158,6 +1437,32 @@ class DataWorkspaceGUI(QMainWindow):
         dec_font_action.setShortcut("Ctrl+-")
         dec_font_action.triggered.connect(lambda: self.adjust_font(-1))
         view_menu.addAction(dec_font_action)
+
+        # ===== Settings Menu =====
+        settings_menu = menu_bar.addMenu("Settings")
+
+        # Interaction Mode submenu
+        mode_menu = settings_menu.addMenu("Interaction Mode")
+        self.mode_action_group = QActionGroup(self)
+        self.mode_action_group.setExclusive(True)
+
+        current_mode = ConfigManager.get_interaction_mode()
+
+        self.cxo_mode_action = QAction("CxO Mode", self)
+        self.cxo_mode_action.setCheckable(True)
+        self.cxo_mode_action.setChecked(current_mode == "cxo")
+        self.cxo_mode_action.triggered.connect(lambda: self.set_interaction_mode("cxo"))
+        self.mode_action_group.addAction(self.cxo_mode_action)
+        mode_menu.addAction(self.cxo_mode_action)
+
+        self.analyst_mode_action = QAction("Analyst Mode", self)
+        self.analyst_mode_action.setCheckable(True)
+        self.analyst_mode_action.setChecked(current_mode == "analyst")
+        self.analyst_mode_action.triggered.connect(
+            lambda: self.set_interaction_mode("analyst")
+        )
+        self.mode_action_group.addAction(self.analyst_mode_action)
+        mode_menu.addAction(self.analyst_mode_action)
 
         # ===== Help Menu =====
         help_menu = menu_bar.addMenu("Help")
@@ -1791,7 +2096,7 @@ class DataWorkspaceGUI(QMainWindow):
     def connect_data_source(self):
         """Open dialog to connect to a data source"""
         logger.info("User initiated data source connection")
-        
+
         # Loop until data is successfully loaded or user cancels
         while True:
             source_dialog = DataSourceDialog(self)
@@ -1816,7 +2121,9 @@ class DataWorkspaceGUI(QMainWindow):
                             success, message = connector.connect(db_type, credentials)
 
                             if success:
-                                logger.info(f"Successfully connected to {db_type} database")
+                                logger.info(
+                                    f"Successfully connected to {db_type} database"
+                                )
                                 tables = connector.get_tables()
 
                                 if not tables:
@@ -1828,7 +2135,55 @@ class DataWorkspaceGUI(QMainWindow):
                                     )
                                     continue
 
-                                if tables:
+                                is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+
+                                if is_cxo and tables:
+                                    # CxO mode: skip table selection, defer to query time
+                                    connector.close()
+                                    logger.info(
+                                        f"CxO mode: skipping table selection. {len(tables)} tables available."
+                                    )
+                                    cxo_context = {
+                                        "source_type": "database",
+                                        "cxo_mode": True,
+                                        "db_type": db_type,
+                                        "credentials": credentials,
+                                        "all_tables": tables,
+                                        "tables": [],
+                                        "table_info": {},
+                                        "semantic_layer": semantic_layer,
+                                    }
+                                    self.backend.data_context = cxo_context
+                                    self.data_context = cxo_context
+                                    if self.backend.active_project:
+                                        creds_to_store = credentials.copy()
+                                        if "password" in creds_to_store:
+                                            creds_to_store["password"] = ""
+                                        self.backend.active_project.data_source = {
+                                            "db_type": db_type,
+                                            "credentials": creds_to_store,
+                                            "table_selection_method": "nlp",
+                                            "semantic_layer": semantic_layer,
+                                            "cxo_mode": True,
+                                        }
+                                    table_count = len(tables)
+                                    welcome_msg = (
+                                        f"## Connected to {db_type} database\n\n"
+                                        f"**{table_count}** tables available. "
+                                        f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+                                        f"Simply type your question below to get started."
+                                    )
+                                    self.conversation_display.setHtml(
+                                        markdown_to_html(welcome_msg)
+                                    )
+                                    QMessageBox.information(
+                                        self,
+                                        "Data Loaded",
+                                        "Database connected in CxO mode.",
+                                    )
+                                    return
+
+                                elif tables:
                                     selected_tables = select_tables_with_method(
                                         self,
                                         connector,
@@ -1839,7 +2194,9 @@ class DataWorkspaceGUI(QMainWindow):
                                     connector.close()
 
                                     if selected_tables is None:
-                                        logger.info("User cancelled table selection, returning to data source selection")
+                                        logger.info(
+                                            "User cancelled table selection, returning to data source selection"
+                                        )
                                         continue
 
                                     if selected_tables:
@@ -1863,7 +2220,10 @@ class DataWorkspaceGUI(QMainWindow):
                                                 f"Successfully loaded data from tables: {selected_tables}"
                                             )
                                             welcome_msg = self.backend.format_database_welcome_message(
-                                                db_type, selected_tables, data_context, status
+                                                db_type,
+                                                selected_tables,
+                                                data_context,
+                                                status,
                                             )
                                             self.conversation_display.setHtml(
                                                 markdown_to_html(welcome_msg)
@@ -1890,7 +2250,9 @@ class DataWorkspaceGUI(QMainWindow):
                                             logger.warning(
                                                 f"Failed to load data from database: {status}"
                                             )
-                                            QMessageBox.warning(self, "Load Failed", status)
+                                            QMessageBox.warning(
+                                                self, "Load Failed", status
+                                            )
                                             continue
                             else:
                                 logger.warning(f"Database connection failed: {message}")
@@ -1900,10 +2262,12 @@ class DataWorkspaceGUI(QMainWindow):
                         elif source_type == "file":
                             # File load flow
                             file_paths = source_config.get("file_paths", [])
-                            logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
+                            logger.debug(
+                                f"Loading {len(file_paths)} file(s): {file_paths}"
+                            )
                             if file_paths:
-                                data_context, welcome_msg = self.backend.load_file_data_with_ui(
-                                    file_paths
+                                data_context, welcome_msg = (
+                                    self.backend.load_file_data_with_ui(file_paths)
                                 )
                                 if data_context is not None:
                                     self.data_context = data_context
@@ -1914,15 +2278,23 @@ class DataWorkspaceGUI(QMainWindow):
                                         markdown_to_html(welcome_msg)
                                     )
                                     QMessageBox.information(
-                                        self, "Data Loaded", "Files loaded successfully."
+                                        self,
+                                        "Data Loaded",
+                                        "Files loaded successfully.",
                                     )
                                     return
                                 else:
-                                    logger.warning(f"Failed to load files: {welcome_msg}")
-                                    QMessageBox.warning(self, "Load Failed", welcome_msg)
+                                    logger.warning(
+                                        f"Failed to load files: {welcome_msg}"
+                                    )
+                                    QMessageBox.warning(
+                                        self, "Load Failed", welcome_msg
+                                    )
                                     continue
                     except Exception as e:
-                        logger.error(f"Error loading data source: {str(e)}", exc_info=True)
+                        logger.error(
+                            f"Error loading data source: {str(e)}", exc_info=True
+                        )
                         QMessageBox.critical(
                             self, "Error", f"Failed to load data: {str(e)}"
                         )
@@ -2079,7 +2451,9 @@ class DataWorkspaceGUI(QMainWindow):
                     )
                     return
 
-                updated_context, status = add_files_to_sqlite(self.data_context, file_paths)
+                updated_context, status = add_files_to_sqlite(
+                    self.data_context, file_paths
+                )
                 if updated_context is None:
                     QMessageBox.warning(self, "Load Failed", status)
                     return
@@ -2184,6 +2558,54 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         else:
             logger.info("User cancelled workspace reset")
+
+    def set_interaction_mode(self, mode: str):
+        """Set the interaction mode (cxo or analyst) and persist it."""
+        # If switching to analyst mode while in CxO mode with no tables loaded,
+        # offer to reload the project so the user can select tables.
+        if (
+            mode == "analyst"
+            and self.data_context
+            and self.data_context.get("cxo_mode")
+        ):
+            reply = QMessageBox.question(
+                self,
+                "Analyst Mode Requires Tables",
+                "Analyst mode requires loaded tables, but no tables are currently selected.\n\n"
+                "Would you like to switch to Analyst mode and reconnect to select tables?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                # Revert the menu toggle back to CxO
+                self.cxo_mode_action.setChecked(True)
+                return
+
+            # Persist analyst mode
+            ConfigManager.set_interaction_mode("analyst")
+            self.analyst_mode_action.setChecked(True)
+            logger.info(
+                "Switched to Analyst mode, re-opening data source connection for table selection"
+            )
+            self.connect_data_source()
+            return
+
+        success, message = ConfigManager.set_interaction_mode(mode)
+        if success:
+            logger.info(f"Interaction mode changed to: {mode}")
+            mode_label = "CxO" if mode == "cxo" else "Analyst"
+            QMessageBox.information(
+                self,
+                "Mode Changed",
+                f"Interaction mode set to {mode_label}.\n\n"
+                + (
+                    "Responses will now focus on concise executive insights."
+                    if mode == "cxo"
+                    else "Responses will include full technical detail and SQL."
+                ),
+            )
+        else:
+            logger.error(f"Failed to set interaction mode: {message}")
+            QMessageBox.warning(self, "Error", f"Failed to change mode: {message}")
 
     def set_theme(self, theme: str):
         """Set application theme"""
@@ -2331,6 +2753,27 @@ def _ensure_api_configured() -> bool:
     return True
 
 
+def _ensure_interaction_mode_configured() -> bool:
+    """
+    Show mode selection dialog if no interaction mode has been configured yet.
+    Returns True if a mode is set, False if the user cancelled.
+    """
+    config = ConfigManager.load_config()
+    if "interaction_mode" not in config:
+        logger.info("No interaction mode configured, prompting user")
+        mode_dialog = InteractionModeDialog()
+        if mode_dialog.exec() != QDialog.DialogCode.Accepted:
+            logger.warning(
+                "User cancelled interaction mode selection, defaulting to analyst"
+            )
+            ConfigManager.set_interaction_mode("analyst")
+            return True
+        selected = mode_dialog.get_selected_mode()
+        ConfigManager.set_interaction_mode(selected)
+        logger.info(f"Interaction mode set to: {selected}")
+    return True
+
+
 def _show_project_dialog() -> Optional[tuple[DataWorkspaceGUI, str]]:
     """Show project creation/load dialog. Returns (window, project_id) or None if cancelled."""
     project_dialog = CreateProjectDialog()
@@ -2356,12 +2799,16 @@ def _load_project_and_chats(window: DataWorkspaceGUI) -> None:
             if chats:
                 window.chat_id = chats[0].session_id
                 success, _ = window.backend.load_chat_session(window.chat_id)
-                logger.info(f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}")
+                logger.info(
+                    f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}"
+                )
                 if success:
                     history = window.backend.get_chat_history()
                     if history:
                         chat_history = window._format_chat_history(history)
-                        window.conversation_display.setHtml(markdown_to_html(chat_history))
+                        window.conversation_display.setHtml(
+                            markdown_to_html(chat_history)
+                        )
 
     window.refresh_project_list()
     if window.chat_list.count() > 0:
@@ -2375,20 +2822,33 @@ def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
 
     data_context = window.backend.data_context
     logger.debug("Loaded SQL context from project")
-    
+
     if window.backend.active_project and window.backend.active_project.data_source:
         ds = window.backend.active_project.data_source
         if ds.get("db_type"):
-            selected_tables = ds.get("table", [])
-            if not isinstance(selected_tables, list):
-                selected_tables = [selected_tables]
-            welcome_msg = window.backend.format_database_welcome_message(
-                ds.get("db_type"),
-                selected_tables,
-                data_context,
-                "Data loaded from project",
-            )
-            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+            # CxO mode: show the CxO-specific welcome message
+            if data_context.get("cxo_mode"):
+                all_tables = data_context.get("all_tables", [])
+                table_count = len(all_tables)
+                db_type = ds.get("db_type", "database")
+                welcome_msg = (
+                    f"## Connected to {db_type} database\n\n"
+                    f"**{table_count}** tables available. "
+                    f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+                    f"Simply type your question below to get started."
+                )
+                window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+            else:
+                selected_tables = ds.get("table", [])
+                if not isinstance(selected_tables, list):
+                    selected_tables = [selected_tables]
+                welcome_msg = window.backend.format_database_welcome_message(
+                    ds.get("db_type"),
+                    selected_tables,
+                    data_context,
+                    "Data loaded from project",
+                )
+                window.conversation_display.setHtml(markdown_to_html(welcome_msg))
         elif ds.get("file_paths"):
             welcome_msg = window.backend.format_file_welcome_message(
                 ds.get("file_paths", []),
@@ -2396,7 +2856,7 @@ def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
                 "Data loaded from project",
             )
             window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-    
+
     window.data_context = data_context
 
 
@@ -2406,7 +2866,7 @@ def _load_initial_data(window: DataWorkspaceGUI) -> bool:
     Returns True if data was successfully loaded, False if user cancelled.
     """
     logger.info("No data loaded, prompting for data source")
-    
+
     while True:
         source_dialog = DataSourceDialog()
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -2426,18 +2886,27 @@ def _load_initial_data(window: DataWorkspaceGUI) -> bool:
                     return True
             else:
                 logger.error(f"Unknown data source type: {source_type}")
-                QMessageBox.critical(window, "Error", f"Unknown source type: {source_type}")
+                QMessageBox.critical(
+                    window, "Error", f"Unknown source type: {source_type}"
+                )
                 continue
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}", exc_info=True)
-            error_msg = f"### Error Loading Data\n{str(e)}\nPlease restart and try again."
+            error_msg = (
+                f"### Error Loading Data\n{str(e)}\nPlease restart and try again."
+            )
             window.conversation_display.setHtml(markdown_to_html(error_msg))
             continue
 
 
-def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any]) -> bool:
+def _load_database_data(
+    window: DataWorkspaceGUI, source_config: Dict[str, Any]
+) -> bool:
     """
     Load data from a database. Returns True if successful, False if user wants to retry.
+
+    In CxO mode, skips table selection entirely. Tables are selected at query time
+    via NLP based on the user's prompt.
     """
     db_type: str = source_config["db_type"]
     credentials: Dict[str, Any] = source_config["credentials"]
@@ -2446,7 +2915,8 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
         ConfigManager.get_table_selection_method(),
     )
     semantic_layer = source_config.get("semantic_layer")
-    logger.info(f"Connecting to {db_type} database...")
+    is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+    logger.info(f"Connecting to {db_type} database... (CxO mode: {is_cxo})")
 
     connector = DatabaseConnector()
     while True:
@@ -2464,7 +2934,7 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
         )
 
         if retry == QMessageBox.StandardButton.Retry:
-            db_dialog = DatabaseConnectionDialog()
+            db_dialog = DatabaseConnectionDialog(force_nlp=is_cxo)
             if db_dialog.exec() != QDialog.DialogCode.Accepted:
                 connector.close()
                 return False
@@ -2486,10 +2956,56 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
         return False
 
     if not tables:
-        QMessageBox.critical(None, "No Tables Found", "The database does not contain any tables.")
+        QMessageBox.critical(
+            None, "No Tables Found", "The database does not contain any tables."
+        )
         connector.close()
         return False
 
+    # ---- CxO mode: skip table selection, defer to query time via NLP ----
+    if is_cxo:
+        connector.close()
+        logger.info(
+            f"CxO mode: skipping table selection. {len(tables)} tables available for NLP selection at query time."
+        )
+
+        cxo_context = {
+            "source_type": "database",
+            "cxo_mode": True,
+            "db_type": db_type,
+            "credentials": credentials,
+            "all_tables": tables,
+            "tables": [],  # no tables loaded yet; filled at query time
+            "table_info": {},
+            "semantic_layer": semantic_layer,
+        }
+
+        window.data_context = cxo_context
+        window.backend.data_context = cxo_context
+
+        if window.backend.active_project:
+            creds_to_store = credentials.copy()
+            if "password" in creds_to_store:
+                creds_to_store["password"] = ""
+            window.backend.active_project.data_source = {
+                "db_type": db_type,
+                "credentials": creds_to_store,
+                "table_selection_method": "nlp",
+                "semantic_layer": semantic_layer,
+                "cxo_mode": True,
+            }
+
+        table_count = len(tables)
+        welcome_msg = (
+            f"## Connected to {db_type} database\n\n"
+            f"**{table_count}** tables available. "
+            f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+            f"Simply type your question below to get started."
+        )
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+
+    # ---- Analyst mode: normal table selection flow ----
     selected_tables = select_tables_with_method(
         window,
         connector,
@@ -2500,10 +3016,14 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
     connector.close()
 
     if selected_tables is None:
-        logger.info("User cancelled table selection, returning to data source selection")
+        logger.info(
+            "User cancelled table selection, returning to data source selection"
+        )
         return False
 
-    table_value: Any = selected_tables if len(selected_tables) > 1 else selected_tables[0]
+    table_value: Any = (
+        selected_tables if len(selected_tables) > 1 else selected_tables[0]
+    )
     source_config["table"] = table_value
 
     data_context, status = load_data("database", source_config)
@@ -2512,7 +3032,7 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
         logger.info("Successfully loaded database data")
         window.data_context = data_context
         window.backend.data_context = data_context
-        
+
         if window.backend.active_project:
             creds_to_store = credentials.copy()
             if "password" in creds_to_store:
@@ -2524,7 +3044,7 @@ def _load_database_data(window: DataWorkspaceGUI, source_config: Dict[str, Any])
                 "table_selection_method": selection_method,
                 "semantic_layer": semantic_layer,
             }
-        
+
         welcome_msg = window.backend.format_database_welcome_message(
             db_type, selected_tables, data_context, status
         )
@@ -2572,6 +3092,8 @@ def start_application():
 
     if not _ensure_api_configured():
         return
+
+    _ensure_interaction_mode_configured()
 
     result = _show_project_dialog()
     if result is None:

@@ -244,6 +244,53 @@ class ConfigManager:
         return bool(config["api_keys"])
 
     @staticmethod
+    def get_interaction_mode() -> str:
+        """Return 'cxo' or 'analyst'. Default is 'analyst'."""
+        config = ConfigManager.load_config()
+        return config.get("interaction_mode", "analyst")
+
+    @staticmethod
+    def set_interaction_mode(mode: str) -> Tuple[bool, str]:
+        """Set the interaction mode to 'cxo' or 'analyst'."""
+        normalized = mode.lower().strip()
+        if normalized not in ("cxo", "analyst"):
+            return False, "Invalid mode. Use 'cxo' or 'analyst'."
+        config = ConfigManager.load_config()
+        config["interaction_mode"] = normalized
+        ConfigManager._logger.info(f"Interaction mode set to: {normalized}")
+        return ConfigManager.save_config(config)
+
+    @staticmethod
+    def get_semantic_layer_path() -> Optional[str]:
+        """Get the saved semantic layer file path, or None if not set."""
+        config = ConfigManager.load_config()
+        return config.get("semantic_layer_path")
+
+    @staticmethod
+    def set_semantic_layer_path(path: str) -> Tuple[bool, str]:
+        """Save the semantic layer file path to config."""
+        config = ConfigManager.load_config()
+        config["semantic_layer_path"] = path
+        ConfigManager._logger.info(f"Semantic layer path set to: {path}")
+        return ConfigManager.save_config(config)
+
+    @staticmethod
+    def get_prompt_expansion_enabled() -> bool:
+        """Return whether LLM prompt expansion is enabled for NLP table selection."""
+        config = ConfigManager.load_config()
+        return config.get("use_prompt_expansion", True)
+
+    @staticmethod
+    def set_prompt_expansion_enabled(enabled: bool) -> Tuple[bool, str]:
+        """Enable or disable LLM prompt expansion for NLP table selection."""
+        config = ConfigManager.load_config()
+        config["use_prompt_expansion"] = bool(enabled)
+        ConfigManager._logger.info(
+            f"Prompt expansion {'enabled' if enabled else 'disabled'}"
+        )
+        return ConfigManager.save_config(config)
+
+    @staticmethod
     def get_table_selection_method() -> str:
         """
         Get the preferred table selection method.

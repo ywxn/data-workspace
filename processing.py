@@ -127,7 +127,9 @@ def _execute_query(
     return {"columns": columns, "rows": rows}, truncated
 
 
-def _rows_to_dicts(columns: List[str], rows: List[Tuple[Any, ...]]) -> List[Dict[str, Any]]:
+def _rows_to_dicts(
+    columns: List[str], rows: List[Tuple[Any, ...]]
+) -> List[Dict[str, Any]]:
     return [dict(zip(columns, row)) for row in rows]
 
 
@@ -277,6 +279,7 @@ def _estimate_join_fanout(
         logger.debug(f"Fanout estimate failed {left_table}->{right_table}: {e}")
         return None
 
+
 def _find_best_join_path(
     connector: DatabaseConnector,
     fk_graph: Dict[str, List[Tuple[str, dict]]],
@@ -314,13 +317,16 @@ def _find_best_join_path(
             left_cols = fk.get("constrained_columns", [])
             right_cols = fk.get("referred_columns", [])
 
-            step_fanout = _estimate_join_fanout(
-                connector,
-                table,
-                neighbor,
-                left_cols,
-                right_cols,
-            ) or 1.0
+            step_fanout = (
+                _estimate_join_fanout(
+                    connector,
+                    table,
+                    neighbor,
+                    left_cols,
+                    right_cols,
+                )
+                or 1.0
+            )
 
             queue.append(
                 (
@@ -331,6 +337,7 @@ def _find_best_join_path(
             )
 
     return best_path
+
 
 def _build_join_query(
     connector: DatabaseConnector, table_names: List[str]
@@ -489,7 +496,9 @@ def _build_join_query(
             if not left_cols or not right_cols:
                 inferred = infer_join(left_table, right_table)
                 if not inferred:
-                    logger.warning(f"No join columns found for {left_table}->{right_table}")
+                    logger.warning(
+                        f"No join columns found for {left_table}->{right_table}"
+                    )
                     return None, safe_cols_by_table, skipped_cols
                 left_table, right_table, left_cols, right_cols = inferred
 
@@ -649,7 +658,9 @@ def load_data(
         if source_type == "file":
             return _load_from_files(source_config)
         if source_type == "csv":
-            return _load_from_files({"file_paths": [source_config.get("file_path", "")]})
+            return _load_from_files(
+                {"file_paths": [source_config.get("file_path", "")]}
+            )
         if source_type == "excel":
             config = {
                 "file_paths": [source_config.get("file_path", "")],
@@ -820,7 +831,9 @@ def add_files_to_sqlite(
         updated["tables"] = existing_list + created_tables
         updated["table_info"] = table_info
         updated["skipped_columns"] = skipped_cols_by_table
-        updated["file_paths"] = list(set(context.get("file_paths", [])) | set(file_paths))
+        updated["file_paths"] = list(
+            set(context.get("file_paths", [])) | set(file_paths)
+        )
 
         return updated, f"Added {len(created_tables)} table(s) to SQLite workspace"
     finally:
