@@ -166,8 +166,13 @@ Available models in the built-in catalog:
 | Model | Size | Notes |
 |---|---|---|
 | Mistral 7B Instruct v0.3 Q4_K_M | 4.4 GB | Recommended — fast, capable |
+| Qwen 2.5 7B Instruct Q4_K_M | 4.7 GB | Excellent at code and data analysis |
+| Llama 3.1 8B Instruct Q4_K_M | 4.9 GB | Updated Llama 3, improved reasoning |
 | Llama 3 8B Instruct Q4_K_M | 4.9 GB | Strong general-purpose |
+| Gemma 2 9B Instruct Q4_K_M | 5.8 GB | Google's high-quality analytical model |
+| Qwen 2.5 Coder 7B Instruct Q4_K_M | 4.7 GB | Specialized for code & SQL generation |
 | Phi-3 Mini 4K Instruct Q4 | 2.4 GB | Small & fast, low-resource machines |
+| Gemma 2 2B Instruct Q4_K_M | 1.6 GB | Ultra-lightweight, fastest option |
 
 ### 5. Alternative local servers
 
