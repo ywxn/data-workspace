@@ -948,6 +948,10 @@ class AIAgent:
         """
         Execute generated SQL safely using SQLAlchemy Core.
 
+        For multi-database contexts, automatically resolves which connection
+        to use based on the table references in the SQL and strips the
+        alias prefixes so that the SQL runs against the real table names.
+
         Args:
             sql: SQL query to execute
             context: SQL context with connection details
@@ -960,8 +964,27 @@ class AIAgent:
             logger.warning(f"SQL security violation: {error_msg}")
             return {"error": error_msg}
 
-        db_type = context.get("db_type")
-        credentials = context.get("credentials", {})
+        if context.get("source_type") == "multi_database":
+            # Determine target connection from table references in SQL
+            alias = self._resolve_connection_alias(sql, context)
+            if alias is None:
+                return {
+                    "error": (
+                        "Could not determine which database to query. "
+                        "Ensure the SQL references tables using their qualified names "
+                        "(alias__table)."
+                    )
+                }
+            sub_context = context["connections"].get(alias)
+            if sub_context is None:
+                return {"error": f"Unknown database alias: {alias}"}
+            db_type = sub_context["db_type"]
+            credentials = sub_context["credentials"]
+            # Strip alias prefix from SQL so it runs on the real tables
+            sql = self._strip_alias_prefix(sql, alias)
+        else:
+            db_type = context.get("db_type")
+            credentials = context.get("credentials", {})
 
         connector = DatabaseConnector()
         success, message = connector.connect(db_type, credentials)
@@ -995,6 +1018,56 @@ class AIAgent:
             return {"error": f"SQL execution error: {str(e)}"}
         finally:
             connector.close()
+
+    def _resolve_connection_alias(
+        self, sql: str, context: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Determine which database connection a SQL query targets.
+
+        Inspects the SQL for qualified table names (``alias__table``) and
+        returns the alias with the most matches.  Falls back to the first
+        connection if no qualified references are found.
+        """
+        table_to_conn = context.get("table_to_connection", {})
+        alias_hits: Dict[str, int] = {}
+
+        sql_upper = sql.upper()
+        for qualified_name, alias in table_to_conn.items():
+            if qualified_name.upper() in sql_upper:
+                alias_hits[alias] = alias_hits.get(alias, 0) + 1
+
+        if alias_hits:
+            # Return the alias with the highest number of table hits
+            return max(alias_hits, key=alias_hits.get)  # type: ignore[arg-type]
+
+        # Fallback: try matching unqualified table names through connections
+        connections = context.get("connections", {})
+        for alias, sub_ctx in connections.items():
+            for table in sub_ctx.get("tables", []):
+                if table.upper() in sql_upper:
+                    return alias
+
+        # Last resort: return first connection alias
+        if connections:
+            return next(iter(connections))
+        return None
+
+    @staticmethod
+    def _strip_alias_prefix(sql: str, alias: str) -> str:
+        """
+        Remove the ``alias__`` prefix from all table references in *sql*
+        so it can run directly against the target database.
+        """
+        import re
+
+        # Replace alias__tablename with just tablename (case-insensitive)
+        return re.sub(
+            rf'\b{re.escape(alias)}__(\w+)',
+            r'\1',
+            sql,
+            flags=re.IGNORECASE,
+        )
 
     @staticmethod
     def _query_requests_visualization(user_query: str) -> bool:

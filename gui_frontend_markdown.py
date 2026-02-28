@@ -1666,6 +1666,15 @@ class DataSourceDialog(QDialog):
         self.file_btn.clicked.connect(self.select_files)
         layout.addWidget(self.file_btn)
 
+        self.multi_db_btn = QPushButton("Connect Multiple Databases")
+        self.multi_db_btn.setMinimumHeight(50)
+        self.multi_db_btn.setToolTip(
+            "Connect to two or more databases and unify them\n"
+            "into a single queryable context."
+        )
+        self.multi_db_btn.clicked.connect(self.select_multi_database)
+        layout.addWidget(self.multi_db_btn)
+
         layout.addSpacing(20)
 
         # Cancel button
@@ -1684,6 +1693,18 @@ class DataSourceDialog(QDialog):
             self.data_source_config = db_dialog.get_config()
             self.accept()
 
+    def select_multi_database(self):
+        """Show multi-database connection dialog"""
+        logger.debug("Opening multi-database connection dialog")
+        multi_dialog = MultiDatabaseConnectionDialog(self)
+        if multi_dialog.exec() == QDialog.DialogCode.Accepted:
+            configs = multi_dialog.get_configs()
+            if configs:
+                logger.info(f"Multi-database configuration accepted: {len(configs)} connections")
+                self.data_source_type = "multi_database"
+                self.data_source_config = {"connections": configs}
+                self.accept()
+
     def select_files(self):
         """Show file selection dialog"""
         logger.debug("Opening file selection dialog")
@@ -1699,6 +1720,126 @@ class DataSourceDialog(QDialog):
             self.data_source_type = "file"
             self.data_source_config = {"file_paths": files}
             self.accept()
+
+
+class MultiDatabaseConnectionDialog(QDialog):
+    """Dialog for configuring one or more database connections."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Database Connections")
+        self.setModal(True)
+        self.setMinimumWidth(600)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        self.connections: List[Dict[str, Any]] = []
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Configure Multiple Database Connections")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Add two or more database connections. Tables will be prefixed\n"
+            "with an alias to avoid name collisions."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(10)
+
+        # Connection list
+        self.connection_list = QListWidget()
+        self.connection_list.setMinimumHeight(120)
+        layout.addWidget(self.connection_list)
+
+        # Buttons row
+        btn_row = QHBoxLayout()
+
+        self.add_btn = QPushButton("Add Connection")
+        self.add_btn.clicked.connect(self._add_connection)
+        btn_row.addWidget(self.add_btn)
+
+        self.remove_btn = QPushButton("Remove Selected")
+        self.remove_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(self.remove_btn)
+
+        layout.addLayout(btn_row)
+
+        layout.addSpacing(15)
+
+        # OK / Cancel
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._validate_and_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _add_connection(self):
+        """Open a DatabaseConnectionDialog to add a new connection."""
+        is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
+        if db_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        config = db_dialog.get_config()
+        # Generate default alias
+        idx = len(self.connections) + 1
+        db_name = config.get("credentials", {}).get("database", f"db{idx}")
+        alias = f"db{idx}"
+        if db_name:
+            # Use the database name (sanitised) as alias
+            safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in os.path.basename(db_name))
+            if safe_name:
+                alias = safe_name
+
+        config["alias"] = alias
+
+        self.connections.append(config)
+        display = f"[{alias}]  {config['db_type']} — {config['credentials'].get('database', '?')}"
+        item = QListWidgetItem(display)
+        self.connection_list.addItem(item)
+        logger.info(f"Added multi-db connection: {alias} ({config['db_type']})")
+
+    def _remove_selected(self):
+        """Remove the currently selected connection from the list."""
+        row = self.connection_list.currentRow()
+        if row < 0:
+            return
+        self.connection_list.takeItem(row)
+        self.connections.pop(row)
+        logger.info(f"Removed multi-db connection at index {row}")
+
+    def _validate_and_accept(self):
+        """Ensure at least two connections before accepting."""
+        if len(self.connections) < 2:
+            QMessageBox.warning(
+                self,
+                "Not Enough Connections",
+                "Please add at least two database connections for multi-database mode.\n"
+                "For a single database, use the regular 'Connect to Database' option.",
+            )
+            return
+        # Ensure aliases are unique
+        aliases = [c["alias"] for c in self.connections]
+        if len(set(aliases)) != len(aliases):
+            QMessageBox.warning(
+                self,
+                "Duplicate Aliases",
+                "Each connection must have a unique alias. Please remove duplicates.",
+            )
+            return
+        self.accept()
+
+    def get_configs(self) -> List[Dict[str, Any]]:
+        """Return the list of connection configurations."""
+        return self.connections
 
 
 class DatabaseConnectionDialog(QDialog):
@@ -3262,6 +3403,54 @@ class DataWorkspaceGUI(QMainWindow):
                                 QMessageBox.warning(self, "Connection Failed", message)
                                 continue
 
+                        elif source_type == "multi_database":
+                            # Multi-database connection flow
+                            configs = source_config.get("connections", [])
+                            logger.info(f"Loading multi-database with {len(configs)} connections")
+                            from processing import load_multi_database
+
+                            data_context, status = load_multi_database(configs)
+                            if data_context is not None:
+                                self.backend.data_context = data_context
+                                self.data_context = data_context
+                                logger.info(f"Multi-database loaded: {status}")
+                                # Persist configs (passwords stripped)
+                                ConfigManager.save_multi_db_config(configs)
+                                if self.backend.active_project:
+                                    safe_configs = []
+                                    for cfg in configs:
+                                        safe = dict(cfg)
+                                        c = safe.get("credentials", {}).copy()
+                                        c.pop("password", None)
+                                        safe["credentials"] = c
+                                        safe_configs.append(safe)
+                                    self.backend.active_project.data_source = {
+                                        "source_type": "multi_database",
+                                        "connections": safe_configs,
+                                    }
+                                aliases = list(data_context.get("connections", {}).keys())
+                                table_count = len(data_context.get("tables", []))
+                                welcome_msg = (
+                                    f"## Multi-Database Connected\n\n"
+                                    f"**{table_count}** tables loaded across "
+                                    f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                                    f"Tables are prefixed with their database alias "
+                                    f"(e.g. `alias__table`). Ask your question below."
+                                )
+                                self.conversation_display.setHtml(
+                                    markdown_to_html(welcome_msg)
+                                )
+                                QMessageBox.information(
+                                    self,
+                                    "Data Loaded",
+                                    f"Multi-database loaded: {table_count} tables.",
+                                )
+                                return
+                            else:
+                                logger.warning(f"Multi-database load failed: {status}")
+                                QMessageBox.warning(self, "Load Failed", status)
+                                continue
+
                         elif source_type == "file":
                             # File load flow
                             file_paths = source_config.get("file_paths", [])
@@ -3860,7 +4049,18 @@ def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
 
     if window.backend.active_project and window.backend.active_project.data_source:
         ds = window.backend.active_project.data_source
-        if ds.get("db_type"):
+        if ds.get("source_type") == "multi_database" or data_context.get("source_type") == "multi_database":
+            aliases = list(data_context.get("connections", {}).keys())
+            table_count = len(data_context.get("tables", []))
+            welcome_msg = (
+                f"## Multi-Database Connected\n\n"
+                f"**{table_count}** tables loaded across "
+                f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                f"Tables are prefixed with their database alias "
+                f"(e.g. `alias__table`). Ask your question below."
+            )
+            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        elif ds.get("db_type"):
             # CxO mode: show the CxO-specific welcome message
             if data_context.get("cxo_mode"):
                 all_tables = data_context.get("all_tables", [])
@@ -3915,6 +4115,9 @@ def _load_initial_data(window: DataWorkspaceGUI) -> bool:
         try:
             if source_type == "database":
                 if _load_database_data(window, source_config):
+                    return True
+            elif source_type == "multi_database":
+                if _load_multi_database_data(window, source_config):
                     return True
             elif source_type == "file":
                 if _load_file_data(window, source_config):
@@ -4093,6 +4296,54 @@ def _load_database_data(
             )
         )
         return True
+
+
+def _load_multi_database_data(
+    window: DataWorkspaceGUI, source_config: Dict[str, Any]
+) -> bool:
+    """
+    Load data from multiple databases. Returns True if successful, False to retry.
+    """
+    from processing import load_multi_database
+
+    configs = source_config.get("connections", [])
+    logger.info(f"Loading multi-database with {len(configs)} connections")
+
+    data_context, status = load_multi_database(configs)
+    if data_context is None:
+        logger.warning(f"Multi-database load failed: {status}")
+        QMessageBox.warning(window, "Load Failed", status)
+        return False
+
+    window.data_context = data_context
+    window.backend.data_context = data_context
+    # Persist configs (passwords stripped)
+    ConfigManager.save_multi_db_config(configs)
+
+    if window.backend.active_project:
+        safe_configs = []
+        for cfg in configs:
+            safe = dict(cfg)
+            c = safe.get("credentials", {}).copy()
+            c.pop("password", None)
+            safe["credentials"] = c
+            safe_configs.append(safe)
+        window.backend.active_project.data_source = {
+            "source_type": "multi_database",
+            "connections": safe_configs,
+        }
+
+    aliases = list(data_context.get("connections", {}).keys())
+    table_count = len(data_context.get("tables", []))
+    welcome_msg = (
+        f"## Multi-Database Connected\n\n"
+        f"**{table_count}** tables loaded across "
+        f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+        f"Tables are prefixed with their database alias "
+        f"(e.g. `alias__table`). Ask your question below."
+    )
+    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+    return True
 
 
 def _load_file_data(window: DataWorkspaceGUI, source_config: Dict[str, Any]) -> bool:
