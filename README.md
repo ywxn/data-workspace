@@ -17,7 +17,7 @@ cd data-workspace
 pip install -r requirements.txt
 ```
 
-3. Configure your API keys by running the application (you'll be prompted on first startup)
+3. Run the application — you'll be prompted to configure an AI provider and create a project on first startup.
 
 ## Usage
 
@@ -27,15 +27,48 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Or run the compiled executable (see Compilation section below)
+Or run the compiled executable (see Compilation section below).
 
 ### Basic Workflow
 
 1. Launch the application
-2. Provide your API key (OpenAI or Claude) when prompted
-3. Create a new project or load an existing one
-4. Connect a data source (database or files)
-5. Use the chat interface to query your data with natural language
+2. Configure your AI provider when prompted (OpenAI, Claude, Local LLM, or Self-Host Model)
+3. Select an interaction mode — **CxO** (executive summaries) or **Analyst** (detailed technical analysis)
+4. Create a new project or load an existing one
+5. Connect a data source (database or files)
+6. Use the chat interface to query your data with natural language
+
+### Features
+
+- **Natural language queries** — ask questions about your data without writing SQL
+- **Interaction modes** — CxO mode delivers concise executive insights; Analyst mode provides detailed technical analysis with column names and methodology
+- **NLP table selection** — tables are automatically selected based on your question using a local embedding model
+- **Semantic layer import** — import a JSON mapping of business-friendly table/column descriptions for more accurate query understanding
+- **Multiple data sources** — connect additional databases or files without overwriting existing data (File → Connect Additional Data Source)
+- **Project management** — organize analyses into projects with persistent chat histories, create multiple chat sessions per project
+- **Export** — export query results or chat sessions to file (File → Export Results / Export Chat)
+- **Themes** — switch between Dark, Light, and System themes (View menu)
+- **Font scaling** — increase or decrease font size with Ctrl++ / Ctrl+-
+
+### Menu Reference
+
+| Menu | Action | Shortcut |
+|---|---|---|
+| File | New Project | Ctrl+N |
+| File | Load Project | Ctrl+O |
+| File | Save Project | Ctrl+S |
+| File | Connect Data Source | — |
+| File | Connect Additional Data Source | — |
+| File | API Key Settings | — |
+| File | AI Host Settings | — |
+| File | Export Results | Ctrl+E |
+| File | Export Chat | — |
+| Settings | Local LLM Settings | — |
+| View | Dark / Light / System Theme | — |
+| View | Increase Font Size | Ctrl++ |
+| View | Decrease Font Size | Ctrl+- |
+| Help | Documentation | — |
+| Help | About | — |
 
 ## Compilation
 
@@ -53,7 +86,7 @@ pip install pyinstaller
 pyinstaller main.py --name "Data Workspace" --onedir --noconsole --add-data "css;css" --add-data "icon.svg;." --add-data "models;models" --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui --hidden-import=PySide6.QtWidgets --hidden-import=anthropic --hidden-import=openai --hidden-import=altair --hidden-import=sqlalchemy --hidden-import=sqlalchemy.dialects.sqlite --hidden-import=sqlalchemy.dialects.mysql --hidden-import=sqlalchemy.dialects.postgresql --hidden-import=sqlalchemy.dialects.mssql --hidden-import=sqlalchemy.dialects.oracle --hidden-import=pandas --hidden-import=sentence_transformers --hidden-import=torch --hidden-import=transformers --hidden-import=markdown --hidden-import=pymysql --hidden-import=psycopg2 --hidden-import=pyodbc --hidden-import=cx_Oracle --hidden-import=oracledb --exclude-module=torch._dynamo --exclude-module=torch._inductor --exclude-module=torch.fx --exclude-module=torch.compiler --exclude-module=torch.distributed --exclude-module=torch.testing --exclude-module=torch.utils.tensorboard --exclude-module=transformers.models --exclude-module=transformers.generation --exclude-module=transformers.pipelines --exclude-module=transformers.trainer --exclude-module=transformers.training_args --exclude-module=tensorboard --exclude-module=tensorflow --exclude-module=keras --exclude-module=scipy --exclude-module=matplotlib --exclude-module=PIL --exclude-module=cv2 --exclude-module=IPython --exclude-module=jupyter --exclude-module=notebook --exclude-module=pytest --exclude-module=unittest --exclude-module=setuptools --exclude-module=pip --exclude-module=torchaudio --exclude-module=torchvision --exclude-module=triton --exclude-module=sympy --exclude-module=networkx --exclude-module=flash_attn --exclude-module=apex --exclude-module=bitsandbytes --exclude-module=datasets --exclude-module=evaluate --exclude-module=accelerate --exclude-module=tkinter --exclude-module=tcl --exclude-module=tk --distpath=dist --workpath=build --clean
 ```
 
-API keys are stored securely using keyring.
+API keys are stored securely using the OS keyring (via the `keyring` package). If keyring is unavailable, the application falls back gracefully.
 
 ## Fully Local Setup (No Cloud APIs)
 
@@ -73,7 +106,7 @@ Other recommended models: `llama3`, `codellama`, `mixtral`.
 
 In the application:
 
-- Go to **File → API Settings** and select **Local LLM** as the provider
+- Go to **File → AI Host Settings** and select **Local LLM** as the provider
 - Or go to **Settings → Local LLM Settings** to configure the URL and model name
 
 Default settings:
@@ -95,7 +128,7 @@ You can also edit `config.json` directly:
 
 ### 3. NLP Table Selector
 
-The NLP table selector already uses a local embedding model (`sentence-transformers/all-MiniLM-L6-v2`) — no cloud dependency. The model is downloaded automatically on first use and cached in the `./models/` directory.
+The NLP table selector uses a local embedding model (`sentence-transformers/all-MiniLM-L6-v2`) — no cloud dependency. The model is downloaded automatically on first use and cached in the `./models/` directory.
 
 ### 4. Built-in Model Hosting (no separate server needed)
 
@@ -114,7 +147,7 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
 
 #### Using the built-in host
 
-1. Go to **Settings → Local LLM Settings** and open the **"Host a Model"** tab.
+1. Go to **Settings → Local LLM Settings** and open the **"Host a Model"** tab, or select **Self-Host Model** in **File → AI Host Settings**.
 2. Select a model from the catalog (e.g. *Mistral 7B Instruct Q4_K_M*) or browse for your own `.gguf` file.
 3. Click **Download Selected Model** — the model is saved to `./models/`.
 4. Click **Start Server** — the application starts an OpenAI-compatible server on `http://127.0.0.1:8911/v1`.
