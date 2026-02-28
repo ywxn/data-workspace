@@ -302,13 +302,27 @@ def start_model_server(
         if sys.platform == "win32":
             creation_flags = subprocess.CREATE_NO_WINDOW
 
+        # Write stderr to a temp file so we can read it if the process dies,
+        # but don't use PIPE (which deadlocks when the buffer fills up).
+        import tempfile
+
+        stderr_file = tempfile.TemporaryFile(mode="w+b")
+
         with _server_lock:
             _server_process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_file,
                 creationflags=creation_flags,
             )
+
+        # Give the process a moment to fail on import / arg errors
+        time.sleep(2.0)
+        if _server_process.poll() is not None:
+            stderr_file.seek(0)
+            stderr_text = stderr_file.read().decode(errors="replace")
+            stderr_file.close()
+            return False, f"Server process exited immediately (code {_server_process.returncode}):\n{stderr_text[-2000:]}"
 
         # Wait for the server to accept connections
         import httpx
@@ -321,22 +335,33 @@ def start_model_server(
                 resp = httpx.get(f"{base_url}/models", timeout=3.0)
                 if resp.status_code == 200:
                     logger.info(f"Hosted model server ready at {base_url}")
+                    stderr_file.close()
                     return True, f"Server started at {base_url}"
             except Exception as e:
                 last_err = e
 
             # Check if process has died
             if _server_process.poll() is not None:
-                stderr_text = ""
-                if _server_process.stderr:
-                    stderr_text = _server_process.stderr.read().decode(errors="replace")
-                return False, f"Server process exited unexpectedly:\n{stderr_text[-1000:]}"
+                stderr_file.seek(0)
+                stderr_text = stderr_file.read().decode(errors="replace")
+                stderr_file.close()
+                return False, f"Server process exited unexpectedly (code {_server_process.returncode}):\n{stderr_text[-2000:]}"
 
             time.sleep(1.0)
 
+        # Timed out — grab whatever stderr we have for diagnostics
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read().decode(errors="replace")
+        stderr_file.close()
+
+        # Kill the process since it never became ready
+        stop_model_server()
+
+        diagnostic = stderr_text[-2000:].strip()
         return False, (
             f"Server did not become ready within {timeout}s.\n"
-            f"Last error: {last_err}"
+            f"Last connection error: {last_err}\n"
+            + (f"\nServer stderr:\n{diagnostic}" if diagnostic else "")
         )
 
     except Exception as e:

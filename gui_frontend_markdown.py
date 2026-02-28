@@ -185,13 +185,13 @@ class APIKeyConfigDialog(QDialog):
 
         # Instructions
         self.instructions = QLabel(
-            "Select an AI provider and enter your API key.\n"
-            "You can add both OpenAI and Claude keys, or just one.\n\n"
-            "Get your API key from:\n"
+            "Configure your AI provider.\n\n"
+            "Cloud Providers:\n"
             "• OpenAI: https://platform.openai.com/api-keys\n"
-            "• Claude (Anthropic): https://console.anthropic.com/account/keys\n"
-            "• Local LLM: No key needed — configure your local server URL\n"
-            "• Self-Host Model: Download & run a model locally — no server needed"
+            "• Claude (Anthropic): https://console.anthropic.com/account/keys\n\n"
+            "Local Options:\n"
+            "• Local LLM: Connect to an existing server (Ollama, llama-cpp-python, etc.)\n"
+            "• Self-Host Model: Download & run a model locally with built-in server management"
         )
         self.instructions.setWordWrap(True)
         layout.addWidget(self.instructions)
@@ -525,7 +525,7 @@ class APIKeyConfigDialog(QDialog):
         self._download_thread.finished.connect(self._sh_on_download_finished)
         self._download_thread.start()
 
-    def _sh_on_download_progress(self, pct: float, downloaded: int, total: int):
+    def _sh_on_download_progress(self, pct: float, downloaded: float, total: float):
         self.sh_progress_bar.setValue(int(pct))
         dl_mb = downloaded / (1024 * 1024)
         tot_mb = total / (1024 * 1024)
@@ -743,8 +743,8 @@ class APIKeyConfigDialog(QDialog):
 class ModelDownloadThread(QThread):
     """Background thread for downloading a GGUF model."""
 
-    progress = Signal(float, int, int)  # pct, downloaded, total
-    finished = Signal(bool, str)        # success, message
+    progress = Signal(float, float, float)  # pct, downloaded, total (float to avoid int32 overflow on large files)
+    finished = Signal(bool, str)            # success, message
 
     def __init__(self, url: str, filename: str, parent=None):
         super().__init__(parent)
@@ -1094,7 +1094,7 @@ class LocalLLMSettingsDialog(QDialog):
         self._download_thread.finished.connect(self._on_download_finished)
         self._download_thread.start()
 
-    def _on_download_progress(self, pct: float, downloaded: int, total: int):
+    def _on_download_progress(self, pct: float, downloaded: float, total: float):
         self.progress_bar.setValue(int(pct))
         dl_mb = downloaded / (1024 * 1024)
         tot_mb = total / (1024 * 1024)
