@@ -2375,6 +2375,7 @@ def select_tables_with_method(
 
         # --- Expand prompt via LLM middleman if enabled ---
         if ConfigManager.get_prompt_expansion_enabled():
+            logger.info("Prompt expansion enabled — attempting LLM expansion")
             try:
                 import asyncio
 
@@ -2390,9 +2391,11 @@ def select_tables_with_method(
                     )
                 finally:
                     loop.close()
-                if expanded and len(expanded) > len(prompt):
+                if expanded and expanded.strip():
                     logger.info(f"Expanded prompt: {expanded[:200]}")
                     prompt = expanded
+                else:
+                    logger.warning("Prompt expansion returned empty result, using original")
             except Exception as e:
                 logger.warning(f"Prompt expansion failed, using original: {e}")
 
@@ -2515,6 +2518,7 @@ class QueryWorker(QThread):
             # --- Expand prompt via LLM middleman if enabled ---
             effective_prompt = self.query
             if ConfigManager.get_prompt_expansion_enabled():
+                logger.info("CxO mode: prompt expansion enabled — attempting LLM expansion")
                 try:
                     all_tables = self.data_context.get("all_tables", [])
                     schema_meta = {"tables": all_tables}
@@ -2529,9 +2533,11 @@ class QueryWorker(QThread):
                         )
                     finally:
                         exp_loop.close()
-                    if expanded and len(expanded) > len(self.query):
+                    if expanded and expanded.strip():
                         logger.info(f"CxO prompt expanded: {expanded[:200]}")
                         effective_prompt = expanded
+                    else:
+                        logger.warning("CxO prompt expansion returned empty result, using original")
                 except Exception as e:
                     logger.warning(f"CxO prompt expansion failed, using original: {e}")
 

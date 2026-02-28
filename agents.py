@@ -694,6 +694,9 @@ class AIAgent:
         data_records = [dict(zip(columns, row)) for row in rows]
         df = pd.DataFrame(data_records)
 
+        # Sanitize DataFrame types for JSON serialization (Altair / Vega-Lite)
+        df = self._sanitize_dataframe_for_json(df)
+
         # Prepare sample for prompt (first 5 records)
         sample_rows = df.head(5).to_dict(orient="records") if not df.empty else []
 
@@ -749,16 +752,9 @@ class AIAgent:
         try:
             namespace = {
                 "alt": alt,
+                "pd": pd,
                 "df": df,
             }
-
-            # Heuristic type fixes
-            for col in df.columns:
-                if "date" in col.lower() or "time" in col.lower():
-                    try:
-                        df[col] = pd.to_datetime(df[col])
-                    except Exception:
-                        pass
 
             exec(viz_code, namespace)
 
@@ -1074,6 +1070,43 @@ class AIAgent:
         if connections:
             return next(iter(connections))
         return None
+
+    @staticmethod
+    def _sanitize_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert DataFrame column types that are not JSON-serializable
+        (e.g. ``Decimal``, ``numpy.int64``, ``bytes``) into native Python
+        types so that Altair / Vega-Lite serialization does not raise
+        ``TypeError``.
+        """
+        import decimal
+
+        for col in df.columns:
+            sample = df[col].dropna().head(1)
+            if sample.empty:
+                continue
+            val = sample.iloc[0]
+            if isinstance(val, decimal.Decimal):
+                df[col] = df[col].apply(
+                    lambda v: float(v) if isinstance(v, decimal.Decimal) else v
+                )
+            elif isinstance(val, bytes):
+                df[col] = df[col].apply(
+                    lambda v: v.decode("utf-8", errors="replace")
+                    if isinstance(v, bytes) else v
+                )
+            elif hasattr(val, "item"):
+                # numpy scalar → native Python type
+                df[col] = df[col].apply(
+                    lambda v: v.item() if hasattr(v, "item") else v
+                )
+            # Attempt datetime conversion for date-like columns
+            if "date" in col.lower() or "time" in col.lower():
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except Exception:
+                    pass
+        return df
 
     @staticmethod
     def _strip_alias_prefix(sql: str, alias: str) -> str:
