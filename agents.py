@@ -317,36 +317,48 @@ class AIAgent:
             config = ConfigManager.load_config()
             self._local_llm_url = config.get("local_llm_url", LOCAL_LLM_DEFAULT_URL)
             self._local_llm_model = config.get("local_llm_model", LOCAL_LLM_DEFAULT_MODEL)
+            self._server_starting = False  # True while background auto-start is in progress
 
-            # Auto-start the built-in model server if configured
+            # Auto-start the built-in model server in a background thread
+            # so that agent creation is never blocked by model loading.
             if config.get("hosted_auto_start", False):
                 hosted_model = config.get("hosted_model_path", "")
                 if hosted_model and os.path.isfile(hosted_model):
-                    try:
-                        from model_manager import (
-                            is_server_running,
-                            start_model_server,
-                            get_hosted_url,
-                        )
+                    hosted_port = config.get("hosted_port", 8911)
+                    hosted_gpu = config.get("hosted_gpu_layers", 0)
+                    self._server_starting = True
 
-                        if not is_server_running():
-                            hosted_port = config.get("hosted_port", 8911)
-                            hosted_gpu = config.get("hosted_gpu_layers", 0)
-                            logger.info(
-                                f"Auto-starting hosted model server: {hosted_model}"
+                    import threading as _threading
+
+                    def _auto_start_server():
+                        try:
+                            from model_manager import (
+                                is_server_running,
+                                start_model_server,
+                                get_hosted_url,
                             )
-                            ok, msg = start_model_server(
-                                hosted_model,
-                                port=hosted_port,
-                                n_gpu_layers=hosted_gpu,
-                            )
-                            if ok:
-                                self._local_llm_url = get_hosted_url(port=hosted_port)
-                                logger.info(f"Hosted server started: {msg}")
-                            else:
-                                logger.warning(f"Failed to auto-start hosted server: {msg}")
-                    except Exception as e:
-                        logger.warning(f"Could not auto-start hosted model server: {e}")
+
+                            if not is_server_running():
+                                logger.info(
+                                    f"Auto-starting hosted model server: {hosted_model}"
+                                )
+                                ok, msg = start_model_server(
+                                    hosted_model,
+                                    port=hosted_port,
+                                    n_gpu_layers=hosted_gpu,
+                                )
+                                if ok:
+                                    self._local_llm_url = get_hosted_url(port=hosted_port)
+                                    logger.info(f"Hosted server started: {msg}")
+                                else:
+                                    logger.warning(f"Failed to auto-start hosted server: {msg}")
+                        except Exception as e:
+                            logger.warning(f"Could not auto-start hosted model server: {e}")
+                        finally:
+                            self._server_starting = False
+
+                    t = _threading.Thread(target=_auto_start_server, daemon=True)
+                    t.start()
 
             logger.info(
                 f"Local LLM configured: url={self._local_llm_url}, model={self._local_llm_model}"
@@ -385,7 +397,7 @@ class AIAgent:
             if self.api_provider == "claude":
                 return self._call_claude(messages, max_tokens, temperature)
             elif self.api_provider == "local":
-                return self._call_local(messages, max_tokens, temperature)
+                return await self._call_local(messages, max_tokens, temperature)
             else:  # openai
                 return await self._call_openai(messages, max_tokens, temperature)
         except Exception as e:
@@ -426,7 +438,7 @@ class AIAgent:
         )
         return response.choices[0].message.content or ""
 
-    def _call_local(
+    async def _call_local(
         self, messages: List[Dict[str, str]], max_tokens: int, temperature: float
     ) -> str:
         """Call a local LLM via an OpenAI-compatible HTTP endpoint (e.g. Ollama)."""
@@ -435,19 +447,29 @@ class AIAgent:
         base_url = getattr(self, "_local_llm_url", LOCAL_LLM_DEFAULT_URL)
         model_name = getattr(self, "_local_llm_model", LOCAL_LLM_DEFAULT_MODEL)
 
+        # Wait briefly for the background auto-start thread to finish if it's
+        # still bringing the server up, so callers get a clear error instead
+        # of an immediate connection-refused.
+        if getattr(self, "_server_starting", False):
+            import asyncio
+            for _ in range(120):  # up to ~60 s
+                if not self._server_starting:
+                    break
+                await asyncio.sleep(0.5)
+
         logger.info(f"Calling local LLM at {base_url} with model {model_name}")
 
         try:
-            response = httpx.post(
-                f"{base_url}/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-                timeout=LOCAL_LLM_REQUEST_TIMEOUT,
-            )
+            async with httpx.AsyncClient(timeout=LOCAL_LLM_REQUEST_TIMEOUT) as client:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    json={
+                        "model": model_name,
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                )
             response.raise_for_status()
             result = response.json()
             content = result["choices"][0]["message"]["content"]

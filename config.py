@@ -8,6 +8,13 @@ from pathlib import Path
 import sys
 import re
 
+from constants import (
+    LOCAL_LLM_DEFAULT_URL,
+    LOCAL_LLM_DEFAULT_MODEL,
+    HOSTED_LLM_DEFAULT_PORT,
+    HOSTED_LLM_GPU_LAYERS,
+)
+
 
 class ConfigManager:
     """
@@ -336,9 +343,9 @@ class ConfigManager:
         config = ConfigManager.load_config()
         return {
             "local_llm_url": config.get(
-                "local_llm_url", "http://localhost:11434/v1"
+                "local_llm_url", LOCAL_LLM_DEFAULT_URL
             ),
-            "local_llm_model": config.get("local_llm_model", "mistral"),
+            "local_llm_model": config.get("local_llm_model", LOCAL_LLM_DEFAULT_MODEL),
         }
 
     @staticmethod
@@ -384,16 +391,16 @@ class ConfigManager:
         config = ConfigManager.load_config()
         return {
             "hosted_model_path": config.get("hosted_model_path", ""),
-            "hosted_port": config.get("hosted_port", 8911),
-            "hosted_gpu_layers": config.get("hosted_gpu_layers", 0),
+            "hosted_port": config.get("hosted_port", HOSTED_LLM_DEFAULT_PORT),
+            "hosted_gpu_layers": config.get("hosted_gpu_layers", HOSTED_LLM_GPU_LAYERS),
             "hosted_auto_start": config.get("hosted_auto_start", False),
         }
 
     @staticmethod
     def set_hosted_llm_config(
         model_path: str,
-        port: int = 8911,
-        gpu_layers: int = 0,
+        port: int = HOSTED_LLM_DEFAULT_PORT,
+        gpu_layers: int = HOSTED_LLM_GPU_LAYERS,
         auto_start: bool = False,
     ) -> Tuple[bool, str]:
         """

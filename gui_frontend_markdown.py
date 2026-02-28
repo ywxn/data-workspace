@@ -653,7 +653,11 @@ class APIKeyConfigDialog(QDialog):
 
             # Point local LLM settings at the hosted server URL
             hosted_url = get_hosted_url(port=port)
-            ok2, msg2 = ConfigManager.set_local_llm_config(hosted_url, "local-model")
+            # Derive a model name from the GGUF filename so the value
+            # sent in /chat/completions requests matches what the hosted
+            # server actually exposes (llama-cpp-python uses the stem).
+            _model_id = os.path.splitext(os.path.basename(model_path))[0]
+            ok2, msg2 = ConfigManager.set_local_llm_config(hosted_url, _model_id)
             if not ok2:
                 QMessageBox.critical(self, "Error", f"Failed to save local config: {msg2}")
                 return

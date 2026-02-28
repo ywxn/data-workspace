@@ -315,14 +315,18 @@ def start_model_server(
                 stderr=stderr_file,
                 creationflags=creation_flags,
             )
+            # Capture the Popen object in a local variable so readiness
+            # polling doesn't race with stop_model_server() setting
+            # _server_process = None.
+            proc = _server_process
 
         # Give the process a moment to fail on import / arg errors
         time.sleep(2.0)
-        if _server_process.poll() is not None:
+        if proc.poll() is not None:
             stderr_file.seek(0)
             stderr_text = stderr_file.read().decode(errors="replace")
             stderr_file.close()
-            return False, f"Server process exited immediately (code {_server_process.returncode}):\n{stderr_text[-2000:]}"
+            return False, f"Server process exited immediately (code {proc.returncode}):\n{stderr_text[-2000:]}"
 
         # Wait for the server to accept connections
         import httpx
@@ -341,11 +345,11 @@ def start_model_server(
                 last_err = e
 
             # Check if process has died
-            if _server_process.poll() is not None:
+            if proc.poll() is not None:
                 stderr_file.seek(0)
                 stderr_text = stderr_file.read().decode(errors="replace")
                 stderr_file.close()
-                return False, f"Server process exited unexpectedly (code {_server_process.returncode}):\n{stderr_text[-2000:]}"
+                return False, f"Server process exited unexpectedly (code {proc.returncode}):\n{stderr_text[-2000:]}"
 
             time.sleep(1.0)
 
@@ -411,10 +415,9 @@ def get_server_status() -> Dict[str, Any]:
 
     Keys: running (bool), pid (int|None), url (str|None)
     """
-    running = is_server_running()
-    pid = None
-    url = None
-    if running and _server_process is not None:
-        pid = _server_process.pid
-        url = get_hosted_url()
+    with _server_lock:
+        proc = _server_process
+        running = proc is not None and proc.poll() is None
+    pid = proc.pid if running and proc is not None else None
+    url = get_hosted_url() if running else None
     return {"running": running, "pid": pid, "url": url}
