@@ -43,7 +43,7 @@ Or run the compiled executable (see Compilation section below).
 - **Natural language queries** — ask questions about your data without writing SQL
 - **Interaction modes** — CxO mode delivers concise executive insights; Analyst mode provides detailed technical analysis with column names and methodology
 - **NLP table selection** — tables are automatically selected based on your question using a local embedding model
-- **Semantic layer import** — import a JSON mapping of business-friendly table/column descriptions for more accurate query understanding
+- **Semantic layer import** — import a JSON mapping of business-friendly table/column descriptions for more accurate query understanding. See ![Semantic Layer Documentation](https://github.com/ywxn/data-workspace/blob/test/semantic_layer_documentation.md) for more information.
 - **Multiple data sources** — connect additional databases or files without overwriting existing data (File → Connect Additional Data Source)
 - **Project management** — organize analyses into projects with persistent chat histories, create multiple chat sessions per project
 - **Export** — export query results or chat sessions to file (File → Export Results / Export Chat)
