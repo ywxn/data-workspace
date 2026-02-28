@@ -558,9 +558,11 @@ class NLPTableSelector:
         Select tables relevant to a natural language query.
 
         Process:
+        0. Check query_patterns for deterministic shortcut (bypasses embedding)
         1. Normalize and embed the query
         2. Find top-K matching columns via cosine similarity
         3. Aggregate column matches to table scores
+        3b. Apply term_glossary boost for business-term matches
         4. Apply thresholds for final selection
         5. Expand via foreign key relationships
 
@@ -581,6 +583,15 @@ class NLPTableSelector:
                 confidences={},
                 metadata={"error": "Schema not initialized"},
             )
+
+        # --- Step 0: Query pattern shortcut ---
+        pattern_result = self._match_query_patterns(prompt)
+        if pattern_result is not None:
+            logger.info(
+                f"Query pattern matched — returning deterministic result: "
+                f"{pattern_result.tables}"
+            )
+            return pattern_result
 
         # Normalize and embed query
         normalized_prompt = self.normalizer.normalize_text(prompt)
@@ -610,6 +621,9 @@ class NLPTableSelector:
 
         # ---- hybrid lexical + semantic scoring ----
         table_scores = self._apply_lexical_boost(table_scores, tokens)
+
+        # ---- term glossary boost ----
+        table_scores = self._apply_glossary_boost(table_scores, tokens)
 
         # normalize instead of softmax
         confidences = self._normalize_scores(table_scores)
@@ -990,6 +1004,197 @@ class NLPTableSelector:
                         )
 
         return table_scores
+
+    # -----------------------------------------------------------------
+    # Query-pattern shortcut (deterministic, bypasses embedding lookup)
+    # -----------------------------------------------------------------
+
+    def _match_query_patterns(self, prompt: str) -> Optional[TableSelectionResult]:
+        """
+        Check semantic layer ``query_patterns`` for a deterministic match.
+
+        If any pattern phrase is found as a substring of the normalised
+        prompt, resolve the referenced entities to physical tables and
+        return a high-confidence result immediately.
+
+        Returns:
+            A ``TableSelectionResult`` when a pattern matches, else ``None``.
+        """
+        if not self._is_rich_semantic_layer():
+            return None
+
+        patterns = self.semantic_layer.get("query_patterns")
+        if not patterns:
+            return None
+
+        normalized_prompt = self.normalizer.normalize_text(prompt)
+
+        matched_entities: List[str] = []
+        matched_filters: Dict[str, str] = {}
+        matched_phrases: List[str] = []
+
+        for entry in patterns:
+            phrases = entry.get("pattern", [])
+            for phrase in phrases:
+                normalized_phrase = self.normalizer.normalize_text(phrase)
+                if normalized_phrase and normalized_phrase in normalized_prompt:
+                    matched_entities.extend(entry.get("entities", []))
+                    matched_filters.update(entry.get("filters") or {})
+                    matched_phrases.append(phrase)
+                    break  # one phrase per pattern entry is enough
+
+        if not matched_entities:
+            return None
+
+        # Resolve entity names → physical tables
+        entity_map: Dict[str, List[str]] = {}
+        for entity in self.semantic_layer.get("entities", []):
+            entity_map[entity["name"]] = entity.get("physical_tables", [])
+
+        selected_tables: List[str] = []
+        for ent_name in dict.fromkeys(matched_entities):  # deduplicate, keep order
+            for phys_table in entity_map.get(ent_name, []):
+                if (
+                    phys_table in self.table_metadata
+                    and phys_table not in selected_tables
+                ):
+                    selected_tables.append(phys_table)
+
+        if not selected_tables:
+            return None
+
+        # Expand with entity pairs and header-detail pairing
+        core = set(selected_tables)
+        core.update(self._expand_entity_pairs(list(core)))
+        core.update(self._expand_header_detail_pairs(list(core)))
+
+        # 1-hop FK expansion for dimension tables
+        fk_dims: List[str] = []
+        for t in core:
+            for neighbor in self.fk_graph.get(t, set()):
+                if neighbor not in core and neighbor in self.table_metadata:
+                    if self._is_dimension_table(neighbor):
+                        fk_dims.append(neighbor)
+
+        final_tables = list(core) + list(dict.fromkeys(fk_dims))
+        confidences = {t: 1.0 for t in final_tables}
+
+        return TableSelectionResult(
+            status="success",
+            tables=final_tables,
+            confidences=confidences,
+            metadata={
+                "mode": "query_pattern",
+                "matched_phrases": matched_phrases,
+                "matched_entities": list(dict.fromkeys(matched_entities)),
+                "matched_filters": matched_filters,
+                "prompt": prompt,
+                "normalized_prompt": normalized_prompt,
+            },
+        )
+
+    # -----------------------------------------------------------------
+    # Term-glossary boost
+    # -----------------------------------------------------------------
+
+    def _apply_glossary_boost(
+        self,
+        table_scores: Dict[str, float],
+        tokens: Set[str],
+        boost: float = 0.45,
+    ) -> Dict[str, float]:
+        """
+        Boost table scores when prompt tokens match term_glossary keys.
+
+        The glossary maps colloquial business terms (e.g. "revenue",
+        "headcount") to specific physical tables/columns.  When a
+        glossary key appears among the (stemmed) prompt tokens, the
+        referenced table receives a score boost.
+
+        Args:
+            table_scores: Current table → score mapping.
+            tokens: Set of normalised prompt tokens.
+            boost: Additive boost applied per glossary hit.
+
+        Returns:
+            Updated table_scores dict.
+        """
+        if not self._is_rich_semantic_layer():
+            return table_scores
+
+        glossary = self.semantic_layer.get("term_glossary")
+        if not glossary:
+            return table_scores
+
+        # Build stemmed token set for fuzzy matching
+        token_stems: Set[str] = set()
+        for tok in tokens:
+            token_stems.update(self._simple_stems(tok))
+
+        for term, mapping in glossary.items():
+            term_lower = term.lower()
+            term_tokens = set(term_lower.split())
+
+            # Check if any stem matches the glossary key (single-word)
+            # or if all tokens of a multi-word key appear in the prompt
+            matched = False
+            if len(term_tokens) == 1:
+                matched = any(
+                    stem == term_lower or term_lower in stem for stem in token_stems
+                )
+            else:
+                matched = term_tokens.issubset(token_stems)
+
+            if matched:
+                table_name = mapping.get("table")
+                if table_name and table_name in self.table_metadata:
+                    table_scores[table_name] = table_scores.get(table_name, 0.0) + boost
+                    logger.debug(f"Glossary boost: '{term}' → {table_name} (+{boost})")
+
+        return table_scores
+
+    # -----------------------------------------------------------------
+    # Database prefix support
+    # -----------------------------------------------------------------
+
+    def get_database_prefixes(self) -> Optional[List[str]]:
+        """
+        Return the ``database_prefix`` list from the semantic layer.
+
+        Returns:
+            A list of prefix strings, or ``None`` if not configured.
+            A single-string value is normalised to a one-element list.
+        """
+        if not self._is_rich_semantic_layer():
+            return None
+
+        prefix = self.semantic_layer.get("database_prefix")
+        if prefix is None:
+            return None
+        if isinstance(prefix, str):
+            return [prefix]
+        if isinstance(prefix, list):
+            return [str(p) for p in prefix]
+        return None
+
+    def resolve_qualified_table(self, table_name: str) -> Tuple[Optional[str], str]:
+        """
+        Split a possibly-qualified table name into (prefix, base_table).
+
+        If no database_prefix is configured, returns (None, table_name).
+        If the table starts with a known prefix + ``__``, splits it.
+        Otherwise returns (None, table_name).
+        """
+        prefixes = self.get_database_prefixes()
+        if not prefixes:
+            return None, table_name
+
+        for pfx in prefixes:
+            separator = f"{pfx}__"
+            if table_name.startswith(separator):
+                return pfx, table_name[len(separator) :]
+
+        return None, table_name
 
     def _apply_thresholds(
         self, confidences: Dict[str, float], top_k: int
@@ -1560,6 +1765,8 @@ class NLPTableSelector:
             "entities" in self.semantic_layer
             or "relationships" in self.semantic_layer
             or "columns" in self.semantic_layer
+            or "query_patterns" in self.semantic_layer
+            or "term_glossary" in self.semantic_layer
         )
 
     def _build_semantic_maps(self) -> Tuple[Dict[str, str], Dict[str, str]]:
@@ -1680,6 +1887,16 @@ class NLPTableSelector:
                 else:
                     table_map[source_table] = dim_desc
 
+        # Process term_glossary → enrich table descriptions with business terms
+        for term, mapping in self.semantic_layer.get("term_glossary", {}).items():
+            gl_table = mapping.get("table")
+            if gl_table:
+                existing = table_map.get(gl_table, "")
+                if existing:
+                    table_map[gl_table] = f"{existing} {term}"
+                else:
+                    table_map[gl_table] = term
+
         return table_map, column_map
 
     def _enrich_from_semantic_layer(self) -> None:
@@ -1736,6 +1953,18 @@ class NLPTableSelector:
                 f"{len(self.table_synonyms)} table synonyms, "
                 f"{len(self.column_comments)} column comments"
             )
+
+            # Log query_patterns and term_glossary availability
+            num_patterns = len(self.semantic_layer.get("query_patterns", []))
+            num_glossary = len(self.semantic_layer.get("term_glossary", {}))
+            db_prefix = self.semantic_layer.get("database_prefix")
+            if num_patterns:
+                logger.info(f"Semantic layer has {num_patterns} query patterns")
+            if num_glossary:
+                logger.info(f"Semantic layer has {num_glossary} glossary terms")
+            if db_prefix:
+                prefixes = db_prefix if isinstance(db_prefix, list) else [db_prefix]
+                logger.info(f"Semantic layer database prefixes: {prefixes}")
 
     def _enrich_fk_from_semantic_layer(self) -> None:
         """
@@ -1795,7 +2024,7 @@ class NLPTableSelector:
         Returns:
             Dict with schema statistics
         """
-        return {
+        info = {
             "num_tables": len(self.table_metadata),
             "num_columns": sum(
                 len(meta.columns) for meta in self.table_metadata.values()
@@ -1808,3 +2037,15 @@ class NLPTableSelector:
             "confidence_threshold": self.confidence_threshold,
             "tie_threshold": self.tie_threshold,
         }
+
+        # Include semantic layer feature counts
+        if self._is_rich_semantic_layer():
+            info["query_patterns_count"] = len(
+                self.semantic_layer.get("query_patterns", [])
+            )
+            info["term_glossary_count"] = len(
+                self.semantic_layer.get("term_glossary", {})
+            )
+            info["database_prefixes"] = self.get_database_prefixes()
+
+        return info

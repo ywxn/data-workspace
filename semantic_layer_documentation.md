@@ -16,6 +16,9 @@ A semantic layer provides a business-friendly abstraction over an underlying phy
 - [Relationships](#relationships)
 - [Date Fields](#date-fields)
 - [Common Queries](#common-queries)
+- [Query Patterns](#query-patterns)
+- [Term Glossary](#term-glossary)
+- [Database Prefix](#database-prefix)
 - [Example Structure](#example-structure)
 
 ---
@@ -336,7 +339,31 @@ Below is a simplified JSON skeleton showing how to structure a semantic layer co
             "aggregation": "sum"
         }
         // ... add more query templates as needed
-    ]
+    ],
+
+    "query_patterns": [
+        {
+            "pattern": ["open orders", "pending orders", "outstanding POs"],
+            "entities": ["order"],
+            "filters": { "status": "Open" }
+        },
+        {
+            "pattern": ["low stock", "below reorder"],
+            "entities": ["inventory"],
+            "filters": { "closing_quantity": "< reorder_level" }
+        }
+        // ... add more patterns for frequently-asked queries
+    ],
+
+    "term_glossary": {
+        "revenue": { "table": "order_dtl", "column": "net_amount", "aggregation": "sum" },
+        "headcount": { "table": "employee_master", "column": "employee_id", "aggregation": "count" },
+        "COGS": { "table": "order_dtl", "column": "cost_amount", "aggregation": "sum" }
+        // ... add business terms used by your organization
+    },
+
+    "database_prefix": ["db1", "db2"]
+    // Optional: omit for single-database setups
 }
 ```
 
@@ -347,6 +374,105 @@ Below is a simplified JSON skeleton showing how to structure a semantic layer co
 - **Relationships** — Connect every transaction/fact entity back to its related dimensions using `many_to_one` joins.
 - **Date field registry** — Declare all date fields per entity so time-based filters resolve unambiguously.
 - **Common queries** — Pre-define query templates to accelerate reporting and serve as examples for consumers of the semantic layer.
+
+---
+
+## Query Patterns
+
+Query patterns map canonical prompt patterns directly to entity/table sets, **bypassing embedding lookup** for known queries. When a user's prompt matches a pattern, the system can immediately resolve the correct tables and filters without relying on semantic similarity.
+
+Each pattern entry contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `pattern` | `string[]` | List of phrases/keywords that trigger this pattern match |
+| `entities` | `string[]` | Entity names to select when the pattern matches |
+| `filters` | `object` | Optional default filters to apply (key = column, value = condition) |
+
+### Example
+
+```jsonc
+"query_patterns": [
+    {
+        "pattern": ["open orders", "pending orders", "outstanding POs"],
+        "entities": ["order"],
+        "filters": { "status": "Open" }
+    },
+    {
+        "pattern": ["low stock", "below reorder"],
+        "entities": ["inventory"],
+        "filters": { "closing_quantity": "< reorder_level" }
+    }
+]
+```
+
+### How Matching Works
+
+1. The user's prompt is normalized (lowercased, whitespace-collapsed).
+2. Each `pattern` phrase is checked against the normalized prompt using substring matching.
+3. If a match is found, the corresponding entities are resolved to their physical tables and returned immediately with high confidence.
+4. Multiple patterns can match simultaneously — their entity sets are merged.
+
+> **Tip:** Use query patterns for frequently-asked questions that the embedding model struggles with. They act as a deterministic shortcut that always produces the right table set.
+
+---
+
+## Term Glossary
+
+The term glossary is a business-term → physical-column/table dictionary. It maps colloquial business terminology to specific physical locations in the database, enabling the normalizer and lexical boost to resolve domain-specific jargon.
+
+Each entry maps a business term to:
+
+| Field | Type | Description |
+|---|---|---|
+| `table` | `string` | Physical table containing the data |
+| `column` | `string` | Physical column name |
+| `aggregation` | `string` | Default aggregation function (`sum`, `avg`, `count`, `min`, `max`) |
+
+### Example
+
+```jsonc
+"term_glossary": {
+    "revenue": { "table": "order_dtl", "column": "net_amount", "aggregation": "sum" },
+    "headcount": { "table": "employee_master", "column": "employee_id", "aggregation": "count" },
+    "COGS": { "table": "order_dtl", "column": "cost_amount", "aggregation": "sum" }
+}
+```
+
+### How Matching Works
+
+1. The user's prompt tokens are checked against glossary keys (case-insensitive).
+2. When a glossary term is found, its `table` receives a significant lexical boost in the table selection score.
+3. The glossary also feeds into the prompt-expansion agent (when enabled), providing precise terminology for downstream SQL generation.
+
+> **Tip:** Add terms for every piece of business jargon your users commonly use. The glossary bridges the gap between how users talk about data and how it's stored.
+
+---
+
+## Database Prefix
+
+The `database_prefix` key enables cross-database semantic layers where a single semantic definition can span multiple databases. When present, table references are qualified with the prefix to avoid name collisions.
+
+| Field | Type | Description |
+|---|---|---|
+| `database_prefix` | `string` or `string[]` | One or more database prefixes. If omitted, assumes single database. |
+
+### Example
+
+```jsonc
+// Single database prefix
+"database_prefix": "erp_db"
+
+// Multiple database prefixes
+"database_prefix": ["erp_db", "hr_db"]
+```
+
+### How It Works
+
+1. If `database_prefix` is a string, all tables in the semantic layer are assumed to belong to that database.
+2. If `database_prefix` is a list, entities can reference tables across multiple databases.
+3. When resolving table names, the prefix is used to qualify references (e.g., `erp_db__purchase_order`).
+4. If omitted, single-database mode is assumed (current default behavior).
 
 ---
 
@@ -362,5 +488,8 @@ When building or modifying a semantic layer:
 6. **Use the header + detail pattern** — for transaction entities with line items, always map both the header and detail tables and clarify which table each measure or column belongs to.
 7. **Register all date fields** — a complete date field registry prevents ambiguity when users ask time-based questions.
 8. **Decompose composite measures** — break out tax, freight, discount, and other components individually so consumers can aggregate at the granularity they need.
+9. **Define query patterns** — for frequently-asked questions, add explicit query patterns to ensure deterministic, accurate table selection without relying on embedding similarity.
+10. **Maintain a term glossary** — map all business jargon and domain-specific terms to their physical table/column locations. This dramatically improves selection accuracy for colloquial queries.
+11. **Use database prefixes for multi-database setups** — when your semantic layer spans multiple databases, define `database_prefix` to avoid table name collisions and enable cross-database query routing.
 
 ---

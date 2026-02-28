@@ -1464,6 +1464,20 @@ class DataWorkspaceGUI(QMainWindow):
         self.mode_action_group.addAction(self.analyst_mode_action)
         mode_menu.addAction(self.analyst_mode_action)
 
+        # Prompt Expansion toggle
+        settings_menu.addSeparator()
+        self.prompt_expansion_action = QAction("Prompt Expansion (NLP)", self)
+        self.prompt_expansion_action.setCheckable(True)
+        self.prompt_expansion_action.setChecked(
+            ConfigManager.get_prompt_expansion_enabled()
+        )
+        self.prompt_expansion_action.setToolTip(
+            "When enabled, user prompts are expanded via the LLM\n"
+            "into precise business terms before NLP table selection."
+        )
+        self.prompt_expansion_action.triggered.connect(self.toggle_prompt_expansion)
+        settings_menu.addAction(self.prompt_expansion_action)
+
         # ===== Help Menu =====
         help_menu = menu_bar.addMenu("Help")
 
@@ -2558,6 +2572,20 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         else:
             logger.info("User cancelled workspace reset")
+
+    def toggle_prompt_expansion(self, checked: bool):
+        """Toggle the prompt-expansion middleman agent on or off."""
+        success, message = ConfigManager.set_prompt_expansion_enabled(checked)
+        if success:
+            state = "enabled" if checked else "disabled"
+            logger.info(f"Prompt expansion {state}")
+        else:
+            logger.error(f"Failed to toggle prompt expansion: {message}")
+            # Revert the checkbox
+            self.prompt_expansion_action.setChecked(not checked)
+            QMessageBox.warning(
+                self, "Settings Error", f"Failed to save setting: {message}"
+            )
 
     def set_interaction_mode(self, mode: str):
         """Set the interaction mode (cxo or analyst) and persist it."""
