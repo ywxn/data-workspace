@@ -576,22 +576,174 @@ class DataWorkspaceBackend:
         }
 
     def get_error_suggestions(self, error: str) -> List[str]:
-        """Get suggestions to fix an error."""
-        raise NotImplementedError()
+        """Get suggestions to fix an error based on common error patterns."""
+        error_lower = error.lower()
+        suggestions: List[str] = []
+
+        # Connection / network errors
+        if any(kw in error_lower for kw in ["connection", "connect", "refused", "timeout", "timed out", "unreachable"]):
+            suggestions.extend([
+                "Check that the database host and port are correct.",
+                "Verify that the database server is running.",
+                "Check your network connection and firewall settings.",
+            ])
+
+        # Authentication errors
+        if any(kw in error_lower for kw in ["authentication", "password", "credentials", "access denied", "login"]):
+            suggestions.extend([
+                "Double-check your database username and password.",
+                "Ensure the user has the required permissions.",
+            ])
+
+        # API key errors
+        if any(kw in error_lower for kw in ["api key", "api_key", "unauthorized", "401", "invalid key", "authentication_error"]):
+            suggestions.extend([
+                "Reconfigure your API key via File \u2192 API Settings.",
+                "Verify your API key has not expired or been revoked.",
+                "Check that you selected the correct AI provider.",
+            ])
+
+        # Rate limit errors
+        if any(kw in error_lower for kw in ["rate limit", "429", "too many requests", "quota"]):
+            suggestions.extend([
+                "Wait a moment and try again.",
+                "Consider upgrading your API plan for higher limits.",
+                "Try a shorter or simpler query.",
+            ])
+
+        # SQL syntax errors
+        if any(kw in error_lower for kw in ["syntax error", "sql", "no such table", "no such column", "unknown column"]):
+            suggestions.extend([
+                "Check that the referenced table and column names exist.",
+                "Try rephrasing your question with different terms.",
+                "Use the schema viewer to see available tables and columns.",
+            ])
+
+        # File-related errors
+        if any(kw in error_lower for kw in ["file not found", "no such file", "permission denied", "encoding", "decode"]):
+            suggestions.extend([
+                "Verify the file path is correct and the file exists.",
+                "Ensure the file is a supported format (CSV, Excel).",
+                "Try re-saving the file with UTF-8 encoding.",
+            ])
+
+        # Model / LLM errors
+        if any(kw in error_lower for kw in ["model", "llama", "llm", "context length", "token"]):
+            suggestions.extend([
+                "Try a shorter query to reduce token usage.",
+                "Check that your local LLM server is running (Settings \u2192 Local LLM Settings).",
+            ])
+
+        # Fallback
+        if not suggestions:
+            suggestions.extend([
+                "Try rephrasing your question.",
+                "Check the application logs for more details.",
+                "Restart the application and try again.",
+            ])
+
+        return suggestions
 
     # ==================== Data Export ====================
 
     def export_results(
         self, data: Dict[str, Any], format: str, file_path: str
     ) -> Tuple[bool, str]:
-        """Export query results to file (CSV, Excel, JSON)."""
-        raise NotImplementedError()
+        """Export query results to file (CSV, Excel, JSON).
+
+        Args:
+            data: Dict with 'columns' (list of str) and 'rows' (list of lists)
+                  or any dict serialisable to a DataFrame.
+            format: One of 'csv', 'excel', 'json'.
+            file_path: Destination file path.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        try:
+            import pandas as pd  # local import to keep module light
+
+            # Build DataFrame from structured data or raw dict
+            if "columns" in data and "rows" in data:
+                df = pd.DataFrame(data["rows"], columns=data["columns"])
+            else:
+                df = pd.DataFrame(data)
+
+            fmt = format.lower()
+            if fmt == "csv":
+                df.to_csv(file_path, index=False)
+            elif fmt in ("excel", "xlsx"):
+                df.to_excel(file_path, index=False, engine="openpyxl")
+            elif fmt == "json":
+                df.to_json(file_path, orient="records", indent=2)
+            else:
+                return False, f"Unsupported export format: {format}"
+
+            logger.info(f"Exported results to {file_path} ({fmt})")
+            return True, f"Results exported to {file_path}"
+
+        except ImportError:
+            return False, "pandas is required for export but is not installed."
+        except Exception as e:
+            logger.error(f"Export failed: {e}")
+            return False, f"Export failed: {str(e)}"
 
     def export_chat_session(
         self, session_id: str, format: str
     ) -> Tuple[bool, str, Optional[str]]:
-        """Export chat session to file."""
-        raise NotImplementedError()
+        """Export a chat session's messages to a string.
+
+        Args:
+            session_id: ID of the chat session to export.
+            format: One of 'json', 'markdown', 'txt'.
+
+        Returns:
+            Tuple of (success, message, content_string_or_None).
+        """
+        if self.active_project is None:
+            return False, "No active project.", None
+
+        chat = self.active_project.get_chat(session_id)
+        if chat is None:
+            return False, f"Chat session '{session_id}' not found.", None
+
+        messages = chat.get_history()
+        fmt = format.lower()
+
+        try:
+            if fmt == "json":
+                content = json.dumps(
+                    {
+                        "session_id": chat.session_id,
+                        "title": chat.title,
+                        "created_at": chat.created_at.isoformat(),
+                        "messages": messages,
+                    },
+                    indent=2,
+                )
+            elif fmt in ("markdown", "md"):
+                lines = [f"# {chat.title}", ""]
+                for msg in messages:
+                    role = msg.get("role", "unknown").capitalize()
+                    body = msg.get("content", "")
+                    lines.append(f"**{role}:**\n{body}\n")
+                content = "\n".join(lines)
+            elif fmt in ("txt", "text"):
+                lines = [chat.title, "=" * len(chat.title), ""]
+                for msg in messages:
+                    role = msg.get("role", "unknown").capitalize()
+                    body = msg.get("content", "")
+                    lines.append(f"{role}:\n{body}\n")
+                content = "\n".join(lines)
+            else:
+                return False, f"Unsupported format: {format}", None
+
+            logger.info(f"Exported chat '{chat.title}' as {fmt}")
+            return True, "Chat exported successfully.", content
+
+        except Exception as e:
+            logger.error(f"Chat export failed: {e}")
+            return False, f"Export failed: {str(e)}", None
 
     # ==================== Utility Functions ====================
 

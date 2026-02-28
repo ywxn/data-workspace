@@ -15,6 +15,51 @@ from constants import (
     HOSTED_LLM_GPU_LAYERS,
 )
 
+# ---------------------------------------------------------------------------
+#  Secure credential storage helpers (keyring with graceful fallback)
+# ---------------------------------------------------------------------------
+_KEYRING_SERVICE = "ai_data_workspace"
+
+
+def _keyring_available() -> bool:
+    """Return True if the keyring package is importable and functional."""
+    try:
+        import keyring  # noqa: F401
+        # Quick smoke-test – some backends (e.g. chainer) silently fail
+        keyring.get_credential(_KEYRING_SERVICE, "__probe__")
+        return True
+    except Exception:
+        return False
+
+
+def _keyring_get(key: str) -> Optional[str]:
+    """Retrieve a secret from the OS keyring, or None on failure."""
+    try:
+        import keyring
+        return keyring.get_password(_KEYRING_SERVICE, key)
+    except Exception:
+        return None
+
+
+def _keyring_set(key: str, value: str) -> bool:
+    """Store a secret in the OS keyring.  Returns True on success."""
+    try:
+        import keyring
+        keyring.set_password(_KEYRING_SERVICE, key, value)
+        return True
+    except Exception:
+        return False
+
+
+def _keyring_delete(key: str) -> bool:
+    """Delete a secret from the OS keyring.  Returns True on success."""
+    try:
+        import keyring
+        keyring.delete_password(_KEYRING_SERVICE, key)
+        return True
+    except Exception:
+        return False
+
 
 class ConfigManager:
     """
@@ -101,18 +146,26 @@ class ConfigManager:
         """
         Get API key for a specific provider (openai or claude).
 
+        Looks in the OS keyring first, then falls back to config.json.
+
         Args:
             provider: API provider name ('openai' or 'claude')
 
         Returns:
             API key string or None if not configured
         """
-        config = ConfigManager.load_config()
+        p = provider.lower()
 
+        # 1. Try secure storage
+        secret = _keyring_get(f"api_key_{p}")
+        if secret:
+            return secret
+
+        # 2. Fallback to config.json (legacy / keyring unavailable)
+        config = ConfigManager.load_config()
         if "api_keys" not in config:
             return None
-
-        return config["api_keys"].get(provider.lower())
+        return config["api_keys"].get(p)
 
     @staticmethod
     def _validate_api_key_format(provider: str, api_key: str) -> Tuple[bool, str]:
@@ -170,15 +223,32 @@ class ConfigManager:
             ConfigManager._logger.warning(f"API key format validation failed: {msg}")
             return False, msg
 
-        config = ConfigManager.load_config()
+        p = provider.lower()
 
-        if "api_keys" not in config:
-            config["api_keys"] = {}
+        # Attempt secure storage first
+        if _keyring_set(f"api_key_{p}", api_key):
+            ConfigManager._logger.info(
+                f"API key for {provider} stored in OS keyring."
+            )
+            # Remove from config.json if it was previously stored there
+            config = ConfigManager.load_config()
+            if "api_keys" in config and p in config["api_keys"]:
+                del config["api_keys"][p]
+                ConfigManager.save_config(config)
+        else:
+            # Fallback: store in config.json
+            ConfigManager._logger.warning(
+                "OS keyring unavailable — storing API key in config.json."
+            )
+            config = ConfigManager.load_config()
+            if "api_keys" not in config:
+                config["api_keys"] = {}
+            config["api_keys"][p] = api_key
+            ConfigManager.save_config(config)
 
-        config["api_keys"][provider.lower()] = api_key
         ConfigManager._logger.info(f"API key set for provider: {provider}")
-
-        success, msg = ConfigManager.save_config(config)
+        success = True
+        msg = "API key saved."
 
         # If the agents module is already loaded, update its in-memory API key
         if success:
@@ -240,11 +310,17 @@ class ConfigManager:
     @staticmethod
     def has_any_api_key() -> bool:
         """
-        Check if at least one API key is configured.
+        Check if at least one API key is configured (keyring or config.json).
 
         Returns:
             True if at least one API key exists, False otherwise
         """
+        # Check keyring first
+        for provider in ("openai", "claude"):
+            if _keyring_get(f"api_key_{provider}"):
+                return True
+
+        # Fallback to config.json
         config = ConfigManager.load_config()
         if "api_keys" not in config:
             return False

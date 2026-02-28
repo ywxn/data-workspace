@@ -11,9 +11,6 @@ openai>=1.0.0
 anthropic>=0.7.0
 httpx>=0.24.0  # HTTP client for local LLM communication
 
-# Local LLM Hosting (optional — needed only for built-in model server)
-# llama-cpp-python>=0.2.0  # Uncomment to enable self-hosted model serving
-
 # GUI Framework
 PySide6>=6.6.0
 
@@ -34,6 +31,7 @@ markdown>=3.4.0
 chardet>=5.1.0
 pydantic>=2.0.0
 requests>=2.31.0
+keyring>=24.0.0
 
 # Type hints and validation
 typing-extensions>=4.0.0
@@ -42,12 +40,12 @@ typing-extensions>=4.0.0
 sentence-transformers>=2.2.0
 scipy>=1.10.0
 
-# Self Hosted LLM Server
-llama-cpp-python>=0.2.0  # Uncomment to enable self-hosted model serving
+# Self Hosted LLM Server (optional — only needed for built-in model server)
+# The application works without these and shows a helpful message if missing.
+llama-cpp-python>=0.2.0  # Enables self-hosted model serving
 uvicorn>=0.22.0  # ASGI server for running the self-hosted model API
 fastapi>=0.104.0  # Web framework for the self-hosted model API
 starlette>=0.27.0  # ASGI toolkit for building async web services
 sse-starlette>=0.15.0  # Server-Sent Events support for real-time updates
 starlette-context>=0.4.0  # Context management for Starlette applications
-pydantic>=2.0.0  # Data validation and settings management
 pydantic-settings>=2.0.0  # Settings management for Pydantic

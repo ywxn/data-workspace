@@ -2512,6 +2512,17 @@ class DataWorkspaceGUI(QMainWindow):
 
         file_menu.addSeparator()
 
+        export_results_action = QAction("Export Results...", self)
+        export_results_action.setShortcut("Ctrl+E")
+        export_results_action.triggered.connect(self.export_results_dialog)
+        file_menu.addAction(export_results_action)
+
+        export_chat_action = QAction("Export Chat...", self)
+        export_chat_action.triggered.connect(self.export_chat_dialog)
+        file_menu.addAction(export_chat_action)
+
+        file_menu.addSeparator()
+
         exit_action = QAction("Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
@@ -2751,6 +2762,7 @@ class DataWorkspaceGUI(QMainWindow):
 
         clear_action = menu.addAction("Clear Chat")
         delete_action = menu.addAction("Delete Chat")
+        export_action = menu.addAction("Export Chat...")
 
         action = menu.exec(self.chat_list.mapToGlobal(position))
 
@@ -2758,6 +2770,9 @@ class DataWorkspaceGUI(QMainWindow):
             self.clear_chat_action(item)
         elif action == delete_action:
             self.delete_chat_action(item)
+        elif action == export_action:
+            chat_id = item.data(Qt.ItemDataRole.UserRole)
+            self._export_single_chat(chat_id)
 
     def clear_chat_action(self, item: QListWidgetItem):
         """Clear messages from a chat"""
@@ -3039,9 +3054,16 @@ class DataWorkspaceGUI(QMainWindow):
         self.add_message_to_chat("assistant", result)
 
     def display_error(self, error: str):
-        """Display error message"""
+        """Display error message with actionable suggestions"""
         logger.error(f"Query error: {error}")
-        error_md = f"**Error:**\n{error}"
+
+        suggestions = self.backend.get_error_suggestions(error)
+        suggestion_md = ""
+        if suggestions:
+            items = "\n".join(f"- {s}" for s in suggestions)
+            suggestion_md = f"\n\n**Suggestions:**\n{items}"
+
+        error_md = f"**Error:**\n{error}{suggestion_md}"
         current_md = self.conversation_display.toMarkdown()
 
         if self.processing_marker in current_md:
@@ -3082,6 +3104,88 @@ class DataWorkspaceGUI(QMainWindow):
             QMessageBox.warning(
                 self, "Project Not Found", "Could not find project to save."
             )
+
+    # ------------------------------------------------------------------
+    #  Export helpers
+    # ------------------------------------------------------------------
+
+    def export_results_dialog(self):
+        """Show a file dialog and export the current data preview to a file."""
+        if self.backend.data_context is None:
+            QMessageBox.information(
+                self, "No Data", "Load a data source before exporting."
+            )
+            return
+
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Results",
+            "",
+            "CSV Files (*.csv);;Excel Files (*.xlsx);;JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        # Determine format from the chosen filter / extension
+        ext = os.path.splitext(file_path)[1].lower()
+        fmt_map = {".csv": "csv", ".xlsx": "excel", ".json": "json"}
+        fmt = fmt_map.get(ext, "csv")
+
+        # Gather data from all tables in the context
+        table_info = self.backend.data_context.get("table_info", {})
+        rows: list = []
+        columns: list = []
+        for _table, info in table_info.items():
+            sample = info.get("sample_rows", [])
+            cols = info.get("columns", [])
+            if not columns:
+                columns = cols
+            rows.extend(sample)
+
+        data = {"columns": columns, "rows": rows}
+        success, msg = self.backend.export_results(data, fmt, file_path)
+        if success:
+            QMessageBox.information(self, "Export Complete", msg)
+        else:
+            QMessageBox.warning(self, "Export Failed", msg)
+
+    def export_chat_dialog(self):
+        """Export the currently active chat session."""
+        if self.chat_id is None:
+            QMessageBox.information(
+                self, "No Chat", "No chat session is currently active."
+            )
+            return
+        self._export_single_chat(self.chat_id)
+
+    def _export_single_chat(self, chat_id: str):
+        """Prompt for a file path and export a chat session."""
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Chat",
+            "",
+            "Markdown Files (*.md);;JSON Files (*.json);;Text Files (*.txt)",
+        )
+        if not file_path:
+            return
+
+        ext = os.path.splitext(file_path)[1].lower()
+        fmt_map = {".md": "markdown", ".json": "json", ".txt": "txt"}
+        fmt = fmt_map.get(ext, "markdown")
+
+        success, msg, content = self.backend.export_chat_session(chat_id, fmt)
+        if not success:
+            QMessageBox.warning(self, "Export Failed", msg)
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            QMessageBox.information(
+                self, "Export Complete", f"Chat exported to {file_path}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Export Failed", f"Could not write file: {e}")
 
     def refresh_chat_list(self):
         """Refresh the chat list in the sidebar for the active project."""
@@ -3927,19 +4031,23 @@ class DataWorkspaceGUI(QMainWindow):
         """Show about dialog"""
         logger.info("User opened About dialog")
         about_text = (
-            "<h2>AI Data Workspace</h2>"
+            "<h2>Data Workspace</h2>"
             "<p>Version 1.0.0</p>"
-            "<p>An intelligent application for data analysis and visualization with AI assistance.</p>"
-            "<p><b>Features:</b></p>"
+            "<p>A powerful AI-driven workspace for analyzing data across multiple sources with natural language queries.</p>"
+            "<p><b>Key Features:</b></p>"
             "<ul>"
-            "<li>Multi-source data loading (CSV, Excel, Database)</li>"
-            "<li>AI-powered data analysis and insights</li>"
-            "<li>Project and chat session management</li>"
-            "<li>Multi-database support</li>"
+            "<li>Connect to databases, files, or multiple data sources simultaneously</li>"
+            "<li>Query data using natural language, no SQL expertise required</li>"
+            "<li>AI-powered insights tailored for executives (CxO) or deep technical analysis (Analyst)</li>"
+            "<li>Organize analysis into projects with persistent chat histories</li>"
+            "<li>Import semantic layers for business-aligned table descriptions</li>"
+            "<li>Support for local LLM servers for fully offline operation</li>"
             "</ul>"
-            "<p>© 2026 AI Data Workspace. All rights reserved.</p>"
+            "<p><b>Supported Databases:</b> SQLite, MySQL, MariaDB, PostgreSQL, SQL Server, Oracle, ODBC</p>"
+            "<p><b>Supported File Formats:</b> CSV, Excel (XLSX/XLS)</p>"
+            "<p>© 2026 Write Frame Communications. All rights reserved.</p>"
         )
-        QMessageBox.about(self, "About AI Data Workspace", about_text)
+        QMessageBox.about(self, "About Data Workspace", about_text)
 
 
 def _preload_theme(app: QApplication) -> None:
@@ -4408,6 +4516,5 @@ def start_application():
     sys.exit(app.exec())
 
 
-"""if __name__ == "__main__":
+if __name__ == "__main__":
     start_application()
-"""
