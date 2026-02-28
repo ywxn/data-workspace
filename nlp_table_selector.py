@@ -255,7 +255,10 @@ class NLPTableSelector:
                     "entities": [{"name": "...", "physical_tables": [...], ...}],
                     "relationships": [{"from_table": "...", "to_table": "...", ...}],
                     "columns": [{"physical_table": "...", "physical_column": "...", ...}],
-                    "measures": [{"source_table": "...", "source_column": "...", ...}]
+                    "measures": [{"source_table": "...", "source_column": "...", ...}],
+                    "query_patterns": [{"entities": [...], "dimensions": [...], "measures": [...], ...}],
+                    "term_glossary": [{"term": "...", "definition": "...", ...}],
+                    "database_prefix": "string"  # Optional prefix for database tables
                 }
 
         Raises:
