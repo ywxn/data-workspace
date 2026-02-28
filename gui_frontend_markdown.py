@@ -339,6 +339,12 @@ class AIHostConfigDialog(QDialog):
             items += ["OpenAI", "Claude"]
         items += ["Local LLM", "Self-Host Model"]
         self.provider_combo.addItems(items)
+        self.provider_combo.setToolTip(
+            "Choose how the AI processes your queries.\n"
+            "• Cloud providers (OpenAI, Claude) require an API key and internet.\n"
+            "• Local LLM connects to a server you already have running.\n"
+            "• Self-Host Model downloads and runs a model for you."
+        )
         # Signal connected later, after all widgets are created
         form_layout.addRow("Host Type:", self.provider_combo)
 
@@ -348,12 +354,23 @@ class AIHostConfigDialog(QDialog):
         self.local_url_input = QLineEdit()
         self.local_url_input.setPlaceholderText("http://localhost:11434/v1")
         self.local_url_input.setText(local_llm_config["local_llm_url"])
+        self.local_url_input.setToolTip(
+            "The base URL of your local LLM server's OpenAI-compatible API.\n"
+            "Examples:\n"
+            "  Ollama: http://localhost:11434/v1\n"
+            "  LM Studio: http://localhost:1234/v1"
+        )
         self.local_url_label = QLabel("Server URL:")
         form_layout.addRow(self.local_url_label, self.local_url_input)
 
         self.local_model_input = QLineEdit()
         self.local_model_input.setPlaceholderText("mistral")
         self.local_model_input.setText(local_llm_config["local_llm_model"])
+        self.local_model_input.setToolTip(
+            "The model identifier your local server uses.\n"
+            "This is sent in API requests so the server knows which model to run.\n"
+            "Check your server's model list for available names."
+        )
         self.local_model_label = QLabel("Model Name:")
         form_layout.addRow(self.local_model_label, self.local_model_input)
 
@@ -491,12 +508,31 @@ class AIHostConfigDialog(QDialog):
         self.sh_port_spin = QSpinBox()
         self.sh_port_spin.setRange(1024, 65535)
         self.sh_port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        self.sh_port_spin.setToolTip(
+            "The network port the local LLM server listens on.\n"
+            "Change this if another service is already using the default port."
+        )
         srv_form.addRow("Port:", self.sh_port_spin)
+
+        self.sh_context_spin = QSpinBox()
+        self.sh_context_spin.setRange(512, 131072)
+        self.sh_context_spin.setSingleStep(512)
+        self.sh_context_spin.setValue(hosted_cfg.get("hosted_context_size", 4096))
+        self.sh_context_spin.setToolTip(
+            "Maximum number of tokens the model can process in a single prompt/response.\n"
+            "Higher values allow longer conversations but use more RAM/VRAM.\n"
+            "Common values: 2048, 4096, 8192, 16384, 32768."
+        )
+        srv_form.addRow("Context Size:", self.sh_context_spin)
 
         self.sh_gpu_spin = QSpinBox()
         self.sh_gpu_spin.setRange(0, 999)
         self.sh_gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
-        self.sh_gpu_spin.setToolTip("Number of layers to offload to GPU (0 = CPU only)")
+        self.sh_gpu_spin.setToolTip(
+            "Number of model layers to offload to the GPU for faster inference.\n"
+            "Set to 0 for CPU-only mode. Higher values use more VRAM but run faster.\n"
+            "Set to 999 to offload all layers (requires sufficient VRAM)."
+        )
         srv_form.addRow("GPU Layers:", self.sh_gpu_spin)
         layout.addLayout(srv_form)
 
@@ -687,6 +723,7 @@ class AIHostConfigDialog(QDialog):
             return
 
         port = self.sh_port_spin.value()
+        context_size = self.sh_context_spin.value()
         gpu_layers = self.sh_gpu_spin.value()
 
         self.sh_start_btn.setEnabled(False)
@@ -694,7 +731,7 @@ class AIHostConfigDialog(QDialog):
         self.sh_status_label.setText("Starting server \u2014 this may take a moment\u2026")
 
         self._server_thread = ServerStartThread(
-            model_path, port, gpu_layers, self
+            model_path, port, gpu_layers, context_size, self
         )
         self._server_thread.finished.connect(self._sh_on_server_started)
         self._server_thread.start()
@@ -778,12 +815,14 @@ class AIHostConfigDialog(QDialog):
 
             model_path = info["path"]
             port = self.sh_port_spin.value()
+            context_size = self.sh_context_spin.value()
             gpu_layers = self.sh_gpu_spin.value()
 
             # Save hosted config
             ok, msg = ConfigManager.set_hosted_llm_config(
                 model_path=model_path,
                 port=port,
+                context_size=context_size,
                 gpu_layers=gpu_layers,
                 auto_start=True,
             )
@@ -883,11 +922,12 @@ class ServerStartThread(QThread):
 
     finished = Signal(bool, str)  # success, message
 
-    def __init__(self, model_path: str, port: int, gpu_layers: int, parent=None):
+    def __init__(self, model_path: str, port: int, gpu_layers: int, context_size: int = 4096, parent=None):
         super().__init__(parent)
         self.model_path = model_path
         self.port = port
         self.gpu_layers = gpu_layers
+        self.context_size = context_size
 
     def run(self):
         from model_manager import start_model_server
@@ -895,6 +935,7 @@ class ServerStartThread(QThread):
         ok, msg = start_model_server(
             self.model_path,
             port=self.port,
+            n_ctx=self.context_size,
             n_gpu_layers=self.gpu_layers,
         )
         self.finished.emit(ok, msg)
@@ -965,11 +1006,22 @@ class LocalLLMSettingsDialog(QDialog):
         self.url_input = QLineEdit()
         self.url_input.setText(local_cfg["local_llm_url"])
         self.url_input.setPlaceholderText("http://localhost:11434/v1")
+        self.url_input.setToolTip(
+            "The base URL of your local LLM server's OpenAI-compatible API.\n"
+            "Examples:\n"
+            "  Ollama: http://localhost:11434/v1\n"
+            "  LM Studio: http://localhost:1234/v1"
+        )
         form.addRow("Server URL:", self.url_input)
 
         self.model_input = QLineEdit()
         self.model_input.setText(local_cfg["local_llm_model"])
         self.model_input.setPlaceholderText("mistral")
+        self.model_input.setToolTip(
+            "The model identifier your local server uses.\n"
+            "This is sent in API requests so the server knows which model to run.\n"
+            "Check your server's model list for available names."
+        )
         form.addRow("Model Name:", self.model_input)
 
         layout.addLayout(form)
@@ -1086,12 +1138,31 @@ class LocalLLMSettingsDialog(QDialog):
         self.port_spin.setRange(1024, 65535)
         hosted_cfg = ConfigManager.get_hosted_llm_config()
         self.port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        self.port_spin.setToolTip(
+            "The network port the local LLM server listens on.\n"
+            "Change this if another service is already using the default port."
+        )
         srv_form.addRow("Port:", self.port_spin)
+
+        self.context_spin = QSpinBox()
+        self.context_spin.setRange(512, 131072)
+        self.context_spin.setSingleStep(512)
+        self.context_spin.setValue(hosted_cfg.get("hosted_context_size", 4096))
+        self.context_spin.setToolTip(
+            "Maximum number of tokens the model can process in a single prompt/response.\n"
+            "Higher values allow longer conversations but use more RAM/VRAM.\n"
+            "Common values: 2048, 4096, 8192, 16384, 32768."
+        )
+        srv_form.addRow("Context Size:", self.context_spin)
 
         self.gpu_spin = QSpinBox()
         self.gpu_spin.setRange(0, 999)
         self.gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
-        self.gpu_spin.setToolTip("Number of layers to offload to GPU (0 = CPU only)")
+        self.gpu_spin.setToolTip(
+            "Number of model layers to offload to the GPU for faster inference.\n"
+            "Set to 0 for CPU-only mode. Higher values use more VRAM but run faster.\n"
+            "Set to 999 to offload all layers (requires sufficient VRAM)."
+        )
         srv_form.addRow("GPU Layers:", self.gpu_spin)
 
         sg_layout.addLayout(srv_form)
@@ -1255,6 +1326,7 @@ class LocalLLMSettingsDialog(QDialog):
             return
 
         port = self.port_spin.value()
+        context_size = self.context_spin.value()
         gpu_layers = self.gpu_spin.value()
 
         self.start_btn.setEnabled(False)
@@ -1262,7 +1334,7 @@ class LocalLLMSettingsDialog(QDialog):
         self.server_status_label.setText("Starting server — this may take a moment…")
 
         self._server_thread = ServerStartThread(
-            model_path, port, gpu_layers, self
+            model_path, port, gpu_layers, context_size, self
         )
         self._server_thread.finished.connect(self._on_server_started)
         self._server_thread.start()
@@ -1365,6 +1437,7 @@ class LocalLLMSettingsDialog(QDialog):
         ok2, msg2 = ConfigManager.set_hosted_llm_config(
             model_path=model_path,
             port=self.port_spin.value(),
+            context_size=self.context_spin.value(),
             gpu_layers=self.gpu_spin.value(),
             auto_start=self.auto_start_cb.isChecked(),
         )

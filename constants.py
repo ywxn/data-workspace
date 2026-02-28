@@ -33,7 +33,7 @@ LOCAL_LLM_REQUEST_TIMEOUT = 120.0  # seconds
 # Hosted (built-in) LLM server defaults
 HOSTED_LLM_DEFAULT_PORT = 8911
 HOSTED_LLM_DEFAULT_HOST = "127.0.0.1"
-HOSTED_LLM_CONTEXT_SIZE = 4096 # TODO: make configurable
+HOSTED_LLM_CONTEXT_SIZE = 4096
 HOSTED_LLM_GPU_LAYERS = 0  # 0 = CPU-only by default; increase for GPU offload
 
 # Models directory (relative to project root)

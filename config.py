@@ -12,6 +12,7 @@ from constants import (
     LOCAL_LLM_DEFAULT_URL,
     LOCAL_LLM_DEFAULT_MODEL,
     HOSTED_LLM_DEFAULT_PORT,
+    HOSTED_LLM_CONTEXT_SIZE,
     HOSTED_LLM_GPU_LAYERS,
 )
 
@@ -462,12 +463,13 @@ class ConfigManager:
         """
         Return hosted model server settings.
 
-        Keys: hosted_model_path, hosted_port, hosted_gpu_layers, hosted_auto_start
+        Keys: hosted_model_path, hosted_port, hosted_context_size, hosted_gpu_layers, hosted_auto_start
         """
         config = ConfigManager.load_config()
         return {
             "hosted_model_path": config.get("hosted_model_path", ""),
             "hosted_port": config.get("hosted_port", HOSTED_LLM_DEFAULT_PORT),
+            "hosted_context_size": config.get("hosted_context_size", HOSTED_LLM_CONTEXT_SIZE),
             "hosted_gpu_layers": config.get("hosted_gpu_layers", HOSTED_LLM_GPU_LAYERS),
             "hosted_auto_start": config.get("hosted_auto_start", False),
         }
@@ -476,6 +478,7 @@ class ConfigManager:
     def set_hosted_llm_config(
         model_path: str,
         port: int = HOSTED_LLM_DEFAULT_PORT,
+        context_size: int = HOSTED_LLM_CONTEXT_SIZE,
         gpu_layers: int = HOSTED_LLM_GPU_LAYERS,
         auto_start: bool = False,
     ) -> Tuple[bool, str]:
@@ -485,6 +488,7 @@ class ConfigManager:
         Args:
             model_path: Path to the .gguf model file
             port: Server port
+            context_size: Context window size in tokens
             gpu_layers: Number of layers to offload to GPU
             auto_start: Whether to auto-start the server on app launch
 
@@ -494,11 +498,12 @@ class ConfigManager:
         config = ConfigManager.load_config()
         config["hosted_model_path"] = model_path
         config["hosted_port"] = port
+        config["hosted_context_size"] = context_size
         config["hosted_gpu_layers"] = gpu_layers
         config["hosted_auto_start"] = auto_start
         ConfigManager._logger.info(
             f"Hosted LLM config saved: model={model_path}, port={port}, "
-            f"gpu_layers={gpu_layers}, auto_start={auto_start}"
+            f"context_size={context_size}, gpu_layers={gpu_layers}, auto_start={auto_start}"
         )
         return ConfigManager.save_config(config)
 
