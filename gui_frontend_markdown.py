@@ -24,6 +24,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMessageBox,
     QMenu,
+    QProgressBar,
+    QCheckBox,
+    QSpinBox,
+    QTabWidget,
+    QGroupBox,
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
@@ -163,9 +168,12 @@ class APIKeyConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("API Key Configuration")
         self.setModal(True)
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(560)
         self.windowIcon = QIcon("icon.svg")
         self.setWindowIcon(self.windowIcon)
+
+        self._download_thread: Optional[ModelDownloadThread] = None
+        self._server_thread: Optional[ServerStartThread] = None
 
         layout = QVBoxLayout(self)
 
@@ -176,15 +184,17 @@ class APIKeyConfigDialog(QDialog):
         layout.addWidget(title)
 
         # Instructions
-        instructions = QLabel(
+        self.instructions = QLabel(
             "Select an AI provider and enter your API key.\n"
             "You can add both OpenAI and Claude keys, or just one.\n\n"
             "Get your API key from:\n"
             "• OpenAI: https://platform.openai.com/api-keys\n"
-            "• Claude (Anthropic): https://console.anthropic.com/account/keys"
+            "• Claude (Anthropic): https://console.anthropic.com/account/keys\n"
+            "• Local LLM: No key needed — configure your local server URL\n"
+            "• Self-Host Model: Download & run a model locally — no server needed"
         )
-        instructions.setWordWrap(True)
-        layout.addWidget(instructions)
+        self.instructions.setWordWrap(True)
+        layout.addWidget(self.instructions)
 
         layout.addSpacing(15)
 
@@ -193,15 +203,16 @@ class APIKeyConfigDialog(QDialog):
 
         # Provider selection
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["OpenAI", "Claude"])
+        self.provider_combo.addItems(["OpenAI", "Claude", "Local LLM", "Self-Host Model"])
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         form_layout.addRow("AI Provider:", self.provider_combo)
 
-        # API Key input
+        # API Key input (shown for cloud providers)
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("Paste your API key here")
-        form_layout.addRow("API Key:", self.api_key_input)
+        self.api_key_label = QLabel("API Key:")
+        form_layout.addRow(self.api_key_label, self.api_key_input)
 
         # Show/hide key toggle
         self.toggle_visibility_btn = QPushButton("Show Key")
@@ -209,9 +220,46 @@ class APIKeyConfigDialog(QDialog):
         self.toggle_visibility_btn.clicked.connect(self.toggle_key_visibility)
         form_layout.addRow("", self.toggle_visibility_btn)
 
+        # Local LLM fields (hidden by default)
+        local_llm_config = ConfigManager.get_local_llm_config()
+
+        self.local_url_input = QLineEdit()
+        self.local_url_input.setPlaceholderText("http://localhost:11434/v1")
+        self.local_url_input.setText(local_llm_config["local_llm_url"])
+        self.local_url_label = QLabel("Server URL:")
+        form_layout.addRow(self.local_url_label, self.local_url_input)
+
+        self.local_model_input = QLineEdit()
+        self.local_model_input.setPlaceholderText("mistral")
+        self.local_model_input.setText(local_llm_config["local_llm_model"])
+        self.local_model_label = QLabel("Model Name:")
+        form_layout.addRow(self.local_model_label, self.local_model_input)
+
+        # Hide local fields initially
+        self.local_url_label.hide()
+        self.local_url_input.hide()
+        self.local_model_label.hide()
+        self.local_model_input.hide()
+
         layout.addLayout(form_layout)
 
+        # ---- Self-Host Model section (hidden by default) ----
+        self.self_host_group = QGroupBox("Self-Host Model")
+        sh_layout = QVBoxLayout(self.self_host_group)
+
+        self._build_self_host_ui(sh_layout)
+
+        self.self_host_group.hide()
+        layout.addWidget(self.self_host_group)
+
         layout.addSpacing(10)
+
+        # Set as default checkbox
+        self.set_default_checkbox = QCheckBox("Set as default provider")
+        self.set_default_checkbox.setChecked(True)
+        layout.addWidget(self.set_default_checkbox)
+
+        layout.addSpacing(5)
 
         # Buttons
         button_box = QDialogButtonBox(
@@ -223,14 +271,156 @@ class APIKeyConfigDialog(QDialog):
 
         self.key_is_visible = False
 
+    # ------------------------------------------------------------------
+    #  Self-Host UI builder
+    # ------------------------------------------------------------------
+    def _build_self_host_ui(self, layout: QVBoxLayout):
+        """Build the self-host model widgets inside the given layout."""
+        from model_manager import (
+            get_recommended_models,
+            list_available_models,
+            is_llama_cpp_available,
+        )
+
+        # Dependency check banner
+        if not is_llama_cpp_available():
+            warn = QLabel(
+                "\u26a0 llama-cpp-python is not installed.\n"
+                "Run:  pip install llama-cpp-python\n"
+                "Then restart the application."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #e8a838; font-weight: bold;")
+            layout.addWidget(warn)
+            layout.addSpacing(3)
+
+        desc = QLabel(
+            "Download a model and let the application host it for you.\n"
+            "No separate server setup required."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        layout.addSpacing(5)
+
+        # -- Model selection --
+        self.sh_model_combo = QComboBox()
+        catalog = get_recommended_models()
+        self._sh_catalog_keys: List[str] = []
+        for key, info in catalog.items():
+            label = f"{info['name']}  ({info['size_gb']} GB)"
+            if info.get("recommended"):
+                label += "  \u2605"
+            self.sh_model_combo.addItem(label)
+            self._sh_catalog_keys.append(key)
+
+        existing = list_available_models()
+        catalog_filenames = {v["filename"] for v in catalog.values()}
+        for fname in existing:
+            if fname not in catalog_filenames:
+                self.sh_model_combo.addItem(f"[downloaded] {fname}")
+                self._sh_catalog_keys.append(f"__local__{fname}")
+
+        layout.addWidget(QLabel("Model:"))
+        layout.addWidget(self.sh_model_combo)
+
+        # Browse for custom GGUF
+        browse_row = QHBoxLayout()
+        self.sh_custom_path = QLineEdit()
+        self.sh_custom_path.setPlaceholderText("Or browse for a .gguf file\u2026")
+        sh_browse_btn = QPushButton("Browse\u2026")
+        sh_browse_btn.setMaximumWidth(90)
+        sh_browse_btn.clicked.connect(self._sh_browse_model)
+        browse_row.addWidget(self.sh_custom_path)
+        browse_row.addWidget(sh_browse_btn)
+        layout.addLayout(browse_row)
+
+        layout.addSpacing(5)
+
+        # -- Download --
+        self.sh_download_btn = QPushButton("Download Selected Model")
+        self.sh_download_btn.clicked.connect(self._sh_start_download)
+        layout.addWidget(self.sh_download_btn)
+
+        self.sh_progress_bar = QProgressBar()
+        self.sh_progress_bar.setRange(0, 100)
+        self.sh_progress_bar.setValue(0)
+        self.sh_progress_bar.setVisible(False)
+        layout.addWidget(self.sh_progress_bar)
+
+        self.sh_progress_label = QLabel("")
+        self.sh_progress_label.setVisible(False)
+        layout.addWidget(self.sh_progress_label)
+
+        layout.addSpacing(5)
+
+        # -- Server controls --
+        srv_form = QFormLayout()
+        hosted_cfg = ConfigManager.get_hosted_llm_config()
+
+        self.sh_port_spin = QSpinBox()
+        self.sh_port_spin.setRange(1024, 65535)
+        self.sh_port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        srv_form.addRow("Port:", self.sh_port_spin)
+
+        self.sh_gpu_spin = QSpinBox()
+        self.sh_gpu_spin.setRange(0, 999)
+        self.sh_gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
+        self.sh_gpu_spin.setToolTip("Number of layers to offload to GPU (0 = CPU only)")
+        srv_form.addRow("GPU Layers:", self.sh_gpu_spin)
+        layout.addLayout(srv_form)
+
+        btn_row = QHBoxLayout()
+        self.sh_start_btn = QPushButton("Start Server")
+        self.sh_start_btn.clicked.connect(self._sh_start_server)
+        btn_row.addWidget(self.sh_start_btn)
+
+        self.sh_stop_btn = QPushButton("Stop Server")
+        self.sh_stop_btn.clicked.connect(self._sh_stop_server)
+        btn_row.addWidget(self.sh_stop_btn)
+        layout.addLayout(btn_row)
+
+        self.sh_status_label = QLabel("")
+        layout.addWidget(self.sh_status_label)
+
+        self._sh_refresh_server_status()
+
+    def _is_local_mode(self) -> bool:
+        """Check if the current provider selection is Local LLM."""
+        return self.provider_combo.currentText() == "Local LLM"
+
+    def _is_self_host_mode(self) -> bool:
+        """Check if the current provider selection is Self-Host Model."""
+        return self.provider_combo.currentText() == "Self-Host Model"
+
     def on_provider_changed(self, provider):
-        """Clear input when provider changes."""
+        """Toggle between cloud API key fields, local LLM fields, and self-host panel."""
         logger.debug(f"API provider changed to: {provider}")
-        self.api_key_input.clear()
-        self.key_is_visible = False
-        self.toggle_visibility_btn.setText("Show Key")
-        if self.api_key_input.echoMode() == QLineEdit.EchoMode.Normal:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        is_local = provider == "Local LLM"
+        is_self_host = provider == "Self-Host Model"
+        is_cloud = not is_local and not is_self_host
+
+        # Cloud fields
+        self.api_key_label.setVisible(is_cloud)
+        self.api_key_input.setVisible(is_cloud)
+        self.toggle_visibility_btn.setVisible(is_cloud)
+
+        # Local fields
+        self.local_url_label.setVisible(is_local)
+        self.local_url_input.setVisible(is_local)
+        self.local_model_label.setVisible(is_local)
+        self.local_model_input.setVisible(is_local)
+
+        # Self-host panel
+        self.self_host_group.setVisible(is_self_host)
+        if is_self_host:
+            self._sh_refresh_server_status()
+
+        if is_cloud:
+            self.api_key_input.clear()
+            self.key_is_visible = False
+            self.toggle_visibility_btn.setText("Show Key")
+            if self.api_key_input.echoMode() == QLineEdit.EchoMode.Normal:
+                self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
 
     def toggle_key_visibility(self):
         """Toggle visibility of API key."""
@@ -243,11 +433,287 @@ class APIKeyConfigDialog(QDialog):
             self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.toggle_visibility_btn.setText("Show Key")
 
+    # ------------------------------------------------------------------
+    #  Self-Host: model helpers
+    # ------------------------------------------------------------------
+    def _sh_browse_model(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select GGUF Model", "", "GGUF Models (*.gguf);;All Files (*)"
+        )
+        if path:
+            self.sh_custom_path.setText(path)
+
+    def _sh_get_selected_model_info(self) -> Optional[dict]:
+        """Return catalog info dict or pseudo-dict for a local file."""
+        from model_manager import get_models_directory, get_recommended_models
+
+        custom = self.sh_custom_path.text().strip()
+        if custom:
+            return {
+                "filename": os.path.basename(custom),
+                "url": None,
+                "path": custom,
+                "size_gb": 0,
+            }
+
+        idx = self.sh_model_combo.currentIndex()
+        if idx < 0:
+            return None
+
+        key = self._sh_catalog_keys[idx]
+        catalog = get_recommended_models()
+
+        if key.startswith("__local__"):
+            fname = key.replace("__local__", "")
+            return {
+                "filename": fname,
+                "url": None,
+                "path": os.path.join(get_models_directory(), fname),
+                "size_gb": 0,
+            }
+        else:
+            info = catalog[key]
+            return {
+                "filename": info["filename"],
+                "url": info["url"],
+                "path": os.path.join(get_models_directory(), info["filename"]),
+                "size_gb": info["size_gb"],
+            }
+
+    # ------------------------------------------------------------------
+    #  Self-Host: download
+    # ------------------------------------------------------------------
+    def _sh_start_download(self):
+        info = self._sh_get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        if not info.get("url"):
+            if os.path.isfile(info.get("path", "")):
+                QMessageBox.information(
+                    self, "Already Available",
+                    f"Model file already exists:\n{info['path']}"
+                )
+            else:
+                QMessageBox.warning(
+                    self, "No URL",
+                    "This model has no download URL. Browse for a local .gguf file."
+                )
+            return
+
+        from model_manager import check_disk_space
+
+        if not check_disk_space(info["size_gb"] * 1.1):
+            QMessageBox.warning(
+                self, "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required."
+            )
+            return
+
+        self.sh_download_btn.setEnabled(False)
+        self.sh_download_btn.setText("Downloading\u2026")
+        self.sh_progress_bar.setVisible(True)
+        self.sh_progress_bar.setValue(0)
+        self.sh_progress_label.setVisible(True)
+        self.sh_progress_label.setText("Starting download\u2026")
+
+        self._download_thread = ModelDownloadThread(
+            info["url"], info["filename"], self
+        )
+        self._download_thread.progress.connect(self._sh_on_download_progress)
+        self._download_thread.finished.connect(self._sh_on_download_finished)
+        self._download_thread.start()
+
+    def _sh_on_download_progress(self, pct: float, downloaded: int, total: int):
+        self.sh_progress_bar.setValue(int(pct))
+        dl_mb = downloaded / (1024 * 1024)
+        tot_mb = total / (1024 * 1024)
+        self.sh_progress_label.setText(f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)")
+
+    def _sh_on_download_finished(self, success: bool, message: str):
+        self.sh_download_btn.setEnabled(True)
+        self.sh_download_btn.setText("Download Selected Model")
+        self.sh_progress_bar.setVisible(False)
+        self.sh_progress_label.setVisible(False)
+
+        if success:
+            QMessageBox.information(self, "Download Complete", message)
+        else:
+            QMessageBox.critical(self, "Download Failed", message)
+
+    # ------------------------------------------------------------------
+    #  Self-Host: server start / stop
+    # ------------------------------------------------------------------
+    def _sh_start_server(self):
+        from model_manager import is_llama_cpp_available
+
+        if not is_llama_cpp_available():
+            QMessageBox.warning(
+                self, "Missing Dependency",
+                "llama-cpp-python is not installed.\n\n"
+                "Install it with:\n  pip install llama-cpp-python\n\n"
+                "Then restart the application."
+            )
+            return
+
+        info = self._sh_get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        model_path = info["path"]
+        if not os.path.isfile(model_path):
+            QMessageBox.warning(
+                self, "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n"
+                "Download it first."
+            )
+            return
+
+        port = self.sh_port_spin.value()
+        gpu_layers = self.sh_gpu_spin.value()
+
+        self.sh_start_btn.setEnabled(False)
+        self.sh_start_btn.setText("Starting\u2026")
+        self.sh_status_label.setText("Starting server \u2014 this may take a moment\u2026")
+
+        self._server_thread = ServerStartThread(
+            model_path, port, gpu_layers, self
+        )
+        self._server_thread.finished.connect(self._sh_on_server_started)
+        self._server_thread.start()
+
+    def _sh_on_server_started(self, success: bool, message: str):
+        self.sh_start_btn.setEnabled(True)
+        self.sh_start_btn.setText("Start Server")
+
+        if success:
+            QMessageBox.information(self, "Server Started", message)
+        else:
+            QMessageBox.critical(self, "Server Failed", message)
+
+        self._sh_refresh_server_status()
+
+    def _sh_stop_server(self):
+        from model_manager import stop_model_server
+
+        ok, msg = stop_model_server()
+        if ok:
+            QMessageBox.information(self, "Server Stopped", msg)
+        else:
+            QMessageBox.warning(self, "Error", msg)
+        self._sh_refresh_server_status()
+
+    def _sh_refresh_server_status(self):
+        from model_manager import get_server_status
+
+        status = get_server_status()
+        if status["running"]:
+            self.sh_status_label.setText(
+                f"\u25cf Server running  (PID {status['pid']},  {status['url']})"
+            )
+            self.sh_status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+            self.sh_start_btn.setEnabled(False)
+            self.sh_stop_btn.setEnabled(True)
+        else:
+            self.sh_status_label.setText("\u25cb Server not running")
+            self.sh_status_label.setStyleSheet("color: gray;")
+            self.sh_start_btn.setEnabled(True)
+            self.sh_stop_btn.setEnabled(False)
+
     def validate_and_save(self):
-        """Validate and save the API key."""
+        """Validate and save the API key, local LLM, or self-host settings."""
         provider = self.provider_combo.currentText()
+        logger.debug(f"Validating settings for provider: {provider}")
+
+        if self._is_self_host_mode():
+            # --- Self-Host path ---
+            from model_manager import get_hosted_url, is_server_running
+
+            info = self._sh_get_selected_model_info()
+            if not info:
+                QMessageBox.warning(self, "No Model", "Please select a model.")
+                return
+
+            model_path = info["path"]
+            port = self.sh_port_spin.value()
+            gpu_layers = self.sh_gpu_spin.value()
+
+            # Save hosted config
+            ok, msg = ConfigManager.set_hosted_llm_config(
+                model_path=model_path,
+                port=port,
+                gpu_layers=gpu_layers,
+                auto_start=True,
+            )
+            if not ok:
+                QMessageBox.critical(self, "Error", f"Failed to save config: {msg}")
+                return
+
+            # Point local LLM settings at the hosted server URL
+            hosted_url = get_hosted_url(port=port)
+            ok2, msg2 = ConfigManager.set_local_llm_config(hosted_url, "local-model")
+            if not ok2:
+                QMessageBox.critical(self, "Error", f"Failed to save local config: {msg2}")
+                return
+
+            if self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api("local")
+
+            running = is_server_running()
+            status_note = (
+                "Server is running." if running
+                else "Server is not running yet — start it above or it will auto-start next launch."
+            )
+            logger.info("Self-host model settings saved successfully")
+            QMessageBox.information(
+                self, "Success",
+                f"Self-Host Model configured!\n\n"
+                f"Model: {os.path.basename(model_path)}\n"
+                f"URL: {hosted_url}\n\n"
+                f"{status_note}"
+            )
+            self.accept()
+            return
+
+        if self._is_local_mode():
+            # --- Local LLM path ---
+            url = self.local_url_input.text().strip()
+            model = self.local_model_input.text().strip()
+
+            if not url:
+                QMessageBox.warning(
+                    self, "Missing URL",
+                    "Please enter the local LLM server URL."
+                )
+                return
+            if not model:
+                QMessageBox.warning(
+                    self, "Missing Model",
+                    "Please enter the local model name (e.g. 'mistral')."
+                )
+                return
+
+            success, message = ConfigManager.set_local_llm_config(url, model)
+            if success:
+                if self.set_default_checkbox.isChecked():
+                    ConfigManager.set_default_api("local")
+                logger.info("Local LLM settings saved successfully")
+                QMessageBox.information(
+                    self, "Success",
+                    f"Local LLM configured!\n\nURL: {url}\nModel: {model}"
+                )
+                self.accept()
+            else:
+                logger.error(f"Failed to save local LLM config: {message}")
+                QMessageBox.critical(
+                    self, "Error", f"Failed to save settings: {message}"
+                )
+            return
+
+        # --- Cloud provider path ---
         api_key = self.api_key_input.text().strip()
-        logger.debug(f"Validating API key for provider: {provider}")
 
         if not api_key:
             logger.warning(f"Empty API key provided for provider: {provider}")
@@ -261,11 +727,7 @@ class APIKeyConfigDialog(QDialog):
         logger.info(f"API key save attempt for {provider}: {success}")
 
         if success:
-            # Set as default API if it's the first one
-            if (
-                not ConfigManager.has_any_api_key()
-                or ConfigManager.get_default_api() == "openai"
-            ):
+            if self.set_default_checkbox.isChecked():
                 ConfigManager.set_default_api(provider.lower())
 
             logger.info(f"{provider} API key configured successfully")
@@ -276,6 +738,524 @@ class APIKeyConfigDialog(QDialog):
         else:
             logger.error(f"Failed to save {provider} API key: {message}")
             QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
+
+
+class ModelDownloadThread(QThread):
+    """Background thread for downloading a GGUF model."""
+
+    progress = Signal(float, int, int)  # pct, downloaded, total
+    finished = Signal(bool, str)        # success, message
+
+    def __init__(self, url: str, filename: str, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.filename = filename
+
+    def run(self):
+        from model_manager import download_model
+
+        def _cb(pct, downloaded, total):
+            self.progress.emit(pct, downloaded, total)
+
+        ok, msg = download_model(self.url, self.filename, callback=_cb)
+        self.finished.emit(ok, msg)
+
+
+class ServerStartThread(QThread):
+    """Background thread for starting the hosted model server."""
+
+    finished = Signal(bool, str)  # success, message
+
+    def __init__(self, model_path: str, port: int, gpu_layers: int, parent=None):
+        super().__init__(parent)
+        self.model_path = model_path
+        self.port = port
+        self.gpu_layers = gpu_layers
+
+    def run(self):
+        from model_manager import start_model_server
+
+        ok, msg = start_model_server(
+            self.model_path,
+            port=self.port,
+            n_gpu_layers=self.gpu_layers,
+        )
+        self.finished.emit(ok, msg)
+
+
+class LocalLLMSettingsDialog(QDialog):
+    """
+    Dialog for configuring local LLM access.
+
+    Tab 1 — "Connect to Server": point at an existing local server (Ollama, etc.)
+    Tab 2 — "Host a Model":     download a model and run a built-in server
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Local LLM Settings")
+        self.setModal(True)
+        self.setMinimumSize(560, 520)
+
+        self._download_thread: Optional[ModelDownloadThread] = None
+        self._server_thread: Optional[ServerStartThread] = None
+
+        root_layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Local LLM Configuration")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root_layout.addWidget(title)
+
+        root_layout.addSpacing(5)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_connect_tab(), "Connect to Server")
+        self.tabs.addTab(self._build_host_tab(), "Host a Model")
+        root_layout.addWidget(self.tabs)
+
+        root_layout.addSpacing(5)
+
+        # Dialog buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._save)
+        button_box.rejected.connect(self.reject)
+        root_layout.addWidget(button_box)
+
+    # ------------------------------------------------------------------
+    #  Tab 1 — Connect to an existing server
+    # ------------------------------------------------------------------
+    def _build_connect_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        instructions = QLabel(
+            "Point at an existing local LLM server.\n"
+            "Supported: Ollama, llama-cpp-python, LM Studio, vLLM, etc."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(8)
+
+        local_cfg = ConfigManager.get_local_llm_config()
+        form = QFormLayout()
+
+        self.url_input = QLineEdit()
+        self.url_input.setText(local_cfg["local_llm_url"])
+        self.url_input.setPlaceholderText("http://localhost:11434/v1")
+        form.addRow("Server URL:", self.url_input)
+
+        self.model_input = QLineEdit()
+        self.model_input.setText(local_cfg["local_llm_model"])
+        self.model_input.setPlaceholderText("mistral")
+        form.addRow("Model Name:", self.model_input)
+
+        layout.addLayout(form)
+        layout.addSpacing(8)
+
+        test_btn = QPushButton("Test Connection")
+        test_btn.clicked.connect(self._test_connection)
+        layout.addWidget(test_btn)
+
+        layout.addStretch()
+        return tab
+
+    # ------------------------------------------------------------------
+    #  Tab 2 — Download & host a model
+    # ------------------------------------------------------------------
+    def _build_host_tab(self) -> QWidget:
+        from model_manager import (
+            get_recommended_models,
+            list_available_models,
+            get_models_directory,
+            is_llama_cpp_available,
+            is_server_running,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # Dependency check banner
+        if not is_llama_cpp_available():
+            warn = QLabel(
+                "⚠ llama-cpp-python is not installed.\n"
+                "Run:  pip install llama-cpp-python\n"
+                "Then restart the application."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #e8a838; font-weight: bold;")
+            layout.addWidget(warn)
+            layout.addSpacing(5)
+
+        instructions = QLabel(
+            "Don't have a local LLM server? Download a model and let\n"
+            "the application host it for you automatically."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(5)
+
+        # ---- Model selection ----
+        model_group = QGroupBox("1. Select a Model")
+        mg_layout = QVBoxLayout(model_group)
+
+        self.model_combo = QComboBox()
+        catalog = get_recommended_models()
+
+        # Populate combo: catalog models first, then already-downloaded models
+        self._catalog_keys: List[str] = []
+        for key, info in catalog.items():
+            label = f"{info['name']}  ({info['size_gb']} GB)"
+            if info.get("recommended"):
+                label += "  ★"
+            self.model_combo.addItem(label)
+            self._catalog_keys.append(key)
+
+        # Add already-downloaded models not in catalog
+        existing = list_available_models()
+        catalog_filenames = {v["filename"] for v in catalog.values()}
+        for fname in existing:
+            if fname not in catalog_filenames:
+                self.model_combo.addItem(f"[downloaded] {fname}")
+                self._catalog_keys.append(f"__local__{fname}")
+
+        mg_layout.addWidget(self.model_combo)
+
+        # Browse for a custom GGUF file
+        browse_row = QHBoxLayout()
+        self.custom_path_input = QLineEdit()
+        self.custom_path_input.setPlaceholderText("Or browse for a .gguf file…")
+        browse_btn = QPushButton("Browse…")
+        browse_btn.setMaximumWidth(90)
+        browse_btn.clicked.connect(self._browse_model)
+        browse_row.addWidget(self.custom_path_input)
+        browse_row.addWidget(browse_btn)
+        mg_layout.addLayout(browse_row)
+
+        layout.addWidget(model_group)
+
+        # ---- Download ----
+        dl_group = QGroupBox("2. Download Model")
+        dl_layout = QVBoxLayout(dl_group)
+
+        self.download_btn = QPushButton("Download Selected Model")
+        self.download_btn.clicked.connect(self._start_download)
+        dl_layout.addWidget(self.download_btn)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        dl_layout.addWidget(self.progress_bar)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setVisible(False)
+        dl_layout.addWidget(self.progress_label)
+
+        layout.addWidget(dl_group)
+
+        # ---- Server controls ----
+        srv_group = QGroupBox("3. Start / Stop Server")
+        sg_layout = QVBoxLayout(srv_group)
+
+        srv_form = QFormLayout()
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(1024, 65535)
+        hosted_cfg = ConfigManager.get_hosted_llm_config()
+        self.port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        srv_form.addRow("Port:", self.port_spin)
+
+        self.gpu_spin = QSpinBox()
+        self.gpu_spin.setRange(0, 999)
+        self.gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
+        self.gpu_spin.setToolTip("Number of layers to offload to GPU (0 = CPU only)")
+        srv_form.addRow("GPU Layers:", self.gpu_spin)
+
+        sg_layout.addLayout(srv_form)
+
+        btn_row = QHBoxLayout()
+        self.start_btn = QPushButton("Start Server")
+        self.start_btn.clicked.connect(self._start_server)
+        btn_row.addWidget(self.start_btn)
+
+        self.stop_btn = QPushButton("Stop Server")
+        self.stop_btn.clicked.connect(self._stop_server)
+        btn_row.addWidget(self.stop_btn)
+        sg_layout.addLayout(btn_row)
+
+        self.server_status_label = QLabel("")
+        sg_layout.addWidget(self.server_status_label)
+
+        self.auto_start_cb = QCheckBox("Auto-start server when app launches")
+        self.auto_start_cb.setChecked(hosted_cfg.get("hosted_auto_start", False))
+        sg_layout.addWidget(self.auto_start_cb)
+
+        layout.addWidget(srv_group)
+
+        # Refresh status
+        self._refresh_server_status()
+
+        return tab
+
+    # ------------------------------------------------------------------
+    #  Actions
+    # ------------------------------------------------------------------
+    def _browse_model(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select GGUF Model", "", "GGUF Models (*.gguf);;All Files (*)"
+        )
+        if path:
+            self.custom_path_input.setText(path)
+
+    def _get_selected_model_info(self) -> Optional[dict]:
+        """Return catalog info dict or a pseudo-dict for an already-local file."""
+        from model_manager import get_models_directory, get_recommended_models
+
+        # Custom path takes priority
+        custom = self.custom_path_input.text().strip()
+        if custom:
+            return {
+                "filename": os.path.basename(custom),
+                "url": None,
+                "path": custom,
+                "size_gb": 0,
+            }
+
+        idx = self.model_combo.currentIndex()
+        if idx < 0:
+            return None
+
+        key = self._catalog_keys[idx]
+        catalog = get_recommended_models()
+
+        if key.startswith("__local__"):
+            fname = key.replace("__local__", "")
+            return {
+                "filename": fname,
+                "url": None,
+                "path": os.path.join(get_models_directory(), fname),
+                "size_gb": 0,
+            }
+        else:
+            info = catalog[key]
+            return {
+                "filename": info["filename"],
+                "url": info["url"],
+                "path": os.path.join(get_models_directory(), info["filename"]),
+                "size_gb": info["size_gb"],
+            }
+
+    def _start_download(self):
+        info = self._get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        if not info.get("url"):
+            if os.path.isfile(info.get("path", "")):
+                QMessageBox.information(
+                    self, "Already Available",
+                    f"Model file already exists:\n{info['path']}"
+                )
+            else:
+                QMessageBox.warning(
+                    self, "No URL",
+                    "This model has no download URL. Browse for a local .gguf file."
+                )
+            return
+
+        from model_manager import check_disk_space
+
+        if not check_disk_space(info["size_gb"] * 1.1):
+            QMessageBox.warning(
+                self, "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required."
+            )
+            return
+
+        # Disable button and show progress
+        self.download_btn.setEnabled(False)
+        self.download_btn.setText("Downloading…")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_label.setVisible(True)
+        self.progress_label.setText("Starting download…")
+
+        self._download_thread = ModelDownloadThread(
+            info["url"], info["filename"], self
+        )
+        self._download_thread.progress.connect(self._on_download_progress)
+        self._download_thread.finished.connect(self._on_download_finished)
+        self._download_thread.start()
+
+    def _on_download_progress(self, pct: float, downloaded: int, total: int):
+        self.progress_bar.setValue(int(pct))
+        dl_mb = downloaded / (1024 * 1024)
+        tot_mb = total / (1024 * 1024)
+        self.progress_label.setText(f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)")
+
+    def _on_download_finished(self, success: bool, message: str):
+        self.download_btn.setEnabled(True)
+        self.download_btn.setText("Download Selected Model")
+        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+
+        if success:
+            QMessageBox.information(self, "Download Complete", message)
+        else:
+            QMessageBox.critical(self, "Download Failed", message)
+
+    def _start_server(self):
+        from model_manager import is_llama_cpp_available
+
+        if not is_llama_cpp_available():
+            QMessageBox.warning(
+                self, "Missing Dependency",
+                "llama-cpp-python is not installed.\n\n"
+                "Install it with:\n  pip install llama-cpp-python\n\n"
+                "Then restart the application."
+            )
+            return
+
+        info = self._get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        model_path = info["path"]
+        if not os.path.isfile(model_path):
+            QMessageBox.warning(
+                self, "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n"
+                "Download it first."
+            )
+            return
+
+        port = self.port_spin.value()
+        gpu_layers = self.gpu_spin.value()
+
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("Starting…")
+        self.server_status_label.setText("Starting server — this may take a moment…")
+
+        self._server_thread = ServerStartThread(
+            model_path, port, gpu_layers, self
+        )
+        self._server_thread.finished.connect(self._on_server_started)
+        self._server_thread.start()
+
+    def _on_server_started(self, success: bool, message: str):
+        self.start_btn.setEnabled(True)
+        self.start_btn.setText("Start Server")
+
+        if success:
+            QMessageBox.information(self, "Server Started", message)
+            # Auto-update the connect tab URL to point at the hosted server
+            from model_manager import get_hosted_url
+            hosted_url = get_hosted_url(port=self.port_spin.value())
+            self.url_input.setText(hosted_url)
+        else:
+            QMessageBox.critical(self, "Server Failed", message)
+
+        self._refresh_server_status()
+
+    def _stop_server(self):
+        from model_manager import stop_model_server
+
+        ok, msg = stop_model_server()
+        if ok:
+            QMessageBox.information(self, "Server Stopped", msg)
+        else:
+            QMessageBox.warning(self, "Error", msg)
+        self._refresh_server_status()
+
+    def _refresh_server_status(self):
+        from model_manager import get_server_status
+
+        status = get_server_status()
+        if status["running"]:
+            self.server_status_label.setText(
+                f"● Server running  (PID {status['pid']},  {status['url']})"
+            )
+            self.server_status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.server_status_label.setText("○ Server not running")
+            self.server_status_label.setStyleSheet("color: gray;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    #  Test connection (existing server tab)
+    # ------------------------------------------------------------------
+    def _test_connection(self):
+        """Try to reach the local LLM server and report status."""
+        url = self.url_input.text().strip().rstrip("/")
+        if not url:
+            QMessageBox.warning(self, "Missing URL", "Enter a server URL first.")
+            return
+        try:
+            import httpx
+
+            resp = httpx.get(f"{url}/models", timeout=10.0)
+            resp.raise_for_status()
+            models = resp.json().get("data", [])
+            model_names = [m.get("id", "?") for m in models]
+            QMessageBox.information(
+                self,
+                "Connection Successful",
+                f"Connected to {url}\n\nAvailable models:\n"
+                + "\n".join(f"  • {n}" for n in model_names[:15]),
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Connection Failed",
+                f"Could not reach {url}:\n\n{e}\n\n"
+                "Make sure the server is running.",
+            )
+
+    # ------------------------------------------------------------------
+    #  Save
+    # ------------------------------------------------------------------
+    def _save(self):
+        """Persist all local LLM settings (connect tab + host tab)."""
+        url = self.url_input.text().strip()
+        model = self.model_input.text().strip()
+
+        if not url:
+            QMessageBox.warning(self, "Missing URL", "Server URL is required.")
+            return
+        if not model:
+            QMessageBox.warning(self, "Missing Model", "Model name is required.")
+            return
+
+        ok1, msg1 = ConfigManager.set_local_llm_config(url, model)
+        if not ok1:
+            QMessageBox.critical(self, "Error", f"Failed to save: {msg1}")
+            return
+
+        # Save hosted server settings
+        info = self._get_selected_model_info()
+        model_path = info["path"] if info else ""
+        ok2, msg2 = ConfigManager.set_hosted_llm_config(
+            model_path=model_path,
+            port=self.port_spin.value(),
+            gpu_layers=self.gpu_spin.value(),
+            auto_start=self.auto_start_cb.isChecked(),
+        )
+        if not ok2:
+            QMessageBox.critical(self, "Error", f"Failed to save hosted config: {msg2}")
+            return
+
+        self.accept()
 
 
 class CreateProjectDialog(QDialog):
@@ -1478,6 +2458,15 @@ class DataWorkspaceGUI(QMainWindow):
         self.prompt_expansion_action.triggered.connect(self.toggle_prompt_expansion)
         settings_menu.addAction(self.prompt_expansion_action)
 
+        # Local LLM settings
+        settings_menu.addSeparator()
+        local_llm_action = QAction("Local LLM Settings...", self)
+        local_llm_action.setToolTip(
+            "Configure a local LLM server (e.g. Ollama) for fully offline execution."
+        )
+        local_llm_action.triggered.connect(self.open_local_llm_settings)
+        settings_menu.addAction(local_llm_action)
+
         # ===== Help Menu =====
         help_menu = menu_bar.addMenu("Help")
 
@@ -2587,6 +3576,19 @@ class DataWorkspaceGUI(QMainWindow):
                 self, "Settings Error", f"Failed to save setting: {message}"
             )
 
+    def open_local_llm_settings(self):
+        """Open a dialog to configure the local LLM server connection or host a model."""
+        logger.info("User opened Local LLM settings dialog")
+        try:
+            dialog = LocalLLMSettingsDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("Local LLM settings updated successfully")
+        except Exception as e:
+            logger.error(f"Error opening Local LLM settings: {e}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to open Local LLM settings: {e}"
+            )
+
     def set_interaction_mode(self, mode: str):
         """Set the interaction mode (cxo or analyst) and persist it."""
         # If switching to analyst mode while in CxO mode with no tables loaded,
@@ -2764,7 +3766,12 @@ def _preload_theme(app: QApplication) -> None:
 
 
 def _ensure_api_configured() -> bool:
-    """Ensure API keys are configured. Shows dialog if needed. Returns True if configured."""
+    """Ensure API keys or local LLM are configured. Shows dialog if needed. Returns True if configured."""
+    # Local LLM doesn't need an API key
+    if ConfigManager.get_default_api() == "local":
+        logger.info("Local LLM is configured as default provider, skipping API key check")
+        return True
+
     if not ConfigManager.has_any_api_key():
         logger.warning("No API keys configured, prompting user for setup")
         api_config_dialog = APIKeyConfigDialog()
@@ -2773,7 +3780,7 @@ def _ensure_api_configured() -> bool:
             QMessageBox.warning(
                 None,
                 "API Key Required",
-                "An API key is required to use this application.\n"
+                "An API key (or local LLM) is required to use this application.\n"
                 "Please configure your API key and try again.",
             )
             return False

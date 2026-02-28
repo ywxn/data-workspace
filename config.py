@@ -320,3 +320,101 @@ class ConfigManager:
         config["table_selection_method"] = normalized
         ConfigManager._logger.info(f"Table selection method set to: {normalized}")
         return ConfigManager.save_config(config)
+
+    # ------------------------------------------------------------------
+    # Local LLM configuration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_local_llm_config() -> Dict[str, str]:
+        """
+        Return local LLM connection settings.
+
+        Returns:
+            Dict with keys 'local_llm_url' and 'local_llm_model'
+        """
+        config = ConfigManager.load_config()
+        return {
+            "local_llm_url": config.get(
+                "local_llm_url", "http://localhost:11434/v1"
+            ),
+            "local_llm_model": config.get("local_llm_model", "mistral"),
+        }
+
+    @staticmethod
+    def set_local_llm_config(
+        url: str, model: str
+    ) -> Tuple[bool, str]:
+        """
+        Persist local LLM connection settings.
+
+        Args:
+            url: Base URL of the OpenAI-compatible local LLM endpoint
+            model: Model name to request from the local server
+
+        Returns:
+            Tuple of (success, message)
+        """
+        url = url.strip().rstrip("/")
+        model = model.strip()
+        if not url:
+            return False, "Local LLM URL must not be empty."
+        if not model:
+            return False, "Local LLM model name must not be empty."
+
+        config = ConfigManager.load_config()
+        config["local_llm_url"] = url
+        config["local_llm_model"] = model
+        ConfigManager._logger.info(
+            f"Local LLM config saved: url={url}, model={model}"
+        )
+        return ConfigManager.save_config(config)
+
+    # ------------------------------------------------------------------
+    # Hosted (built-in) model server configuration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_hosted_llm_config() -> Dict[str, Any]:
+        """
+        Return hosted model server settings.
+
+        Keys: hosted_model_path, hosted_port, hosted_gpu_layers, hosted_auto_start
+        """
+        config = ConfigManager.load_config()
+        return {
+            "hosted_model_path": config.get("hosted_model_path", ""),
+            "hosted_port": config.get("hosted_port", 8911),
+            "hosted_gpu_layers": config.get("hosted_gpu_layers", 0),
+            "hosted_auto_start": config.get("hosted_auto_start", False),
+        }
+
+    @staticmethod
+    def set_hosted_llm_config(
+        model_path: str,
+        port: int = 8911,
+        gpu_layers: int = 0,
+        auto_start: bool = False,
+    ) -> Tuple[bool, str]:
+        """
+        Persist hosted model server settings.
+
+        Args:
+            model_path: Path to the .gguf model file
+            port: Server port
+            gpu_layers: Number of layers to offload to GPU
+            auto_start: Whether to auto-start the server on app launch
+
+        Returns:
+            Tuple of (success, message)
+        """
+        config = ConfigManager.load_config()
+        config["hosted_model_path"] = model_path
+        config["hosted_port"] = port
+        config["hosted_gpu_layers"] = gpu_layers
+        config["hosted_auto_start"] = auto_start
+        ConfigManager._logger.info(
+            f"Hosted LLM config saved: model={model_path}, port={port}, "
+            f"gpu_layers={gpu_layers}, auto_start={auto_start}"
+        )
+        return ConfigManager.save_config(config)

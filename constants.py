@@ -21,7 +21,50 @@ LLM_TEMPERATURE_ANALYSIS = 0.6
 LLM_MODELS = {
     "claude": "claude-3-5-sonnet-20241022",
     "openai": "gpt-4o-2024-08-06",
-}  # TODO: Add model management UI?
+    "local": "mistral",  # default local model name; overridden by config
+}
+
+# Local LLM defaults
+LOCAL_LLM_DEFAULT_URL = "http://localhost:11434/v1"
+LOCAL_LLM_DEFAULT_MODEL = "mistral"
+LOCAL_LLM_REQUEST_TIMEOUT = 120.0  # seconds
+
+# Hosted (built-in) LLM server defaults
+HOSTED_LLM_DEFAULT_PORT = 8911
+HOSTED_LLM_DEFAULT_HOST = "127.0.0.1"
+HOSTED_LLM_CONTEXT_SIZE = 4096
+HOSTED_LLM_GPU_LAYERS = 0  # 0 = CPU-only by default; increase for GPU offload
+
+# Models directory (relative to project root)
+MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+# Recommended GGUF models for self-hosted inference
+HOSTED_MODEL_CATALOG = {
+    "mistral-7b-q4": {
+        "name": "Mistral 7B Instruct v0.3 (Q4_K_M)",
+        "filename": "Mistral-7B-Instruct-v0.3.Q4_K_M.gguf",
+        "url": "https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q4_K_M.gguf",
+        "size_gb": 4.4,
+        "description": "Fast and capable for data analysis tasks (recommended)",
+        "recommended": True,
+    },
+    "llama3-8b-q4": {
+        "name": "Llama 3 8B Instruct (Q4_K_M)",
+        "filename": "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        "url": "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        "size_gb": 4.9,
+        "description": "Strong general-purpose model from Meta",
+        "recommended": False,
+    },
+    "phi3-mini-q4": {
+        "name": "Phi-3 Mini 4K Instruct (Q4_K_M)",
+        "filename": "Phi-3-mini-4k-instruct-q4.gguf",
+        "url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+        "size_gb": 2.4,
+        "description": "Small, fast model — ideal for low-resource machines",
+        "recommended": False,
+    },
+}
 
 
 # Database Configuration
