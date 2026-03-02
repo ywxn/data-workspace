@@ -306,6 +306,11 @@ class NLPTableSelector:
         self.structural_links: Dict[str, Set[str]] = defaultdict(set)
         self.canonical_score: Dict[str, float] = {}
 
+        # Common-prompt shortcut cache
+        self.common_prompt_texts: List[str] = []
+        self.common_prompt_tables: List[List[str]] = []
+        self.common_prompt_embeddings: Optional[np.ndarray] = None
+
         # Build initial schema
         self._refresh_schema()
 
@@ -352,6 +357,9 @@ class NLPTableSelector:
         # Build structural relationships
         self._infer_structural_links()
         self._compute_canonical_scores()
+
+        # Build common-prompt embeddings (optional shortcut)
+        self._build_common_prompt_embeddings()
 
         logger.info(
             f"Schema built: {len(self.table_metadata)} tables, "
@@ -587,7 +595,16 @@ class NLPTableSelector:
                 metadata={"error": "Schema not initialized"},
             )
 
-        # --- Step 0: Query pattern shortcut ---
+        # --- Step 0a: Common-prompt shortcut (semantic similarity) ---
+        common_result = self._match_common_prompts(prompt)
+        if common_result is not None:
+            logger.info(
+                f"Common-prompt shortcut — returning predefined result: "
+                f"{common_result.tables}"
+            )
+            return common_result
+
+        # --- Step 0b: Query pattern shortcut ---
         pattern_result = self._match_query_patterns(prompt)
         if pattern_result is not None:
             logger.info(
@@ -1007,6 +1024,116 @@ class NLPTableSelector:
                         )
 
         return table_scores
+
+    # -----------------------------------------------------------------
+    # Common-prompt shortcut (semantic similarity, bypasses full pipeline)
+    # -----------------------------------------------------------------
+
+    def _build_common_prompt_embeddings(self) -> None:
+        """
+        Pre-compute embeddings for ``common_prompts`` entries in the
+        semantic layer.  Called once during ``_refresh_schema``.
+
+        The ``common_prompts`` key is optional.  When absent or empty
+        this method is a no-op.
+        """
+        self.common_prompt_texts = []
+        self.common_prompt_tables = []
+        self.common_prompt_embeddings = None
+
+        if not self._is_rich_semantic_layer():
+            return
+
+        entries = self.semantic_layer.get("common_prompts")
+        if not entries:
+            return
+
+        texts: List[str] = []
+        tables: List[List[str]] = []
+        for entry in entries:
+            prompt_text = entry.get("prompt", "").strip()
+            table_list = entry.get("tables", [])
+            if prompt_text and table_list:
+                texts.append(self.normalizer.normalize_text(prompt_text))
+                tables.append(table_list)
+
+        if not texts:
+            return
+
+        self.common_prompt_texts = texts
+        self.common_prompt_tables = tables
+        self.common_prompt_embeddings = self.model.encode(
+            texts, normalize_embeddings=True, show_progress_bar=False
+        )
+
+        logger.info(
+            f"Built embeddings for {len(texts)} common prompts"
+        )
+
+    def _match_common_prompts(
+        self, prompt: str, similarity_threshold: float = 0.85
+    ) -> Optional[TableSelectionResult]:
+        """
+        Check if *prompt* is semantically close to a pre-defined
+        ``common_prompts`` entry.
+
+        When the cosine similarity between the input prompt and the
+        closest common prompt exceeds *similarity_threshold* the
+        predefined table list is returned immediately, bypassing the
+        full NLP pipeline.
+
+        Args:
+            prompt: Raw user query.
+            similarity_threshold: Minimum cosine similarity (0-1)
+                to consider a match.  Default **0.85** is deliberately
+                high so only near-identical prompts trigger the shortcut.
+
+        Returns:
+            ``TableSelectionResult`` on match, else ``None``.
+        """
+        if self.common_prompt_embeddings is None:
+            return None
+
+        normalized = self.normalizer.normalize_text(prompt)
+        prompt_embedding = self.model.encode(
+            normalized, normalize_embeddings=True
+        )
+
+        # Cosine similarity (vectors are already L2-normalised)
+        similarities = prompt_embedding @ self.common_prompt_embeddings.T
+        best_idx = int(np.argmax(similarities))
+        best_score = float(similarities[best_idx])
+
+        if best_score < similarity_threshold:
+            return None
+
+        matched_tables = [
+            t for t in self.common_prompt_tables[best_idx]
+            if t in self.table_metadata
+        ]
+
+        if not matched_tables:
+            return None
+
+        confidences = {t: best_score for t in matched_tables}
+
+        logger.info(
+            f"Common-prompt shortcut matched (score={best_score:.3f}): "
+            f"\"{self.common_prompt_texts[best_idx]}\" → {matched_tables}"
+        )
+
+        return TableSelectionResult(
+            status="success",
+            tables=matched_tables,
+            confidences=confidences,
+            metadata={
+                "mode": "common_prompt",
+                "matched_prompt": self.common_prompt_texts[best_idx],
+                "similarity": best_score,
+                "prompt": prompt,
+                "normalized_prompt": normalized,
+            },
+        )
 
     # -----------------------------------------------------------------
     # Query-pattern shortcut (deterministic, bypasses embedding lookup)
@@ -2043,6 +2170,9 @@ class NLPTableSelector:
 
         # Include semantic layer feature counts
         if self._is_rich_semantic_layer():
+            info["common_prompts_count"] = len(
+                self.semantic_layer.get("common_prompts", [])
+            )
             info["query_patterns_count"] = len(
                 self.semantic_layer.get("query_patterns", [])
             )

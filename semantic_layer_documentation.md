@@ -25,9 +25,9 @@ The semantic layer consists of five core elements:
 
 Beyond the core components, modern semantic layers support:
 
-- **Query Patterns** — Deterministic shortcuts for frequently-asked questions (bypasses embedding lookup)
+- **Common Prompts** — Semantic similarity shortcuts for frequently-asked questions (bypasses full NLP pipeline)
+- **Query Patterns** — Deterministic pattern-matching shortcuts for specific query types
 - **Term Glossary** — Business-language dictionary mapping jargon to database columns
-- **Common Queries** — Pre-defined templates documenting supported analyses
 - **Database Prefixes** — Multi-database federation for complex architectures
 - **Column Mappings** — Business names and synonyms for every column
 - **Semantic Enrichment** — Optional descriptions and comments augmenting schema metadata
@@ -43,9 +43,9 @@ Beyond the core components, modern semantic layers support:
 - [Date Fields](#date-fields)
 - [Columns](#columns)
 - [Example Structure](#example-structure)
+- [Common Prompts](#common-prompts)
 - [Query Patterns](#query-patterns)
 - [Term Glossary](#term-glossary)
-- [Common Queries](#common-queries)
 - [Database Prefix](#database-prefix)
 - [Best Practices](#best-practices)
 - [Summary Checklist](#summary-checklist)
@@ -413,69 +413,108 @@ Map important columns with synonyms, business names, and data types. Group logic
 
 ---
 
-## Common Queries
+## Common Prompts
 
-Common queries are **pre-defined, template-based query patterns** that serve as executable templates and examples for end users. They document the types of analyses your organization supports and can be used for testing, documentation, and guiding users toward valuable insights.
+Common prompts provide a **semantic similarity shortcut** that enables the NLP system to instantly recognize frequently-asked questions and return predefined table selections without running the full embedding pipeline. When a user's prompt is semantically similar to a common prompt (typically 85%+ cosine similarity), the system bypasses column-level embedding lookup, scoring, and expansion logic, returning the cached table list immediately.
 
 ### Purpose
 
-- **Documentation** — Show users what kinds of questions the semantic layer can answer
-- **Template generation** — Provide starting points for custom analysis
-- **Validation** — Test the semantic layer configuration against real business questions
-- **Performance** — Pre-validate SQL patterns before users create ad-hoc queries
+- **Performance** — Skip expensive embedding and aggregation steps for known queries
+- **Accuracy** — Guarantee exact table selection for business-critical questions
+- **User experience** — Provide instant responses for common questions
+- **Testing** — Validate the semantic layer against real user queries
+- **Documentation** — Demonstrate the types of questions the system handles well
 
-### Common Query Structure
+### When to Use Common Prompts
+
+- **Frequently-asked questions** — Queries that appear in 80%+ of user sessions
+- **Business-critical reports** — Where table selection must be 100% deterministic
+- **Onboarding templates** — Example queries new users can start with
+- **Regression testing** — Baseline queries to validate semantic layer changes
+
+### Common Prompt Structure
 
 | Field | Type | Description | Example |
 |---|---|---|---|
-| `name` | `string` | Descriptive query identifier | `"Open Requisitions"`, `"Stock by Location"` |
-| `query` | `string` | Natural language description of the query | `"Show all open requisitions"` |
-| `entities` | `string[]` | Core entities involved | `["requisition"]` |
-| `dimensions` | `string[]` | Grouping/filtering dimensions | `["project", "employee"]` |
-| `measures` | `string[]` | Aggregated values to display | `["quantity", "status"]` |
-| `aggregation` | `string` | If single aggregate, specify function | `"sum"`, `"count"`, `"avg"` |
-| `filters` | `string` | Optional WHERE conditions | `"status = 'Open'"` |
+| `prompt` | `string` | Natural language query exactly as users phrase it | `"Show pending orders not yet delivered"` |
+| `tables` | `string[]` | Physical table names to select when this prompt matches | `["order_header", "order_detail", "customer"]` |
+
+### How Common Prompts Work
+
+1. **Build phase** — During `_refresh_schema()`, all common prompts are normalized and encoded into embeddings
+2. **Query phase** — Before semantic search, the incoming prompt is compared against all common prompt embeddings
+3. **Similarity check** — If cosine similarity exceeds the threshold (default **0.85**), the predefined tables are returned
+4. **Bypass** — The full NLP pipeline (column retrieval, aggregation, lexical boost, FK expansion) is skipped
+5. **Metadata** — The result includes `"mode": "common_prompt"` and the matched prompt text
+
+### Similarity Threshold Guidelines
+
+| Threshold | Behavior | Use Case |
+|---|---|---|
+| **0.90+** | Very strict; only near-identical prompts match | Critical financial/compliance queries |
+| **0.85** (default) | Moderate; handles minor phrasing variations | General business questions |
+| **0.75-0.80** | Loose; accepts broader paraphrasing | Discovery/exploratory queries |
 
 ### Practical Examples
 
 ```jsonc
-"common_queries": [
+"common_prompts": [
     {
-        "name": "Open Requisitions",
-        "query": "Show all open requisitions",
-        "entities": ["requisition"],
-        "dimensions": [],
-        "measures": ["document_no", "document_date", "project", "employee", "status"],
-        "filters": "status = 'Open'"
+        "prompt": "Show all pending orders awaiting approval",
+        "tables": ["order_header", "order_detail"]
     },
     {
-        "name": "Total Purchase Value by Supplier",
-        "query": "Total order value by vendor",
-        "entities": ["purchase_order"],
-        "dimensions": ["supplier"],
-        "measures": ["total_amount"],
-        "aggregation": "sum"
+        "prompt": "Vendor-wise total purchase amount",
+        "tables": ["vendor_master", "purchase_order", "purchase_detail"]
     },
     {
-        "name": "Closing Inventory by Location",
-        "query": "Closing inventory by product and location",
-        "entities": ["stock"],
-        "dimensions": ["item", "location"],
-        "measures": ["closing_quantity", "closing_amount"],
-        "aggregation": "sum"
+        "prompt": "Current inventory levels by warehouse location",
+        "tables": ["inventory", "warehouse", "product"]
     },
     {
-        "name": "Pending Receipts",
-        "query": "Goods receipts pending against orders",
-        "entities": ["goods_receipt", "purchase_order"],
-        "dimensions": ["supplier", "project"],
-        "measures": ["document_no", "total_amount"],
-        "filters": "purchase_order_id IS NOT NULL"
+        "prompt": "Employee attendance summary for active projects",
+        "tables": ["attendance", "employee", "project"]
+    },
+    {
+        "prompt": "Items currently below minimum stock threshold",
+        "tables": ["inventory", "product"]
+    },
+    {
+        "prompt": "Monthly material consumption breakdown by site",
+        "tables": ["issue_header", "issue_detail", "project", "product"]
+    },
+    {
+        "prompt": "Purchase order to goods receipt matching report",
+        "tables": ["purchase_order", "purchase_detail", "receipt_header", "receipt_detail"]
+    },
+    {
+        "prompt": "Year-over-year revenue comparison by customer segment",
+        "tables": ["sales_header", "sales_detail", "customer", "time_dimension"]
     }
 ]
 ```
 
-Create common queries for high-impact business questions. Keep names concise and test against actual schema.
+### Best Practices
+
+- **Use natural phrasing** — Write prompts exactly as users ask them (not SQL-like)
+- **Include 15-30 entries** — Cover the most frequently-asked questions from query logs
+- **Test variations** — Ensure minor rephrasing still triggers the match (e.g., "pending orders" vs "orders pending approval")
+- **Keep tables minimal** — Only include tables directly needed; FK expansion can add related dimensions if needed
+- **Audit regularly** — Review query logs monthly to identify new common questions
+- **Version control** — Track changes to common prompts with clear commit messages explaining business rationale
+- **Avoid overlap with query patterns** — Use common prompts for semantic matching; query patterns for keyword/substring matching
+
+### Common Prompts vs Query Patterns
+
+| Feature | Common Prompts | Query Patterns |
+|---|---|---|
+| **Matching** | Semantic similarity (embeddings) | Substring/keyword matching |
+| **Flexibility** | Handles paraphrasing | Requires exact phrase |
+| **Setup** | Prompts + tables | Patterns + entities + filters |
+| **Use case** | Frequently-asked questions | Deterministic rule-based queries |
+| **Priority** | Checked first (step 0a) | Checked second (step 0b) |
+
+Update common prompts based on query logs every 2-4 weeks. Remove unused entries to keep cache lean.
 
 ---
 
@@ -603,22 +642,20 @@ Below is a simplified JSON skeleton showing how to structure a semantic layer co
         // ... add date fields for each entity
     ],
 
-    "common_queries": [
+    "common_prompts": [
         {
-            "query": "Show all open orders",
-            "entities": ["order"],
-            "dimensions": [],
-            "measures": ["document_no", "date", "customer", "status"],
-            "filters": "status = 'Open'"
+            "prompt": "Show all open orders",
+            "tables": ["order_hdr", "order_dtl"]
         },
         {
-            "query": "Total order value by vendor",
-            "entities": ["order"],
-            "dimensions": ["vendor"],
-            "measures": ["net_amount"],
-            "aggregation": "sum"
+            "prompt": "Total order value by vendor",
+            "tables": ["order_hdr", "order_dtl", "vendor_master"]
+        },
+        {
+            "prompt": "Current inventory by location",
+            "tables": ["inventory", "warehouse_master", "product_master"]
         }
-        // ... add more query templates as needed
+        // ... add more common prompts as needed
     ],
 
     "query_patterns": [
@@ -900,8 +937,8 @@ Use this checklist when building or updating a semantic layer:
 - [ ] All relationships are defined with correct table/column mappings
 - [ ] All date fields are registered per entity
 - [ ] Term glossary covers organization-specific jargon and frequently-used terms
-- [ ] Query patterns exist for the top 20-30 business questions
-- [ ] Common queries are documented with entities, dimensions, measures, and filters
+- [ ] Common prompts exist for the top 15-30 frequently-asked questions
+- [ ] Query patterns exist for deterministic, rule-based queries requiring specific filters
 - [ ] Database prefixes are defined if spanning multiple databases
 - [ ] All definitions are version-controlled with clear commit messages
 - [ ] Semantic layer is tested against sample queries before deployment
