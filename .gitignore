@@ -18,6 +18,7 @@ projects/
 
 # Ignore test files
 tests/
+test_outputs/
 
 # vscode
 .vscode/
