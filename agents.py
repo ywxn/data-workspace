@@ -260,6 +260,42 @@ The code must define exactly one Altair chart assigned to variable 'chart'.
 """
 
 
+SQL_CORRECTION_SYSTEM_PROMPT_TEMPLATE = """You are a SQL debugging and correction engine. A previously generated SQL query failed during execution. Your job is to fix the query so it runs successfully.
+
+SCHEMA METADATA
+Tables: $tables
+Columns (qualified): $columns
+Columns by table: $columns_by_table
+Row counts: $row_counts
+Column types: $dtypes
+Sample rows:
+${sample}
+
+FAILED SQL
+$failed_sql
+
+ERROR MESSAGE
+$error_message
+
+CORRECTION RULES
+- Identify the root cause of the error from the error message
+- Fix ONLY the issue causing the error
+- Use only the listed tables and columns
+- Fully qualify columns when joins are involved
+- Preserve the original intent of the query
+- Output ONLY a single SELECT query
+
+SECURITY RULES (MANDATORY)
+- FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
+- FORBIDDEN: multiple statements
+- FORBIDDEN: comments or dynamic SQL
+- FORBIDDEN: external or network access
+
+OUTPUT
+Return ONLY the corrected SQL. No markdown. No explanations.
+"""
+
+
 class AIAgent:
     """
     Multi-agent system for data analysis with planner, SQL generator, visualizer, and analyzer.
@@ -662,6 +698,54 @@ class AIAgent:
 
         return self._clean_sql_output(generated_sql)
 
+    async def sql_correction_agent(
+        self,
+        failed_sql: str,
+        error_message: str,
+        context: Dict[str, Any],
+    ) -> str:
+        """
+        SQL correction agent that fixes a failed SQL query based on the error.
+
+        Args:
+            failed_sql: The SQL query that failed
+            error_message: The error message from execution
+            context: SQL context with schema metadata
+
+        Returns:
+            Corrected SQL string
+        """
+        schema_metadata = self._build_schema_metadata(context)
+
+        system_message = Template(SQL_CORRECTION_SYSTEM_PROMPT_TEMPLATE).substitute(
+            tables=schema_metadata["tables"],
+            columns=schema_metadata["columns"],
+            columns_by_table=schema_metadata["columns_by_table"],
+            row_counts=schema_metadata["row_counts"],
+            dtypes=schema_metadata["column_types"],
+            sample=schema_metadata["sample_rows"],
+            failed_sql=failed_sql,
+            error_message=error_message,
+        )
+
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_message},
+            {
+                "role": "user",
+                "content": f"Fix this SQL query that failed with error: {error_message}",
+            },
+        ]
+
+        logger.info(f"Calling SQL correction agent for error: {error_message}")
+        corrected_sql = await self._call_llm(
+            messages,
+            max_tokens=CODE_GENERATION_MAX_TOKENS,
+            temperature=CODE_GENERATION_TEMPERATURE,
+        )
+
+        logger.info(f"Corrected SQL: {corrected_sql}")
+        return self._clean_sql_output(corrected_sql)
+
     async def visualization_agent(
         self,
         query_result: Dict[str, Any],
@@ -691,7 +775,7 @@ class AIAgent:
             return None
 
         # Convert to list of dictionaries and DataFrame for Altair
-        data_records = [dict(zip(columns, row)) for row in rows]
+        data_records = self._normalize_sql_rows(rows, columns)
         df = pd.DataFrame(data_records)
 
         # Sanitize DataFrame types for JSON serialization (Altair / Vega-Lite)
@@ -931,10 +1015,25 @@ class AIAgent:
                 )
                 query_result = self._execute_sql_query(generated_sql, context)
 
-                # Check for SQL execution errors and stop pipeline
-                if query_result and "error" in query_result:
-                    logger.error(f"SQL execution failed: {query_result['error']}")
-                    return f"### Error\n\n{query_result['error']}\n\nPlease try rephrasing your question or check your query."
+                # Retry loop: if SQL fails, use correction agent (up to 2 attempts)
+                current_sql = generated_sql
+                for attempt in range(1, 3):
+                    if not (query_result and "error" in query_result):
+                        break
+                    error_msg = query_result["error"]
+                    logger.warning(
+                        f"SQL execution failed (attempt {attempt}/2), "
+                        f"invoking correction agent: {error_msg}"
+                    )
+                    try:
+                        corrected_sql = await self.sql_correction_agent(
+                            current_sql, error_msg, context
+                        )
+                        query_result = self._execute_sql_query(corrected_sql, context)
+                        current_sql = corrected_sql
+                    except Exception as e:
+                        logger.error(f"SQL correction agent failed: {e}")
+                        break
 
                 # Step 3: Generate visualization if needed
                 requires_viz = plan.get("requires_visualization", False)
@@ -1014,14 +1113,15 @@ class AIAgent:
 
             result = connector.connection.execute(text(sql))
             columns = list(result.keys())
-            rows: List[Tuple[Any, ...]] = []
+            rows: List[Dict[str, Any]] = []
             truncated = False
 
             while True:
                 chunk = result.fetchmany(DB_READ_CHUNK_SIZE)
                 if not chunk:
                     break
-                rows.extend(chunk)
+                normalized_chunk = self._normalize_sql_rows(chunk, columns)
+                rows.extend(normalized_chunk)
                 if len(rows) >= DB_MAX_ROWS_IN_MEMORY:
                     rows = rows[:DB_MAX_ROWS_IN_MEMORY]
                     truncated = True
@@ -1124,6 +1224,93 @@ class AIAgent:
             flags=re.IGNORECASE,
         )
 
+    # ------------------------------------------------------------------
+    # SQL result normalization → JSON-safe primitives
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _json_safe_value(v: Any) -> Any:
+        """
+        Convert DB / SQLAlchemy values into JSON-serializable primitives.
+
+        Ensures only: dict, list, str, int, float, bool, None
+        """
+        if v is None:
+            return None
+
+        # Fast path: already safe
+        if isinstance(v, (str, int, float, bool)):
+            return v
+
+        # Decimal → float
+        try:
+            import decimal
+
+            if isinstance(v, decimal.Decimal):
+                return float(v)
+        except Exception:
+            pass
+
+        # datetime / date / time → ISO string
+        try:
+            import datetime
+
+            if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+                return v.isoformat()
+        except Exception:
+            pass
+
+        # UUID → str
+        try:
+            import uuid
+
+            if isinstance(v, uuid.UUID):
+                return str(v)
+        except Exception:
+            pass
+
+        # bytes → utf-8 string
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            try:
+                return bytes(v).decode("utf-8", "replace")
+            except Exception:
+                return str(v)
+
+        # numpy scalar → native Python
+        try:
+            import numpy as np
+
+            if isinstance(v, np.generic):
+                return v.item()
+        except Exception:
+            pass
+
+        # Fallback
+        return str(v)
+
+    @classmethod
+    def _normalize_sql_rows(
+        cls, rows: List[Any], columns: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Normalize SQLAlchemy rows / tuples / dicts into JSON-safe dict rows.
+        """
+        normalized: List[Dict[str, Any]] = []
+
+        for r in rows:
+            # SQLAlchemy Row → mapping
+            if hasattr(r, "_mapping"):
+                r = dict(r._mapping)
+
+            # tuple → dict via columns
+            elif not isinstance(r, dict):
+                r = dict(zip(columns, r))
+
+            safe_row = {k: cls._json_safe_value(v) for k, v in r.items()}
+            normalized.append(safe_row)
+
+        return normalized
+
     @staticmethod
     def _query_requests_visualization(user_query: str) -> bool:
         """Heuristic to force visualization when the user explicitly asks for it."""
@@ -1176,37 +1363,33 @@ class AIAgent:
         }
 
         # Column profiling for insights
+        normalized_rows = AIAgent._normalize_sql_rows(rows, columns)
+
         col_profiles = {}
+        for col in columns:
+            values = [r.get(col) for r in normalized_rows]
+            numeric_vals = [v for v in values if isinstance(v, (int, float))]
+            unique_vals = set(str(v) for v in values if v is not None)
 
-        if rows and isinstance(rows[0], (list, tuple)):
-            # Convert to column arrays
-            cols_data = list(zip(*rows))
-            for col, values in zip(columns, cols_data):
-                numeric_vals = [v for v in values if isinstance(v, (int, float))]
-                unique_vals = set(str(v) for v in values if v is not None)
+            col_profiles[col] = {
+                "unique_count": len(unique_vals),
+                "sample_values": list(unique_vals)[:5],
+            }
 
-                col_profiles[col] = {
-                    "unique_count": len(unique_vals),
-                    "sample_values": list(unique_vals)[:5],
-                }
-
-                if numeric_vals:
-                    col_profiles[col].update(
-                        {
-                            "min": min(numeric_vals),
-                            "max": max(numeric_vals),
-                            "mean": round(sum(numeric_vals) / len(numeric_vals), 2),
-                        }
-                    )
+            if numeric_vals:
+                col_profiles[col].update(
+                    {
+                        "min": min(numeric_vals),
+                        "max": max(numeric_vals),
+                        "mean": round(sum(numeric_vals) / len(numeric_vals), 2),
+                    }
+                )
 
         summary["column_profiles"] = col_profiles
 
         # Only include sample rows for small datasets
-        if len(rows) <= 50:
-            if isinstance(rows[0], (list, tuple)):
-                summary["sample_rows"] = [dict(zip(columns, row)) for row in rows[:5]]
-            else:
-                summary["sample_rows"] = rows[:5]
+        if len(normalized_rows) <= 50:
+            summary["sample_rows"] = normalized_rows[:5]
 
         return summary
 
