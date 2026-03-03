@@ -352,8 +352,12 @@ class AIAgent:
             self.client = None
             config = ConfigManager.load_config()
             self._local_llm_url = config.get("local_llm_url", LOCAL_LLM_DEFAULT_URL)
-            self._local_llm_model = config.get("local_llm_model", LOCAL_LLM_DEFAULT_MODEL)
-            self._server_starting = False  # True while background auto-start is in progress
+            self._local_llm_model = config.get(
+                "local_llm_model", LOCAL_LLM_DEFAULT_MODEL
+            )
+            self._server_starting = (
+                False  # True while background auto-start is in progress
+            )
 
             # Auto-start the built-in model server in a background thread
             # so that agent creation is never blocked by model loading.
@@ -384,12 +388,18 @@ class AIAgent:
                                     n_gpu_layers=hosted_gpu,
                                 )
                                 if ok:
-                                    self._local_llm_url = get_hosted_url(port=hosted_port)
+                                    self._local_llm_url = get_hosted_url(
+                                        port=hosted_port
+                                    )
                                     logger.info(f"Hosted server started: {msg}")
                                 else:
-                                    logger.warning(f"Failed to auto-start hosted server: {msg}")
+                                    logger.warning(
+                                        f"Failed to auto-start hosted server: {msg}"
+                                    )
                         except Exception as e:
-                            logger.warning(f"Could not auto-start hosted model server: {e}")
+                            logger.warning(
+                                f"Could not auto-start hosted model server: {e}"
+                            )
                         finally:
                             self._server_starting = False
 
@@ -488,6 +498,7 @@ class AIAgent:
         # of an immediate connection-refused.
         if getattr(self, "_server_starting", False):
             import asyncio
+
             for _ in range(120):  # up to ~60 s
                 if not self._server_starting:
                     break
@@ -522,9 +533,7 @@ class AIAgent:
                 "The model may be loading or the request may be too large."
             )
         except (KeyError, IndexError) as e:
-            raise RuntimeError(
-                f"Unexpected response format from local LLM: {e}"
-            )
+            raise RuntimeError(f"Unexpected response format from local LLM: {e}")
 
     @staticmethod
     def _build_schema_metadata(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -1035,7 +1044,9 @@ class AIAgent:
                         logger.error(f"SQL correction agent failed: {e}")
                         break
                 if query_result or "error" in query_result:
-                    logger.info(f"SQL execution failed despite corrections: {query_result['error']}")
+                    logger.info(
+                        f"SQL execution failed despite corrections: {query_result['error']}"
+                    )
                     return f"### Error\n\n{query_result['error']}\n\nPlease try rephrasing your question or check your query."
 
                 # Step 3: Generate visualization if needed
@@ -1195,14 +1206,15 @@ class AIAgent:
                 )
             elif isinstance(val, bytes):
                 df[col] = df[col].apply(
-                    lambda v: v.decode("utf-8", errors="replace")
-                    if isinstance(v, bytes) else v
+                    lambda v: (
+                        v.decode("utf-8", errors="replace")
+                        if isinstance(v, bytes)
+                        else v
+                    )
                 )
             elif hasattr(val, "item"):
                 # numpy scalar → native Python type
-                df[col] = df[col].apply(
-                    lambda v: v.item() if hasattr(v, "item") else v
-                )
+                df[col] = df[col].apply(lambda v: v.item() if hasattr(v, "item") else v)
             # Attempt datetime conversion for date-like columns
             if "date" in col.lower() or "time" in col.lower():
                 try:
@@ -1221,8 +1233,8 @@ class AIAgent:
 
         # Replace alias__tablename with just tablename (case-insensitive)
         return re.sub(
-            rf'\b{re.escape(alias)}__(\w+)',
-            r'\1',
+            rf"\b{re.escape(alias)}__(\w+)",
+            r"\1",
             sql,
             flags=re.IGNORECASE,
         )

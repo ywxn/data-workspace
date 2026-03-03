@@ -26,6 +26,7 @@ def _keyring_available() -> bool:
     """Return True if the keyring package is importable and functional."""
     try:
         import keyring  # noqa: F401
+
         # Quick smoke-test – some backends (e.g. chainer) silently fail
         keyring.get_credential(_KEYRING_SERVICE, "__probe__")
         return True
@@ -37,6 +38,7 @@ def _keyring_get(key: str) -> Optional[str]:
     """Retrieve a secret from the OS keyring, or None on failure."""
     try:
         import keyring
+
         return keyring.get_password(_KEYRING_SERVICE, key)
     except Exception:
         return None
@@ -46,6 +48,7 @@ def _keyring_set(key: str, value: str) -> bool:
     """Store a secret in the OS keyring.  Returns True on success."""
     try:
         import keyring
+
         keyring.set_password(_KEYRING_SERVICE, key, value)
         return True
     except Exception:
@@ -56,6 +59,7 @@ def _keyring_delete(key: str) -> bool:
     """Delete a secret from the OS keyring.  Returns True on success."""
     try:
         import keyring
+
         keyring.delete_password(_KEYRING_SERVICE, key)
         return True
     except Exception:
@@ -228,9 +232,7 @@ class ConfigManager:
 
         # Attempt secure storage first
         if _keyring_set(f"api_key_{p}", api_key):
-            ConfigManager._logger.info(
-                f"API key for {provider} stored in OS keyring."
-            )
+            ConfigManager._logger.info(f"API key for {provider} stored in OS keyring.")
             # Remove from config.json if it was previously stored there
             config = ConfigManager.load_config()
             if "api_keys" in config and p in config["api_keys"]:
@@ -419,16 +421,12 @@ class ConfigManager:
         """
         config = ConfigManager.load_config()
         return {
-            "local_llm_url": config.get(
-                "local_llm_url", LOCAL_LLM_DEFAULT_URL
-            ),
+            "local_llm_url": config.get("local_llm_url", LOCAL_LLM_DEFAULT_URL),
             "local_llm_model": config.get("local_llm_model", LOCAL_LLM_DEFAULT_MODEL),
         }
 
     @staticmethod
-    def set_local_llm_config(
-        url: str, model: str
-    ) -> Tuple[bool, str]:
+    def set_local_llm_config(url: str, model: str) -> Tuple[bool, str]:
         """
         Persist local LLM connection settings.
 
@@ -449,9 +447,7 @@ class ConfigManager:
         config = ConfigManager.load_config()
         config["local_llm_url"] = url
         config["local_llm_model"] = model
-        ConfigManager._logger.info(
-            f"Local LLM config saved: url={url}, model={model}"
-        )
+        ConfigManager._logger.info(f"Local LLM config saved: url={url}, model={model}")
         return ConfigManager.save_config(config)
 
     # ------------------------------------------------------------------
@@ -469,7 +465,9 @@ class ConfigManager:
         return {
             "hosted_model_path": config.get("hosted_model_path", ""),
             "hosted_port": config.get("hosted_port", HOSTED_LLM_DEFAULT_PORT),
-            "hosted_context_size": config.get("hosted_context_size", HOSTED_LLM_CONTEXT_SIZE),
+            "hosted_context_size": config.get(
+                "hosted_context_size", HOSTED_LLM_CONTEXT_SIZE
+            ),
             "hosted_gpu_layers": config.get("hosted_gpu_layers", HOSTED_LLM_GPU_LAYERS),
             "hosted_auto_start": config.get("hosted_auto_start", False),
         }

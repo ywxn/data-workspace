@@ -111,7 +111,9 @@ def check_disk_space(required_gb: float) -> bool:
     """
     try:
         models_dir = get_models_directory()
-        check_path = models_dir if os.path.exists(models_dir) else os.path.dirname(models_dir)
+        check_path = (
+            models_dir if os.path.exists(models_dir) else os.path.dirname(models_dir)
+        )
         stat = shutil.disk_usage(check_path)
         available_gb = stat.free / (1024**3)
         return available_gb >= required_gb
@@ -216,10 +218,12 @@ def get_recommended_models() -> Dict[str, dict]:
 #  Built-in model server (llama-cpp-python)
 # ======================================================================
 
+
 def is_llama_cpp_available() -> bool:
     """Check whether ``llama_cpp`` is importable."""
     try:
         import llama_cpp  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -282,17 +286,24 @@ def start_model_server(
             "Install it with:\n"
             "  pip install llama-cpp-python\n\n"
             "For GPU support (NVIDIA):\n"
-            "  CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python"
+            '  CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python'
         )
 
     # Build the command using the same Python interpreter
     cmd = [
-        sys.executable, "-m", "llama_cpp.server",
-        "--model", model_path,
-        "--host", host,
-        "--port", str(port),
-        "--n_ctx", str(n_ctx),
-        "--n_gpu_layers", str(n_gpu_layers),
+        sys.executable,
+        "-m",
+        "llama_cpp.server",
+        "--model",
+        model_path,
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--n_ctx",
+        str(n_ctx),
+        "--n_gpu_layers",
+        str(n_gpu_layers),
     ]
 
     logger.info(f"Starting hosted model server: {' '.join(cmd)}")
@@ -326,7 +337,10 @@ def start_model_server(
             stderr_file.seek(0)
             stderr_text = stderr_file.read().decode(errors="replace")
             stderr_file.close()
-            return False, f"Server process exited immediately (code {proc.returncode}):\n{stderr_text[-2000:]}"
+            return (
+                False,
+                f"Server process exited immediately (code {proc.returncode}):\n{stderr_text[-2000:]}",
+            )
 
         # Wait for the server to accept connections
         import httpx
@@ -349,7 +363,10 @@ def start_model_server(
                 stderr_file.seek(0)
                 stderr_text = stderr_file.read().decode(errors="replace")
                 stderr_file.close()
-                return False, f"Server process exited unexpectedly (code {proc.returncode}):\n{stderr_text[-2000:]}"
+                return (
+                    False,
+                    f"Server process exited unexpectedly (code {proc.returncode}):\n{stderr_text[-2000:]}",
+                )
 
             time.sleep(1.0)
 

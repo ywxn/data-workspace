@@ -581,66 +581,135 @@ class DataWorkspaceBackend:
         suggestions: List[str] = []
 
         # Connection / network errors
-        if any(kw in error_lower for kw in ["connection", "connect", "refused", "timeout", "timed out", "unreachable"]):
-            suggestions.extend([
-                "Check that the database host and port are correct.",
-                "Verify that the database server is running.",
-                "Check your network connection and firewall settings.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in [
+                "connection",
+                "connect",
+                "refused",
+                "timeout",
+                "timed out",
+                "unreachable",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Check that the database host and port are correct.",
+                    "Verify that the database server is running.",
+                    "Check your network connection and firewall settings.",
+                ]
+            )
 
         # Authentication errors
-        if any(kw in error_lower for kw in ["authentication", "password", "credentials", "access denied", "login"]):
-            suggestions.extend([
-                "Double-check your database username and password.",
-                "Ensure the user has the required permissions.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in [
+                "authentication",
+                "password",
+                "credentials",
+                "access denied",
+                "login",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Double-check your database username and password.",
+                    "Ensure the user has the required permissions.",
+                ]
+            )
 
         # API key errors
-        if any(kw in error_lower for kw in ["api key", "api_key", "unauthorized", "401", "invalid key", "authentication_error"]):
-            suggestions.extend([
-                "Reconfigure your API key via File \u2192 API Settings.",
-                "Verify your API key has not expired or been revoked.",
-                "Check that you selected the correct AI provider.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in [
+                "api key",
+                "api_key",
+                "unauthorized",
+                "401",
+                "invalid key",
+                "authentication_error",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Reconfigure your API key via File \u2192 API Settings.",
+                    "Verify your API key has not expired or been revoked.",
+                    "Check that you selected the correct AI provider.",
+                ]
+            )
 
         # Rate limit errors
-        if any(kw in error_lower for kw in ["rate limit", "429", "too many requests", "quota"]):
-            suggestions.extend([
-                "Wait a moment and try again.",
-                "Consider upgrading your API plan for higher limits.",
-                "Try a shorter or simpler query.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in ["rate limit", "429", "too many requests", "quota"]
+        ):
+            suggestions.extend(
+                [
+                    "Wait a moment and try again.",
+                    "Consider upgrading your API plan for higher limits.",
+                    "Try a shorter or simpler query.",
+                ]
+            )
 
         # SQL syntax errors
-        if any(kw in error_lower for kw in ["syntax error", "sql", "no such table", "no such column", "unknown column"]):
-            suggestions.extend([
-                "Check that the referenced table and column names exist.",
-                "Try rephrasing your question with different terms.",
-                "Use the schema viewer to see available tables and columns.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in [
+                "syntax error",
+                "sql",
+                "no such table",
+                "no such column",
+                "unknown column",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Check that the referenced table and column names exist.",
+                    "Try rephrasing your question with different terms.",
+                    "Use the schema viewer to see available tables and columns.",
+                ]
+            )
 
         # File-related errors
-        if any(kw in error_lower for kw in ["file not found", "no such file", "permission denied", "encoding", "decode"]):
-            suggestions.extend([
-                "Verify the file path is correct and the file exists.",
-                "Ensure the file is a supported format (CSV, Excel).",
-                "Try re-saving the file with UTF-8 encoding.",
-            ])
+        if any(
+            kw in error_lower
+            for kw in [
+                "file not found",
+                "no such file",
+                "permission denied",
+                "encoding",
+                "decode",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Verify the file path is correct and the file exists.",
+                    "Ensure the file is a supported format (CSV, Excel).",
+                    "Try re-saving the file with UTF-8 encoding.",
+                ]
+            )
 
         # Model / LLM errors
-        if any(kw in error_lower for kw in ["model", "llama", "llm", "context length", "token"]):
-            suggestions.extend([
-                "Try a shorter query to reduce token usage.",
-                "Check that your local LLM server is running (Settings \u2192 Local LLM Settings).",
-            ])
+        if any(
+            kw in error_lower
+            for kw in ["model", "llama", "llm", "context length", "token"]
+        ):
+            suggestions.extend(
+                [
+                    "Try a shorter query to reduce token usage.",
+                    "Check that your local LLM server is running (Settings \u2192 Local LLM Settings).",
+                ]
+            )
 
         # Fallback
         if not suggestions:
-            suggestions.extend([
-                "Try rephrasing your question.",
-                "Check the application logs for more details.",
-                "Restart the application and try again.",
-            ])
+            suggestions.extend(
+                [
+                    "Try rephrasing your question.",
+                    "Check the application logs for more details.",
+                    "Restart the application and try again.",
+                ]
+            )
 
         return suggestions
 

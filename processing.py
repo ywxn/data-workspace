@@ -744,7 +744,7 @@ def load_multi_database(
 
     merged_context: Dict[str, Any] = {
         "source_type": "multi_database",
-        "connections": {},       # alias -> sub-context dict
+        "connections": {},  # alias -> sub-context dict
         "tables": [],
         "table_info": {},
         "table_to_connection": {},  # qualified table name -> alias

@@ -315,9 +315,13 @@ class AIHostConfigDialog(QDialog):
 
         # Instructions
         cloud_lines = (
-            "• OpenAI: Use your OpenAI API key (cloud)\n"
-            "• Claude: Use your Anthropic API key (cloud)\n"
-        ) if include_cloud else ""
+            (
+                "• OpenAI: Use your OpenAI API key (cloud)\n"
+                "• Claude: Use your Anthropic API key (cloud)\n"
+            )
+            if include_cloud
+            else ""
+        )
         self.instructions = QLabel(
             "Configure your AI host.\n\n"
             + cloud_lines
@@ -643,13 +647,15 @@ class AIHostConfigDialog(QDialog):
         if not info.get("url"):
             if os.path.isfile(info.get("path", "")):
                 QMessageBox.information(
-                    self, "Already Available",
-                    f"Model file already exists:\n{info['path']}"
+                    self,
+                    "Already Available",
+                    f"Model file already exists:\n{info['path']}",
                 )
             else:
                 QMessageBox.warning(
-                    self, "No URL",
-                    "This model has no download URL. Browse for a local .gguf file."
+                    self,
+                    "No URL",
+                    "This model has no download URL. Browse for a local .gguf file.",
                 )
             return
 
@@ -657,8 +663,9 @@ class AIHostConfigDialog(QDialog):
 
         if not check_disk_space(info["size_gb"] * 1.1):
             QMessageBox.warning(
-                self, "Disk Space",
-                f"Not enough disk space. ~{info['size_gb']:.1f} GB required."
+                self,
+                "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required.",
             )
             return
 
@@ -669,9 +676,7 @@ class AIHostConfigDialog(QDialog):
         self.sh_progress_label.setVisible(True)
         self.sh_progress_label.setText("Starting download\u2026")
 
-        self._download_thread = ModelDownloadThread(
-            info["url"], info["filename"], self
-        )
+        self._download_thread = ModelDownloadThread(info["url"], info["filename"], self)
         self._download_thread.progress.connect(self._sh_on_download_progress)
         self._download_thread.finished.connect(self._sh_on_download_finished)
         self._download_thread.start()
@@ -680,7 +685,9 @@ class AIHostConfigDialog(QDialog):
         self.sh_progress_bar.setValue(int(pct))
         dl_mb = downloaded / (1024 * 1024)
         tot_mb = total / (1024 * 1024)
-        self.sh_progress_label.setText(f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)")
+        self.sh_progress_label.setText(
+            f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)"
+        )
 
     def _sh_on_download_finished(self, success: bool, message: str):
         self.sh_download_btn.setEnabled(True)
@@ -701,10 +708,11 @@ class AIHostConfigDialog(QDialog):
 
         if not is_llama_cpp_available():
             QMessageBox.warning(
-                self, "Missing Dependency",
+                self,
+                "Missing Dependency",
                 "llama-cpp-python is not installed.\n\n"
                 "Install it with:\n  pip install llama-cpp-python\n\n"
-                "Then restart the application."
+                "Then restart the application.",
             )
             return
 
@@ -716,9 +724,9 @@ class AIHostConfigDialog(QDialog):
         model_path = info["path"]
         if not os.path.isfile(model_path):
             QMessageBox.warning(
-                self, "Model Not Found",
-                f"Model file not found:\n{model_path}\n\n"
-                "Download it first."
+                self,
+                "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n" "Download it first.",
             )
             return
 
@@ -728,7 +736,9 @@ class AIHostConfigDialog(QDialog):
 
         self.sh_start_btn.setEnabled(False)
         self.sh_start_btn.setText("Starting\u2026")
-        self.sh_status_label.setText("Starting server \u2014 this may take a moment\u2026")
+        self.sh_status_label.setText(
+            "Starting server \u2014 this may take a moment\u2026"
+        )
 
         self._server_thread = ServerStartThread(
             model_path, port, gpu_layers, context_size, self
@@ -786,10 +796,11 @@ class AIHostConfigDialog(QDialog):
             existing_key = ConfigManager.get_api_key(provider_key)
             if not existing_key:
                 QMessageBox.warning(
-                    self, "No API Key",
+                    self,
+                    "No API Key",
                     f"No API key is configured for {provider}.\n\n"
                     "Please set your API key first via\n"
-                    "File \u2192 API Key Settings."
+                    "File \u2192 API Key Settings.",
                 )
                 return
 
@@ -797,9 +808,9 @@ class AIHostConfigDialog(QDialog):
                 ConfigManager.set_default_api(provider_key)
             logger.info(f"AI host switched to cloud provider: {provider}")
             QMessageBox.information(
-                self, "Success",
-                f"AI host set to {provider}.\n\n"
-                "The existing API key will be used."
+                self,
+                "Success",
+                f"AI host set to {provider}.\n\n" "The existing API key will be used.",
             )
             self.accept()
             return
@@ -838,7 +849,9 @@ class AIHostConfigDialog(QDialog):
             _model_id = os.path.splitext(os.path.basename(model_path))[0]
             ok2, msg2 = ConfigManager.set_local_llm_config(hosted_url, _model_id)
             if not ok2:
-                QMessageBox.critical(self, "Error", f"Failed to save local config: {msg2}")
+                QMessageBox.critical(
+                    self, "Error", f"Failed to save local config: {msg2}"
+                )
                 return
 
             if self.set_default_checkbox.isChecked():
@@ -846,16 +859,18 @@ class AIHostConfigDialog(QDialog):
 
             running = is_server_running()
             status_note = (
-                "Server is running." if running
+                "Server is running."
+                if running
                 else "Server is not running yet — start it above or it will auto-start next launch."
             )
             logger.info("Self-host model settings saved successfully")
             QMessageBox.information(
-                self, "Success",
+                self,
+                "Success",
                 f"Self-Host Model configured!\n\n"
                 f"Model: {os.path.basename(model_path)}\n"
                 f"URL: {hosted_url}\n\n"
-                f"{status_note}"
+                f"{status_note}",
             )
             self.accept()
             return
@@ -867,14 +882,14 @@ class AIHostConfigDialog(QDialog):
 
             if not url:
                 QMessageBox.warning(
-                    self, "Missing URL",
-                    "Please enter the local LLM server URL."
+                    self, "Missing URL", "Please enter the local LLM server URL."
                 )
                 return
             if not model:
                 QMessageBox.warning(
-                    self, "Missing Model",
-                    "Please enter the local model name (e.g. 'mistral')."
+                    self,
+                    "Missing Model",
+                    "Please enter the local model name (e.g. 'mistral').",
                 )
                 return
 
@@ -884,8 +899,9 @@ class AIHostConfigDialog(QDialog):
                     ConfigManager.set_default_api("local")
                 logger.info("Local LLM settings saved successfully")
                 QMessageBox.information(
-                    self, "Success",
-                    f"Local LLM configured!\n\nURL: {url}\nModel: {model}"
+                    self,
+                    "Success",
+                    f"Local LLM configured!\n\nURL: {url}\nModel: {model}",
                 )
                 self.accept()
             else:
@@ -899,8 +915,10 @@ class AIHostConfigDialog(QDialog):
 class ModelDownloadThread(QThread):
     """Background thread for downloading a GGUF model."""
 
-    progress = Signal(float, float, float)  # pct, downloaded, total (float to avoid int32 overflow on large files)
-    finished = Signal(bool, str)            # success, message
+    progress = Signal(
+        float, float, float
+    )  # pct, downloaded, total (float to avoid int32 overflow on large files)
+    finished = Signal(bool, str)  # success, message
 
     def __init__(self, url: str, filename: str, parent=None):
         super().__init__(parent)
@@ -922,7 +940,14 @@ class ServerStartThread(QThread):
 
     finished = Signal(bool, str)  # success, message
 
-    def __init__(self, model_path: str, port: int, gpu_layers: int, context_size: int = 4096, parent=None):
+    def __init__(
+        self,
+        model_path: str,
+        port: int,
+        gpu_layers: int,
+        context_size: int = 4096,
+        parent=None,
+    ):
         super().__init__(parent)
         self.model_path = model_path
         self.port = port
@@ -1248,13 +1273,15 @@ class LocalLLMSettingsDialog(QDialog):
         if not info.get("url"):
             if os.path.isfile(info.get("path", "")):
                 QMessageBox.information(
-                    self, "Already Available",
-                    f"Model file already exists:\n{info['path']}"
+                    self,
+                    "Already Available",
+                    f"Model file already exists:\n{info['path']}",
                 )
             else:
                 QMessageBox.warning(
-                    self, "No URL",
-                    "This model has no download URL. Browse for a local .gguf file."
+                    self,
+                    "No URL",
+                    "This model has no download URL. Browse for a local .gguf file.",
                 )
             return
 
@@ -1262,8 +1289,9 @@ class LocalLLMSettingsDialog(QDialog):
 
         if not check_disk_space(info["size_gb"] * 1.1):
             QMessageBox.warning(
-                self, "Disk Space",
-                f"Not enough disk space. ~{info['size_gb']:.1f} GB required."
+                self,
+                "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required.",
             )
             return
 
@@ -1275,9 +1303,7 @@ class LocalLLMSettingsDialog(QDialog):
         self.progress_label.setVisible(True)
         self.progress_label.setText("Starting download…")
 
-        self._download_thread = ModelDownloadThread(
-            info["url"], info["filename"], self
-        )
+        self._download_thread = ModelDownloadThread(info["url"], info["filename"], self)
         self._download_thread.progress.connect(self._on_download_progress)
         self._download_thread.finished.connect(self._on_download_finished)
         self._download_thread.start()
@@ -1304,10 +1330,11 @@ class LocalLLMSettingsDialog(QDialog):
 
         if not is_llama_cpp_available():
             QMessageBox.warning(
-                self, "Missing Dependency",
+                self,
+                "Missing Dependency",
                 "llama-cpp-python is not installed.\n\n"
                 "Install it with:\n  pip install llama-cpp-python\n\n"
-                "Then restart the application."
+                "Then restart the application.",
             )
             return
 
@@ -1319,9 +1346,9 @@ class LocalLLMSettingsDialog(QDialog):
         model_path = info["path"]
         if not os.path.isfile(model_path):
             QMessageBox.warning(
-                self, "Model Not Found",
-                f"Model file not found:\n{model_path}\n\n"
-                "Download it first."
+                self,
+                "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n" "Download it first.",
             )
             return
 
@@ -1347,6 +1374,7 @@ class LocalLLMSettingsDialog(QDialog):
             QMessageBox.information(self, "Server Started", message)
             # Auto-update the connect tab URL to point at the hosted server
             from model_manager import get_hosted_url
+
             hosted_url = get_hosted_url(port=self.port_spin.value())
             self.url_input.setText(hosted_url)
         else:
@@ -1407,8 +1435,7 @@ class LocalLLMSettingsDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Connection Failed",
-                f"Could not reach {url}:\n\n{e}\n\n"
-                "Make sure the server is running.",
+                f"Could not reach {url}:\n\n{e}\n\n" "Make sure the server is running.",
             )
 
     # ------------------------------------------------------------------
@@ -1890,7 +1917,9 @@ class DataSourceDialog(QDialog):
         if multi_dialog.exec() == QDialog.DialogCode.Accepted:
             configs = multi_dialog.get_configs()
             if configs:
-                logger.info(f"Multi-database configuration accepted: {len(configs)} connections")
+                logger.info(
+                    f"Multi-database configuration accepted: {len(configs)} connections"
+                )
                 self.data_source_type = "multi_database"
                 self.data_source_config = {"connections": configs}
                 self.accept()
@@ -1985,7 +2014,9 @@ class MultiDatabaseConnectionDialog(QDialog):
         alias = f"db{idx}"
         if db_name:
             # Use the database name (sanitised) as alias
-            safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in os.path.basename(db_name))
+            safe_name = "".join(
+                c if c.isalnum() or c == "_" else "_" for c in os.path.basename(db_name)
+            )
             if safe_name:
                 alias = safe_name
 
@@ -2468,7 +2499,9 @@ def select_tables_with_method(
                     logger.info(f"Expanded prompt: {expanded[:200]}")
                     prompt = expanded
                 else:
-                    logger.warning("Prompt expansion returned empty result, using original")
+                    logger.warning(
+                        "Prompt expansion returned empty result, using original"
+                    )
             except Exception as e:
                 logger.warning(f"Prompt expansion failed, using original: {e}")
 
@@ -2591,7 +2624,9 @@ class QueryWorker(QThread):
             # --- Expand prompt via LLM middleman if enabled ---
             effective_prompt = self.query
             if ConfigManager.get_prompt_expansion_enabled():
-                logger.info("CxO mode: prompt expansion enabled — attempting LLM expansion")
+                logger.info(
+                    "CxO mode: prompt expansion enabled — attempting LLM expansion"
+                )
                 try:
                     all_tables = self.data_context.get("all_tables", [])
                     schema_meta = {"tables": all_tables}
@@ -2610,7 +2645,9 @@ class QueryWorker(QThread):
                         logger.info(f"CxO prompt expanded: {expanded[:200]}")
                         effective_prompt = expanded
                     else:
-                        logger.warning("CxO prompt expansion returned empty result, using original")
+                        logger.warning(
+                            "CxO prompt expansion returned empty result, using original"
+                        )
                 except Exception as e:
                     logger.warning(f"CxO prompt expansion failed, using original: {e}")
 
@@ -3710,7 +3747,9 @@ class DataWorkspaceGUI(QMainWindow):
                         elif source_type == "multi_database":
                             # Multi-database connection flow
                             configs = source_config.get("connections", [])
-                            logger.info(f"Loading multi-database with {len(configs)} connections")
+                            logger.info(
+                                f"Loading multi-database with {len(configs)} connections"
+                            )
                             from processing import load_multi_database
 
                             data_context, status = load_multi_database(configs)
@@ -3732,7 +3771,9 @@ class DataWorkspaceGUI(QMainWindow):
                                         "source_type": "multi_database",
                                         "connections": safe_configs,
                                     }
-                                aliases = list(data_context.get("connections", {}).keys())
+                                aliases = list(
+                                    data_context.get("connections", {}).keys()
+                                )
                                 table_count = len(data_context.get("tables", []))
                                 welcome_msg = (
                                     f"## Multi-Database Connected\n\n"
@@ -4284,7 +4325,9 @@ def _ensure_api_configured() -> bool:
     """Ensure API keys or local LLM are configured. Shows dialog if needed. Returns True if configured."""
     # Local LLM doesn't need an API key
     if ConfigManager.get_default_api() == "local":
-        logger.info("Local LLM is configured as default provider, skipping API key check")
+        logger.info(
+            "Local LLM is configured as default provider, skipping API key check"
+        )
         return True
 
     if not ConfigManager.has_any_api_key():
@@ -4297,7 +4340,9 @@ def _ensure_api_configured() -> bool:
             "No AI provider is configured yet.\n\n"
             "Would you like to set up a Cloud API Key (OpenAI / Claude)?\n\n"
             "Click 'Yes' for a cloud API key, or 'No' to configure a local AI host instead.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Yes,
         )
 
@@ -4309,7 +4354,9 @@ def _ensure_api_configured() -> bool:
             # Show AI Host config (Local LLM / Self-Host)
             host_dialog = AIHostConfigDialog()
             if host_dialog.exec() != QDialog.DialogCode.Accepted:
-                logger.error("AI host setup cancelled by user, application cannot start")
+                logger.error(
+                    "AI host setup cancelled by user, application cannot start"
+                )
                 QMessageBox.warning(
                     None,
                     "AI Provider Required",
@@ -4322,7 +4369,9 @@ def _ensure_api_configured() -> bool:
             # Show API Key dialog (OpenAI / Claude)
             api_config_dialog = APIKeyDialog(first_time_setup=True)
             if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
-                logger.error("API key setup cancelled by user, application cannot start")
+                logger.error(
+                    "API key setup cancelled by user, application cannot start"
+                )
                 QMessageBox.warning(
                     None,
                     "API Key Required",
@@ -4406,7 +4455,10 @@ def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
 
     if window.backend.active_project and window.backend.active_project.data_source:
         ds = window.backend.active_project.data_source
-        if ds.get("source_type") == "multi_database" or data_context.get("source_type") == "multi_database":
+        if (
+            ds.get("source_type") == "multi_database"
+            or data_context.get("source_type") == "multi_database"
+        ):
             aliases = list(data_context.get("connections", {}).keys())
             table_count = len(data_context.get("tables", []))
             welcome_msg = (

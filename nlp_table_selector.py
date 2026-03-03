@@ -1066,9 +1066,7 @@ class NLPTableSelector:
             texts, normalize_embeddings=True, show_progress_bar=False
         )
 
-        logger.info(
-            f"Built embeddings for {len(texts)} common prompts"
-        )
+        logger.info(f"Built embeddings for {len(texts)} common prompts")
 
     def _match_common_prompts(
         self, prompt: str, similarity_threshold: float = 0.85
@@ -1095,9 +1093,7 @@ class NLPTableSelector:
             return None
 
         normalized = self.normalizer.normalize_text(prompt)
-        prompt_embedding = self.model.encode(
-            normalized, normalize_embeddings=True
-        )
+        prompt_embedding = self.model.encode(normalized, normalize_embeddings=True)
 
         # Cosine similarity (vectors are already L2-normalised)
         similarities = prompt_embedding @ self.common_prompt_embeddings.T
@@ -1108,8 +1104,7 @@ class NLPTableSelector:
             return None
 
         matched_tables = [
-            t for t in self.common_prompt_tables[best_idx]
-            if t in self.table_metadata
+            t for t in self.common_prompt_tables[best_idx] if t in self.table_metadata
         ]
 
         if not matched_tables:
@@ -1119,7 +1114,7 @@ class NLPTableSelector:
 
         logger.info(
             f"Common-prompt shortcut matched (score={best_score:.3f}): "
-            f"\"{self.common_prompt_texts[best_idx]}\" → {matched_tables}"
+            f'"{self.common_prompt_texts[best_idx]}" → {matched_tables}'
         )
 
         return TableSelectionResult(
