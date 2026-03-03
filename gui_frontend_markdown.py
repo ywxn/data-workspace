@@ -1,11 +1,10 @@
 import sys
 import asyncio
-import pandas as pd
 import webbrowser
 import json
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
+from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
@@ -25,19 +24,25 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QMessageBox,
     QMenu,
+    QProgressBar,
+    QCheckBox,
+    QSpinBox,
+    QTabWidget,
+    QGroupBox,
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
-from processing import load_data, merge_dataframes
+from processing import load_data, add_files_to_sqlite
 from connector import DatabaseConnector
 from config import ConfigManager
 from markdown_converter import markdown_to_html
-from PyQt6.QtGui import QPalette
+from PySide6.QtGui import QPalette
 from typing import Optional, Dict, Any, List
 import random
 import os
 from nlp_table_selector import NLPTableSelector
 from constants import (
+    NLP_PLACEHOLDER_TEXT,
     PLACEHOLDER_PROJECT_NAMES,
     PLACEHOLDER_PROJECT_DESCRIPTIONS,
     DARK_THEME_STYLESHEET,
@@ -52,7 +57,7 @@ logger = get_logger(__name__)
 class MessageTextEdit(QTextEdit):
     """Custom QTextEdit that submits on Enter and adds newline on Shift+Enter"""
 
-    submit_signal = pyqtSignal()
+    submit_signal = Signal()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -71,30 +76,114 @@ class MessageTextEdit(QTextEdit):
             super().keyPressEvent(e)
 
 
-class APIKeyConfigDialog(QDialog):
-    """Dialog to set up API keys on first startup."""
+class InteractionModeDialog(QDialog):
+    """Dialog to select interaction mode at startup (CxO or Analyst)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("API Key Configuration")
+        self.setWindowTitle("Select Interaction Mode")
         self.setModal(True)
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(480)
         self.windowIcon = QIcon("icon.svg")
         self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
 
         # Title
-        title = QLabel("Configure API Keys")
+        title = QLabel("Choose Your Interaction Mode")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        # Description
+        description = QLabel("Select how you'd like to interact with your data:\n")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        layout.addSpacing(5)
+
+        # CxO mode button
+        self.cxo_btn = QPushButton("CxO Mode")
+        self.cxo_btn.setFont(QFont("Roboto", 11, QFont.Weight.Bold))
+        self.cxo_btn.setMinimumHeight(60)
+        self.cxo_btn.setToolTip(
+            "Executive-friendly: concise insights and charts.\n"
+            "No SQL or technical details shown."
+        )
+        self.cxo_btn.clicked.connect(self._select_cxo)
+        layout.addWidget(self.cxo_btn)
+
+        cxo_desc = QLabel(
+            "  \u2022 One-step insights written for executives\n"
+            "  \u2022 Charts and visualizations without technical detail\n"
+            "  \u2022 No SQL or intermediate steps shown"
+        )
+        cxo_desc.setStyleSheet("color: gray;")
+        cxo_desc.setWordWrap(True)
+        layout.addWidget(cxo_desc)
+
+        layout.addSpacing(10)
+
+        # Analyst mode button
+        self.analyst_btn = QPushButton("Analyst Mode")
+        self.analyst_btn.setFont(QFont("Roboto", 11, QFont.Weight.Bold))
+        self.analyst_btn.setMinimumHeight(60)
+        self.analyst_btn.setToolTip(
+            "Full detail: SQL queries, intermediate results,\n" "and detailed analysis."
+        )
+        self.analyst_btn.clicked.connect(self._select_analyst)
+        layout.addWidget(self.analyst_btn)
+
+        analyst_desc = QLabel(
+            "  \u2022 Full data analysis workflow with SQL visibility\n"
+            "  \u2022 Intermediate results and detailed breakdowns\n"
+            "  \u2022 Technical details available for deeper exploration"
+        )
+        analyst_desc.setStyleSheet("color: gray;")
+        analyst_desc.setWordWrap(True)
+        layout.addWidget(analyst_desc)
+
+        layout.addSpacing(15)
+
+        self.selected_mode: Optional[str] = None
+
+    def _select_cxo(self):
+        self.selected_mode = "cxo"
+        self.accept()
+
+    def _select_analyst(self):
+        self.selected_mode = "analyst"
+        self.accept()
+
+    def get_selected_mode(self) -> str:
+        return self.selected_mode or "analyst"
+
+
+class APIKeyDialog(QDialog):
+    """Simple dialog to configure cloud API keys (OpenAI / Claude)."""
+
+    def __init__(self, parent=None, first_time_setup: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("API Key Configuration")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+        self._first_time_setup = first_time_setup
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Configure API Key")
         title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         # Instructions
         instructions = QLabel(
-            "Select an AI provider and enter your API key.\n"
-            "You can add both OpenAI and Claude keys, or just one.\n\n"
-            "Get your API key from:\n"
+            "Enter your API key for the selected cloud provider.\n\n"
             "• OpenAI: https://platform.openai.com/api-keys\n"
             "• Claude (Anthropic): https://console.anthropic.com/account/keys"
         )
@@ -106,27 +195,208 @@ class APIKeyConfigDialog(QDialog):
         # Form layout
         form_layout = QFormLayout()
 
-        # Provider selection
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(["OpenAI", "Claude"])
-        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
-        form_layout.addRow("AI Provider:", self.provider_combo)
+        self.provider_combo.currentTextChanged.connect(self._load_existing_key)
+        form_layout.addRow("Provider:", self.provider_combo)
 
-        # API Key input
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("Paste your API key here")
         form_layout.addRow("API Key:", self.api_key_input)
 
-        # Show/hide key toggle
         self.toggle_visibility_btn = QPushButton("Show Key")
         self.toggle_visibility_btn.setMaximumWidth(100)
-        self.toggle_visibility_btn.clicked.connect(self.toggle_key_visibility)
+        self.toggle_visibility_btn.clicked.connect(self._toggle_key_visibility)
         form_layout.addRow("", self.toggle_visibility_btn)
 
         layout.addLayout(form_layout)
 
         layout.addSpacing(10)
+
+        # Set as default checkbox — only visible on first-time setup
+        self.set_default_checkbox = QCheckBox("Set as default provider")
+        self.set_default_checkbox.setChecked(True)
+        self.set_default_checkbox.setVisible(first_time_setup)
+        layout.addWidget(self.set_default_checkbox)
+
+        layout.addSpacing(5)
+
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._validate_and_save)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._key_visible = False
+        self._load_existing_key(self.provider_combo.currentText())
+
+    def _load_existing_key(self, provider: str):
+        """Load the existing API key for a cloud provider into the input field."""
+        provider_map = {"OpenAI": "openai", "Claude": "claude"}
+        key_name = provider_map.get(provider)
+        if key_name:
+            existing = ConfigManager.get_api_key(key_name)
+            self.api_key_input.setText(existing or "")
+        else:
+            self.api_key_input.clear()
+        # Reset visibility on provider change
+        self._key_visible = False
+        self.toggle_visibility_btn.setText("Show Key")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _toggle_key_visibility(self):
+        """Toggle visibility of API key."""
+        self._key_visible = not self._key_visible
+        if self._key_visible:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.toggle_visibility_btn.setText("Hide Key")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.toggle_visibility_btn.setText("Show Key")
+
+    def _validate_and_save(self):
+        """Validate and save the API key."""
+        provider = self.provider_combo.currentText()
+        api_key = self.api_key_input.text().strip()
+
+        if not api_key:
+            logger.warning(f"Empty API key provided for provider: {provider}")
+            QMessageBox.warning(
+                self, "Empty API Key", f"Please enter a valid {provider} API key."
+            )
+            return
+
+        success, message = ConfigManager.set_api_key(provider.lower(), api_key)
+        logger.info(f"API key save attempt for {provider}: {success}")
+
+        if success:
+            if self._first_time_setup and self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api(provider.lower())
+            logger.info(f"{provider} API key configured successfully")
+            QMessageBox.information(
+                self, "Success", f"{provider} API key configured successfully!"
+            )
+            self.accept()
+        else:
+            logger.error(f"Failed to save {provider} API key: {message}")
+            QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
+
+
+class AIHostConfigDialog(QDialog):
+    """Dialog to configure AI host settings.
+
+    When *include_cloud* is True the combo also offers OpenAI / Claude so the
+    user can switch the active host to a cloud provider.  This is the only
+    place where the active AI host can be changed.
+    """
+
+    def __init__(self, parent=None, include_cloud: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("AI Host Configuration")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        self._include_cloud = include_cloud
+        self._download_thread: Optional[ModelDownloadThread] = None
+        self._server_thread: Optional[ServerStartThread] = None
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Configure AI Host")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Instructions
+        cloud_lines = (
+            (
+                "• OpenAI: Use your OpenAI API key (cloud)\n"
+                "• Claude: Use your Anthropic API key (cloud)\n"
+            )
+            if include_cloud
+            else ""
+        )
+        self.instructions = QLabel(
+            "Configure your AI host.\n\n"
+            + cloud_lines
+            + "• Local LLM: Connect to an existing server (Ollama, llama-cpp-python, etc.)\n"
+            "• Self-Host Model: Download & run a model locally with built-in server management"
+        )
+        self.instructions.setWordWrap(True)
+        layout.addWidget(self.instructions)
+
+        layout.addSpacing(15)
+
+        # Form layout
+        form_layout = QFormLayout()
+
+        # Host type selection
+        self.provider_combo = QComboBox()
+        items = []
+        if include_cloud:
+            items += ["OpenAI", "Claude"]
+        items += ["Local LLM", "Self-Host Model"]
+        self.provider_combo.addItems(items)
+        self.provider_combo.setToolTip(
+            "Choose how the AI processes your queries.\n"
+            "• Cloud providers (OpenAI, Claude) require an API key and internet.\n"
+            "• Local LLM connects to a server you already have running.\n"
+            "• Self-Host Model downloads and runs a model for you."
+        )
+        # Signal connected later, after all widgets are created
+        form_layout.addRow("Host Type:", self.provider_combo)
+
+        # Local LLM fields
+        local_llm_config = ConfigManager.get_local_llm_config()
+
+        self.local_url_input = QLineEdit()
+        self.local_url_input.setPlaceholderText("http://localhost:11434/v1")
+        self.local_url_input.setText(local_llm_config["local_llm_url"])
+        self.local_url_input.setToolTip(
+            "The base URL of your local LLM server's OpenAI-compatible API.\n"
+            "Examples:\n"
+            "  Ollama: http://localhost:11434/v1\n"
+            "  LM Studio: http://localhost:1234/v1"
+        )
+        self.local_url_label = QLabel("Server URL:")
+        form_layout.addRow(self.local_url_label, self.local_url_input)
+
+        self.local_model_input = QLineEdit()
+        self.local_model_input.setPlaceholderText("mistral")
+        self.local_model_input.setText(local_llm_config["local_llm_model"])
+        self.local_model_input.setToolTip(
+            "The model identifier your local server uses.\n"
+            "This is sent in API requests so the server knows which model to run.\n"
+            "Check your server's model list for available names."
+        )
+        self.local_model_label = QLabel("Model Name:")
+        form_layout.addRow(self.local_model_label, self.local_model_input)
+
+        layout.addLayout(form_layout)
+
+        # ---- Self-Host Model section (hidden by default) ----
+        self.self_host_group = QGroupBox("Self-Host Model")
+        sh_layout = QVBoxLayout(self.self_host_group)
+
+        self._build_self_host_ui(sh_layout)
+
+        self.self_host_group.hide()
+        layout.addWidget(self.self_host_group)
+
+        layout.addSpacing(10)
+
+        # Set as default checkbox
+        self.set_default_checkbox = QCheckBox("Set as default provider")
+        self.set_default_checkbox.setChecked(True)
+        layout.addWidget(self.set_default_checkbox)
+
+        layout.addSpacing(5)
 
         # Buttons
         button_box = QDialogButtonBox(
@@ -136,61 +406,1073 @@ class APIKeyConfigDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        self.key_is_visible = False
+        # All widgets are now created — pre-select the current host and
+        # connect the signal so on_provider_changed can safely reference
+        # every widget.
+        current_default = ConfigManager.get_default_api()
+        default_map = {"openai": "OpenAI", "claude": "Claude", "local": "Local LLM"}
+        preselect = default_map.get(current_default, items[0])
+        if preselect:
+            idx = self.provider_combo.findText(preselect)
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+
+        # Apply initial visibility for the pre-selected host
+        self.on_provider_changed(self.provider_combo.currentText())
+
+        # Now connect the signal for future changes
+        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
+
+    # ------------------------------------------------------------------
+    #  Self-Host UI builder
+    # ------------------------------------------------------------------
+    def _build_self_host_ui(self, layout: QVBoxLayout):
+        """Build the self-host model widgets inside the given layout."""
+        from model_manager import (
+            get_recommended_models,
+            list_available_models,
+            is_llama_cpp_available,
+        )
+
+        # Dependency check banner
+        if not is_llama_cpp_available():
+            warn = QLabel(
+                "\u26a0 llama-cpp-python is not installed.\n"
+                "Run:  pip install llama-cpp-python\n"
+                "Then restart the application."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #e8a838; font-weight: bold;")
+            layout.addWidget(warn)
+            layout.addSpacing(3)
+
+        desc = QLabel(
+            "Download a model and let the application host it for you.\n"
+            "No separate server setup required."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        layout.addSpacing(5)
+
+        # -- Model selection --
+        self.sh_model_combo = QComboBox()
+        catalog = get_recommended_models()
+        self._sh_catalog_keys: List[str] = []
+        for key, info in catalog.items():
+            label = f"{info['name']}  ({info['size_gb']} GB)"
+            if info.get("recommended"):
+                label += "  \u2605"
+            self.sh_model_combo.addItem(label)
+            self._sh_catalog_keys.append(key)
+
+        existing = list_available_models()
+        catalog_filenames = {v["filename"] for v in catalog.values()}
+        for fname in existing:
+            if fname not in catalog_filenames:
+                self.sh_model_combo.addItem(f"[downloaded] {fname}")
+                self._sh_catalog_keys.append(f"__local__{fname}")
+
+        layout.addWidget(QLabel("Model:"))
+        layout.addWidget(self.sh_model_combo)
+
+        # Browse for custom GGUF
+        browse_row = QHBoxLayout()
+        self.sh_custom_path = QLineEdit()
+        self.sh_custom_path.setPlaceholderText("Or browse for a .gguf file\u2026")
+        sh_browse_btn = QPushButton("Browse\u2026")
+        sh_browse_btn.setMaximumWidth(90)
+        sh_browse_btn.clicked.connect(self._sh_browse_model)
+        browse_row.addWidget(self.sh_custom_path)
+        browse_row.addWidget(sh_browse_btn)
+        layout.addLayout(browse_row)
+
+        layout.addSpacing(5)
+
+        # -- Download --
+        self.sh_download_btn = QPushButton("Download Selected Model")
+        self.sh_download_btn.clicked.connect(self._sh_start_download)
+        layout.addWidget(self.sh_download_btn)
+
+        self.sh_progress_bar = QProgressBar()
+        self.sh_progress_bar.setRange(0, 100)
+        self.sh_progress_bar.setValue(0)
+        self.sh_progress_bar.setVisible(False)
+        layout.addWidget(self.sh_progress_bar)
+
+        self.sh_progress_label = QLabel("")
+        self.sh_progress_label.setVisible(False)
+        layout.addWidget(self.sh_progress_label)
+
+        layout.addSpacing(5)
+
+        # -- Server controls --
+        srv_form = QFormLayout()
+        hosted_cfg = ConfigManager.get_hosted_llm_config()
+
+        self.sh_port_spin = QSpinBox()
+        self.sh_port_spin.setRange(1024, 65535)
+        self.sh_port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        self.sh_port_spin.setToolTip(
+            "The network port the local LLM server listens on.\n"
+            "Change this if another service is already using the default port."
+        )
+        srv_form.addRow("Port:", self.sh_port_spin)
+
+        self.sh_context_spin = QSpinBox()
+        self.sh_context_spin.setRange(512, 131072)
+        self.sh_context_spin.setSingleStep(512)
+        self.sh_context_spin.setValue(hosted_cfg.get("hosted_context_size", 4096))
+        self.sh_context_spin.setToolTip(
+            "Maximum number of tokens the model can process in a single prompt/response.\n"
+            "Higher values allow longer conversations but use more RAM/VRAM.\n"
+            "Common values: 2048, 4096, 8192, 16384, 32768."
+        )
+        srv_form.addRow("Context Size:", self.sh_context_spin)
+
+        self.sh_gpu_spin = QSpinBox()
+        self.sh_gpu_spin.setRange(0, 999)
+        self.sh_gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
+        self.sh_gpu_spin.setToolTip(
+            "Number of model layers to offload to the GPU for faster inference.\n"
+            "Set to 0 for CPU-only mode. Higher values use more VRAM but run faster.\n"
+            "Set to 999 to offload all layers (requires sufficient VRAM)."
+        )
+        srv_form.addRow("GPU Layers:", self.sh_gpu_spin)
+        layout.addLayout(srv_form)
+
+        btn_row = QHBoxLayout()
+        self.sh_start_btn = QPushButton("Start Server")
+        self.sh_start_btn.clicked.connect(self._sh_start_server)
+        btn_row.addWidget(self.sh_start_btn)
+
+        self.sh_stop_btn = QPushButton("Stop Server")
+        self.sh_stop_btn.clicked.connect(self._sh_stop_server)
+        btn_row.addWidget(self.sh_stop_btn)
+        layout.addLayout(btn_row)
+
+        self.sh_status_label = QLabel("")
+        layout.addWidget(self.sh_status_label)
+
+        self._sh_refresh_server_status()
+
+    def _is_local_mode(self) -> bool:
+        """Check if the current provider selection is Local LLM."""
+        return self.provider_combo.currentText() == "Local LLM"
+
+    def _is_self_host_mode(self) -> bool:
+        """Check if the current provider selection is Self-Host Model."""
+        return self.provider_combo.currentText() == "Self-Host Model"
+
+    def _is_cloud_mode(self) -> bool:
+        """Check if the current selection is a cloud provider."""
+        return self.provider_combo.currentText() in ("OpenAI", "Claude")
 
     def on_provider_changed(self, provider):
-        """Clear input when provider changes."""
-        logger.debug(f"API provider changed to: {provider}")
-        self.api_key_input.clear()
-        self.key_is_visible = False
-        self.toggle_visibility_btn.setText("Show Key")
-        if self.api_key_input.echoMode() == QLineEdit.EchoMode.Normal:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        """Toggle between cloud, local LLM fields and self-host panel."""
+        logger.debug(f"AI host changed to: {provider}")
+        is_cloud = provider in ("OpenAI", "Claude")
+        is_local = provider == "Local LLM"
+        is_self_host = provider == "Self-Host Model"
 
-    def toggle_key_visibility(self):
-        """Toggle visibility of API key."""
-        self.key_is_visible = not self.key_is_visible
-        logger.debug(f"API key visibility toggled to: {self.key_is_visible}")
-        if self.key_is_visible:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.toggle_visibility_btn.setText("Hide Key")
+        # Local fields
+        self.local_url_label.setVisible(is_local)
+        self.local_url_input.setVisible(is_local)
+        self.local_model_label.setVisible(is_local)
+        self.local_model_input.setVisible(is_local)
+
+        # Self-host panel
+        self.self_host_group.setVisible(is_self_host)
+        if is_self_host:
+            self._sh_refresh_server_status()
+
+        # Resize dialog to fit current content
+        self.adjustSize()
+
+    # ------------------------------------------------------------------
+    #  Self-Host: model helpers
+    # ------------------------------------------------------------------
+    def _sh_browse_model(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select GGUF Model", "", "GGUF Models (*.gguf);;All Files (*)"
+        )
+        if path:
+            self.sh_custom_path.setText(path)
+
+    def _sh_get_selected_model_info(self) -> Optional[dict]:
+        """Return catalog info dict or pseudo-dict for a local file."""
+        from model_manager import get_models_directory, get_recommended_models
+
+        custom = self.sh_custom_path.text().strip()
+        if custom:
+            return {
+                "filename": os.path.basename(custom),
+                "url": None,
+                "path": custom,
+                "size_gb": 0,
+            }
+
+        idx = self.sh_model_combo.currentIndex()
+        if idx < 0:
+            return None
+
+        key = self._sh_catalog_keys[idx]
+        catalog = get_recommended_models()
+
+        if key.startswith("__local__"):
+            fname = key.replace("__local__", "")
+            return {
+                "filename": fname,
+                "url": None,
+                "path": os.path.join(get_models_directory(), fname),
+                "size_gb": 0,
+            }
         else:
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.toggle_visibility_btn.setText("Show Key")
+            info = catalog[key]
+            return {
+                "filename": info["filename"],
+                "url": info["url"],
+                "path": os.path.join(get_models_directory(), info["filename"]),
+                "size_gb": info["size_gb"],
+            }
 
-    def validate_and_save(self):
-        """Validate and save the API key."""
-        provider = self.provider_combo.currentText()
-        api_key = self.api_key_input.text().strip()
-        logger.debug(f"Validating API key for provider: {provider}")
+    # ------------------------------------------------------------------
+    #  Self-Host: download
+    # ------------------------------------------------------------------
+    def _sh_start_download(self):
+        info = self._sh_get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
 
-        if not api_key:
-            logger.warning(f"Empty API key provided for provider: {provider}")
+        if not info.get("url"):
+            if os.path.isfile(info.get("path", "")):
+                QMessageBox.information(
+                    self,
+                    "Already Available",
+                    f"Model file already exists:\n{info['path']}",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No URL",
+                    "This model has no download URL. Browse for a local .gguf file.",
+                )
+            return
+
+        from model_manager import check_disk_space
+
+        if not check_disk_space(info["size_gb"] * 1.1):
             QMessageBox.warning(
-                self, "Empty API Key", f"Please enter a valid {provider} API key."
+                self,
+                "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required.",
             )
             return
 
-        # Save to config
-        success, message = ConfigManager.set_api_key(provider.lower(), api_key)
-        logger.info(f"API key save attempt for {provider}: {success}")
+        self.sh_download_btn.setEnabled(False)
+        self.sh_download_btn.setText("Downloading\u2026")
+        self.sh_progress_bar.setVisible(True)
+        self.sh_progress_bar.setValue(0)
+        self.sh_progress_label.setVisible(True)
+        self.sh_progress_label.setText("Starting download\u2026")
+
+        self._download_thread = ModelDownloadThread(info["url"], info["filename"], self)
+        self._download_thread.progress.connect(self._sh_on_download_progress)
+        self._download_thread.finished.connect(self._sh_on_download_finished)
+        self._download_thread.start()
+
+    def _sh_on_download_progress(self, pct: float, downloaded: float, total: float):
+        self.sh_progress_bar.setValue(int(pct))
+        dl_mb = downloaded / (1024 * 1024)
+        tot_mb = total / (1024 * 1024)
+        self.sh_progress_label.setText(
+            f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)"
+        )
+
+    def _sh_on_download_finished(self, success: bool, message: str):
+        self.sh_download_btn.setEnabled(True)
+        self.sh_download_btn.setText("Download Selected Model")
+        self.sh_progress_bar.setVisible(False)
+        self.sh_progress_label.setVisible(False)
 
         if success:
-            # Set as default API if it's the first one
-            if (
-                not ConfigManager.has_any_api_key()
-                or ConfigManager.get_default_api() == "openai"
-            ):
-                ConfigManager.set_default_api(provider.lower())
+            QMessageBox.information(self, "Download Complete", message)
+        else:
+            QMessageBox.critical(self, "Download Failed", message)
 
-            logger.info(f"{provider} API key configured successfully")
+    # ------------------------------------------------------------------
+    #  Self-Host: server start / stop
+    # ------------------------------------------------------------------
+    def _sh_start_server(self):
+        from model_manager import is_llama_cpp_available
+
+        if not is_llama_cpp_available():
+            QMessageBox.warning(
+                self,
+                "Missing Dependency",
+                "llama-cpp-python is not installed.\n\n"
+                "Install it with:\n  pip install llama-cpp-python\n\n"
+                "Then restart the application.",
+            )
+            return
+
+        info = self._sh_get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        model_path = info["path"]
+        if not os.path.isfile(model_path):
+            QMessageBox.warning(
+                self,
+                "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n" "Download it first.",
+            )
+            return
+
+        port = self.sh_port_spin.value()
+        context_size = self.sh_context_spin.value()
+        gpu_layers = self.sh_gpu_spin.value()
+
+        self.sh_start_btn.setEnabled(False)
+        self.sh_start_btn.setText("Starting\u2026")
+        self.sh_status_label.setText(
+            "Starting server \u2014 this may take a moment\u2026"
+        )
+
+        self._server_thread = ServerStartThread(
+            model_path, port, gpu_layers, context_size, self
+        )
+        self._server_thread.finished.connect(self._sh_on_server_started)
+        self._server_thread.start()
+
+    def _sh_on_server_started(self, success: bool, message: str):
+        self.sh_start_btn.setEnabled(True)
+        self.sh_start_btn.setText("Start Server")
+
+        if success:
+            QMessageBox.information(self, "Server Started", message)
+        else:
+            QMessageBox.critical(self, "Server Failed", message)
+
+        self._sh_refresh_server_status()
+
+    def _sh_stop_server(self):
+        from model_manager import stop_model_server
+
+        ok, msg = stop_model_server()
+        if ok:
+            QMessageBox.information(self, "Server Stopped", msg)
+        else:
+            QMessageBox.warning(self, "Error", msg)
+        self._sh_refresh_server_status()
+
+    def _sh_refresh_server_status(self):
+        from model_manager import get_server_status
+
+        status = get_server_status()
+        if status["running"]:
+            self.sh_status_label.setText(
+                f"\u25cf Server running  (PID {status['pid']},  {status['url']})"
+            )
+            self.sh_status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+            self.sh_start_btn.setEnabled(False)
+            self.sh_stop_btn.setEnabled(True)
+        else:
+            self.sh_status_label.setText("\u25cb Server not running")
+            self.sh_status_label.setStyleSheet("color: gray;")
+            self.sh_start_btn.setEnabled(True)
+            self.sh_stop_btn.setEnabled(False)
+
+    def validate_and_save(self):
+        """Validate and save the host settings."""
+        provider = self.provider_combo.currentText()
+        logger.debug(f"Validating settings for host type: {provider}")
+
+        if self._is_cloud_mode():
+            # --- Cloud provider path (just switch the default host) ---
+            provider_key = provider.lower()
+            # Check that the user actually has an API key stored for this provider
+            existing_key = ConfigManager.get_api_key(provider_key)
+            if not existing_key:
+                QMessageBox.warning(
+                    self,
+                    "No API Key",
+                    f"No API key is configured for {provider}.\n\n"
+                    "Please set your API key first via\n"
+                    "File \u2192 API Key Settings.",
+                )
+                return
+
+            if self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api(provider_key)
+            logger.info(f"AI host switched to cloud provider: {provider}")
             QMessageBox.information(
-                self, "Success", f"{provider} API key configured successfully!"
+                self,
+                "Success",
+                f"AI host set to {provider}.\n\n" "The existing API key will be used.",
             )
             self.accept()
+            return
+
+        if self._is_self_host_mode():
+            # --- Self-Host path ---
+            from model_manager import get_hosted_url, is_server_running
+
+            info = self._sh_get_selected_model_info()
+            if not info:
+                QMessageBox.warning(self, "No Model", "Please select a model.")
+                return
+
+            model_path = info["path"]
+            port = self.sh_port_spin.value()
+            context_size = self.sh_context_spin.value()
+            gpu_layers = self.sh_gpu_spin.value()
+
+            # Save hosted config
+            ok, msg = ConfigManager.set_hosted_llm_config(
+                model_path=model_path,
+                port=port,
+                context_size=context_size,
+                gpu_layers=gpu_layers,
+                auto_start=True,
+            )
+            if not ok:
+                QMessageBox.critical(self, "Error", f"Failed to save config: {msg}")
+                return
+
+            # Point local LLM settings at the hosted server URL
+            hosted_url = get_hosted_url(port=port)
+            # Derive a model name from the GGUF filename so the value
+            # sent in /chat/completions requests matches what the hosted
+            # server actually exposes (llama-cpp-python uses the stem).
+            _model_id = os.path.splitext(os.path.basename(model_path))[0]
+            ok2, msg2 = ConfigManager.set_local_llm_config(hosted_url, _model_id)
+            if not ok2:
+                QMessageBox.critical(
+                    self, "Error", f"Failed to save local config: {msg2}"
+                )
+                return
+
+            if self.set_default_checkbox.isChecked():
+                ConfigManager.set_default_api("local")
+
+            running = is_server_running()
+            status_note = (
+                "Server is running."
+                if running
+                else "Server is not running yet — start it above or it will auto-start next launch."
+            )
+            logger.info("Self-host model settings saved successfully")
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Self-Host Model configured!\n\n"
+                f"Model: {os.path.basename(model_path)}\n"
+                f"URL: {hosted_url}\n\n"
+                f"{status_note}",
+            )
+            self.accept()
+            return
+
+        if self._is_local_mode():
+            # --- Local LLM path ---
+            url = self.local_url_input.text().strip()
+            model = self.local_model_input.text().strip()
+
+            if not url:
+                QMessageBox.warning(
+                    self, "Missing URL", "Please enter the local LLM server URL."
+                )
+                return
+            if not model:
+                QMessageBox.warning(
+                    self,
+                    "Missing Model",
+                    "Please enter the local model name (e.g. 'mistral').",
+                )
+                return
+
+            success, message = ConfigManager.set_local_llm_config(url, model)
+            if success:
+                if self.set_default_checkbox.isChecked():
+                    ConfigManager.set_default_api("local")
+                logger.info("Local LLM settings saved successfully")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Local LLM configured!\n\nURL: {url}\nModel: {model}",
+                )
+                self.accept()
+            else:
+                logger.error(f"Failed to save local LLM config: {message}")
+                QMessageBox.critical(
+                    self, "Error", f"Failed to save settings: {message}"
+                )
+            return
+
+
+class ModelDownloadThread(QThread):
+    """Background thread for downloading a GGUF model."""
+
+    progress = Signal(
+        float, float, float
+    )  # pct, downloaded, total (float to avoid int32 overflow on large files)
+    finished = Signal(bool, str)  # success, message
+
+    def __init__(self, url: str, filename: str, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.filename = filename
+
+    def run(self):
+        from model_manager import download_model
+
+        def _cb(pct, downloaded, total):
+            self.progress.emit(pct, downloaded, total)
+
+        ok, msg = download_model(self.url, self.filename, callback=_cb)
+        self.finished.emit(ok, msg)
+
+
+class ServerStartThread(QThread):
+    """Background thread for starting the hosted model server."""
+
+    finished = Signal(bool, str)  # success, message
+
+    def __init__(
+        self,
+        model_path: str,
+        port: int,
+        gpu_layers: int,
+        context_size: int = 4096,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.model_path = model_path
+        self.port = port
+        self.gpu_layers = gpu_layers
+        self.context_size = context_size
+
+    def run(self):
+        from model_manager import start_model_server
+
+        ok, msg = start_model_server(
+            self.model_path,
+            port=self.port,
+            n_ctx=self.context_size,
+            n_gpu_layers=self.gpu_layers,
+        )
+        self.finished.emit(ok, msg)
+
+
+class LocalLLMSettingsDialog(QDialog):
+    """
+    Dialog for configuring local LLM access.
+
+    Tab 1 — "Connect to Server": point at an existing local server (Ollama, etc.)
+    Tab 2 — "Host a Model":     download a model and run a built-in server
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Local LLM Settings")
+        self.setModal(True)
+        self.setMinimumSize(560, 520)
+
+        self._download_thread: Optional[ModelDownloadThread] = None
+        self._server_thread: Optional[ServerStartThread] = None
+
+        root_layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Local LLM Configuration")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root_layout.addWidget(title)
+
+        root_layout.addSpacing(5)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_connect_tab(), "Connect to Server")
+        self.tabs.addTab(self._build_host_tab(), "Host a Model")
+        root_layout.addWidget(self.tabs)
+
+        root_layout.addSpacing(5)
+
+        # Dialog buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._save)
+        button_box.rejected.connect(self.reject)
+        root_layout.addWidget(button_box)
+
+    # ------------------------------------------------------------------
+    #  Tab 1 — Connect to an existing server
+    # ------------------------------------------------------------------
+    def _build_connect_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        instructions = QLabel(
+            "Point at an existing local LLM server.\n"
+            "Supported: Ollama, llama-cpp-python, LM Studio, vLLM, etc."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(8)
+
+        local_cfg = ConfigManager.get_local_llm_config()
+        form = QFormLayout()
+
+        self.url_input = QLineEdit()
+        self.url_input.setText(local_cfg["local_llm_url"])
+        self.url_input.setPlaceholderText("http://localhost:11434/v1")
+        self.url_input.setToolTip(
+            "The base URL of your local LLM server's OpenAI-compatible API.\n"
+            "Examples:\n"
+            "  Ollama: http://localhost:11434/v1\n"
+            "  LM Studio: http://localhost:1234/v1"
+        )
+        form.addRow("Server URL:", self.url_input)
+
+        self.model_input = QLineEdit()
+        self.model_input.setText(local_cfg["local_llm_model"])
+        self.model_input.setPlaceholderText("mistral")
+        self.model_input.setToolTip(
+            "The model identifier your local server uses.\n"
+            "This is sent in API requests so the server knows which model to run.\n"
+            "Check your server's model list for available names."
+        )
+        form.addRow("Model Name:", self.model_input)
+
+        layout.addLayout(form)
+        layout.addSpacing(8)
+
+        test_btn = QPushButton("Test Connection")
+        test_btn.clicked.connect(self._test_connection)
+        layout.addWidget(test_btn)
+
+        layout.addStretch()
+        return tab
+
+    # ------------------------------------------------------------------
+    #  Tab 2 — Download & host a model
+    # ------------------------------------------------------------------
+    def _build_host_tab(self) -> QWidget:
+        from model_manager import (
+            get_recommended_models,
+            list_available_models,
+            get_models_directory,
+            is_llama_cpp_available,
+            is_server_running,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # Dependency check banner
+        if not is_llama_cpp_available():
+            warn = QLabel(
+                "⚠ llama-cpp-python is not installed.\n"
+                "Run:  pip install llama-cpp-python\n"
+                "Then restart the application."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #e8a838; font-weight: bold;")
+            layout.addWidget(warn)
+            layout.addSpacing(5)
+
+        instructions = QLabel(
+            "Don't have a local LLM server? Download a model and let\n"
+            "the application host it for you automatically."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(5)
+
+        # ---- Model selection ----
+        model_group = QGroupBox("1. Select a Model")
+        mg_layout = QVBoxLayout(model_group)
+
+        self.model_combo = QComboBox()
+        catalog = get_recommended_models()
+
+        # Populate combo: catalog models first, then already-downloaded models
+        self._catalog_keys: List[str] = []
+        for key, info in catalog.items():
+            label = f"{info['name']}  ({info['size_gb']} GB)"
+            if info.get("recommended"):
+                label += "  ★"
+            self.model_combo.addItem(label)
+            self._catalog_keys.append(key)
+
+        # Add already-downloaded models not in catalog
+        existing = list_available_models()
+        catalog_filenames = {v["filename"] for v in catalog.values()}
+        for fname in existing:
+            if fname not in catalog_filenames:
+                self.model_combo.addItem(f"[downloaded] {fname}")
+                self._catalog_keys.append(f"__local__{fname}")
+
+        mg_layout.addWidget(self.model_combo)
+
+        # Browse for a custom GGUF file
+        browse_row = QHBoxLayout()
+        self.custom_path_input = QLineEdit()
+        self.custom_path_input.setPlaceholderText("Or browse for a .gguf file…")
+        browse_btn = QPushButton("Browse…")
+        browse_btn.setMaximumWidth(90)
+        browse_btn.clicked.connect(self._browse_model)
+        browse_row.addWidget(self.custom_path_input)
+        browse_row.addWidget(browse_btn)
+        mg_layout.addLayout(browse_row)
+
+        layout.addWidget(model_group)
+
+        # ---- Download ----
+        dl_group = QGroupBox("2. Download Model")
+        dl_layout = QVBoxLayout(dl_group)
+
+        self.download_btn = QPushButton("Download Selected Model")
+        self.download_btn.clicked.connect(self._start_download)
+        dl_layout.addWidget(self.download_btn)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        dl_layout.addWidget(self.progress_bar)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setVisible(False)
+        dl_layout.addWidget(self.progress_label)
+
+        layout.addWidget(dl_group)
+
+        # ---- Server controls ----
+        srv_group = QGroupBox("3. Start / Stop Server")
+        sg_layout = QVBoxLayout(srv_group)
+
+        srv_form = QFormLayout()
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(1024, 65535)
+        hosted_cfg = ConfigManager.get_hosted_llm_config()
+        self.port_spin.setValue(hosted_cfg.get("hosted_port", 8911))
+        self.port_spin.setToolTip(
+            "The network port the local LLM server listens on.\n"
+            "Change this if another service is already using the default port."
+        )
+        srv_form.addRow("Port:", self.port_spin)
+
+        self.context_spin = QSpinBox()
+        self.context_spin.setRange(512, 131072)
+        self.context_spin.setSingleStep(512)
+        self.context_spin.setValue(hosted_cfg.get("hosted_context_size", 4096))
+        self.context_spin.setToolTip(
+            "Maximum number of tokens the model can process in a single prompt/response.\n"
+            "Higher values allow longer conversations but use more RAM/VRAM.\n"
+            "Common values: 2048, 4096, 8192, 16384, 32768."
+        )
+        srv_form.addRow("Context Size:", self.context_spin)
+
+        self.gpu_spin = QSpinBox()
+        self.gpu_spin.setRange(0, 999)
+        self.gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", 0))
+        self.gpu_spin.setToolTip(
+            "Number of model layers to offload to the GPU for faster inference.\n"
+            "Set to 0 for CPU-only mode. Higher values use more VRAM but run faster.\n"
+            "Set to 999 to offload all layers (requires sufficient VRAM)."
+        )
+        srv_form.addRow("GPU Layers:", self.gpu_spin)
+
+        sg_layout.addLayout(srv_form)
+
+        btn_row = QHBoxLayout()
+        self.start_btn = QPushButton("Start Server")
+        self.start_btn.clicked.connect(self._start_server)
+        btn_row.addWidget(self.start_btn)
+
+        self.stop_btn = QPushButton("Stop Server")
+        self.stop_btn.clicked.connect(self._stop_server)
+        btn_row.addWidget(self.stop_btn)
+        sg_layout.addLayout(btn_row)
+
+        self.server_status_label = QLabel("")
+        sg_layout.addWidget(self.server_status_label)
+
+        self.auto_start_cb = QCheckBox("Auto-start server when app launches")
+        self.auto_start_cb.setChecked(hosted_cfg.get("hosted_auto_start", False))
+        sg_layout.addWidget(self.auto_start_cb)
+
+        layout.addWidget(srv_group)
+
+        # Refresh status
+        self._refresh_server_status()
+
+        return tab
+
+    # ------------------------------------------------------------------
+    #  Actions
+    # ------------------------------------------------------------------
+    def _browse_model(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select GGUF Model", "", "GGUF Models (*.gguf);;All Files (*)"
+        )
+        if path:
+            self.custom_path_input.setText(path)
+
+    def _get_selected_model_info(self) -> Optional[dict]:
+        """Return catalog info dict or a pseudo-dict for an already-local file."""
+        from model_manager import get_models_directory, get_recommended_models
+
+        # Custom path takes priority
+        custom = self.custom_path_input.text().strip()
+        if custom:
+            return {
+                "filename": os.path.basename(custom),
+                "url": None,
+                "path": custom,
+                "size_gb": 0,
+            }
+
+        idx = self.model_combo.currentIndex()
+        if idx < 0:
+            return None
+
+        key = self._catalog_keys[idx]
+        catalog = get_recommended_models()
+
+        if key.startswith("__local__"):
+            fname = key.replace("__local__", "")
+            return {
+                "filename": fname,
+                "url": None,
+                "path": os.path.join(get_models_directory(), fname),
+                "size_gb": 0,
+            }
         else:
-            logger.error(f"Failed to save {provider} API key: {message}")
-            QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
+            info = catalog[key]
+            return {
+                "filename": info["filename"],
+                "url": info["url"],
+                "path": os.path.join(get_models_directory(), info["filename"]),
+                "size_gb": info["size_gb"],
+            }
+
+    def _start_download(self):
+        info = self._get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        if not info.get("url"):
+            if os.path.isfile(info.get("path", "")):
+                QMessageBox.information(
+                    self,
+                    "Already Available",
+                    f"Model file already exists:\n{info['path']}",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No URL",
+                    "This model has no download URL. Browse for a local .gguf file.",
+                )
+            return
+
+        from model_manager import check_disk_space
+
+        if not check_disk_space(info["size_gb"] * 1.1):
+            QMessageBox.warning(
+                self,
+                "Disk Space",
+                f"Not enough disk space. ~{info['size_gb']:.1f} GB required.",
+            )
+            return
+
+        # Disable button and show progress
+        self.download_btn.setEnabled(False)
+        self.download_btn.setText("Downloading…")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_label.setVisible(True)
+        self.progress_label.setText("Starting download…")
+
+        self._download_thread = ModelDownloadThread(info["url"], info["filename"], self)
+        self._download_thread.progress.connect(self._on_download_progress)
+        self._download_thread.finished.connect(self._on_download_finished)
+        self._download_thread.start()
+
+    def _on_download_progress(self, pct: float, downloaded: float, total: float):
+        self.progress_bar.setValue(int(pct))
+        dl_mb = downloaded / (1024 * 1024)
+        tot_mb = total / (1024 * 1024)
+        self.progress_label.setText(f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)")
+
+    def _on_download_finished(self, success: bool, message: str):
+        self.download_btn.setEnabled(True)
+        self.download_btn.setText("Download Selected Model")
+        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+
+        if success:
+            QMessageBox.information(self, "Download Complete", message)
+        else:
+            QMessageBox.critical(self, "Download Failed", message)
+
+    def _start_server(self):
+        from model_manager import is_llama_cpp_available
+
+        if not is_llama_cpp_available():
+            QMessageBox.warning(
+                self,
+                "Missing Dependency",
+                "llama-cpp-python is not installed.\n\n"
+                "Install it with:\n  pip install llama-cpp-python\n\n"
+                "Then restart the application.",
+            )
+            return
+
+        info = self._get_selected_model_info()
+        if not info:
+            QMessageBox.warning(self, "No Model", "Select a model first.")
+            return
+
+        model_path = info["path"]
+        if not os.path.isfile(model_path):
+            QMessageBox.warning(
+                self,
+                "Model Not Found",
+                f"Model file not found:\n{model_path}\n\n" "Download it first.",
+            )
+            return
+
+        port = self.port_spin.value()
+        context_size = self.context_spin.value()
+        gpu_layers = self.gpu_spin.value()
+
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("Starting…")
+        self.server_status_label.setText("Starting server — this may take a moment…")
+
+        self._server_thread = ServerStartThread(
+            model_path, port, gpu_layers, context_size, self
+        )
+        self._server_thread.finished.connect(self._on_server_started)
+        self._server_thread.start()
+
+    def _on_server_started(self, success: bool, message: str):
+        self.start_btn.setEnabled(True)
+        self.start_btn.setText("Start Server")
+
+        if success:
+            QMessageBox.information(self, "Server Started", message)
+            # Auto-update the connect tab URL to point at the hosted server
+            from model_manager import get_hosted_url
+
+            hosted_url = get_hosted_url(port=self.port_spin.value())
+            self.url_input.setText(hosted_url)
+        else:
+            QMessageBox.critical(self, "Server Failed", message)
+
+        self._refresh_server_status()
+
+    def _stop_server(self):
+        from model_manager import stop_model_server
+
+        ok, msg = stop_model_server()
+        if ok:
+            QMessageBox.information(self, "Server Stopped", msg)
+        else:
+            QMessageBox.warning(self, "Error", msg)
+        self._refresh_server_status()
+
+    def _refresh_server_status(self):
+        from model_manager import get_server_status
+
+        status = get_server_status()
+        if status["running"]:
+            self.server_status_label.setText(
+                f"● Server running  (PID {status['pid']},  {status['url']})"
+            )
+            self.server_status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.server_status_label.setText("○ Server not running")
+            self.server_status_label.setStyleSheet("color: gray;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    #  Test connection (existing server tab)
+    # ------------------------------------------------------------------
+    def _test_connection(self):
+        """Try to reach the local LLM server and report status."""
+        url = self.url_input.text().strip().rstrip("/")
+        if not url:
+            QMessageBox.warning(self, "Missing URL", "Enter a server URL first.")
+            return
+        try:
+            import httpx
+
+            resp = httpx.get(f"{url}/models", timeout=10.0)
+            resp.raise_for_status()
+            models = resp.json().get("data", [])
+            model_names = [m.get("id", "?") for m in models]
+            QMessageBox.information(
+                self,
+                "Connection Successful",
+                f"Connected to {url}\n\nAvailable models:\n"
+                + "\n".join(f"  • {n}" for n in model_names[:15]),
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Connection Failed",
+                f"Could not reach {url}:\n\n{e}\n\n" "Make sure the server is running.",
+            )
+
+    # ------------------------------------------------------------------
+    #  Save
+    # ------------------------------------------------------------------
+    def _save(self):
+        """Persist all local LLM settings (connect tab + host tab)."""
+        url = self.url_input.text().strip()
+        model = self.model_input.text().strip()
+
+        if not url:
+            QMessageBox.warning(self, "Missing URL", "Server URL is required.")
+            return
+        if not model:
+            QMessageBox.warning(self, "Missing Model", "Model name is required.")
+            return
+
+        ok1, msg1 = ConfigManager.set_local_llm_config(url, model)
+        if not ok1:
+            QMessageBox.critical(self, "Error", f"Failed to save: {msg1}")
+            return
+
+        # Save hosted server settings
+        info = self._get_selected_model_info()
+        model_path = info["path"] if info else ""
+        ok2, msg2 = ConfigManager.set_hosted_llm_config(
+            model_path=model_path,
+            port=self.port_spin.value(),
+            context_size=self.context_spin.value(),
+            gpu_layers=self.gpu_spin.value(),
+            auto_start=self.auto_start_cb.isChecked(),
+        )
+        if not ok2:
+            QMessageBox.critical(self, "Error", f"Failed to save hosted config: {msg2}")
+            return
+
+        self.accept()
 
 
 class CreateProjectDialog(QDialog):
@@ -238,7 +1520,7 @@ class CreateProjectDialog(QDialog):
         # Form layout for creating a new project (hidden until Create New Project clicked)
         form_layout = QFormLayout()
 
-        random_placeholder_index = random.randint(0, 9)
+        random_placeholder_index = random.randint(0, len(PLACEHOLDER_PROJECT_NAMES) - 1)
 
         self.project_name_input = QLineEdit()
         self.project_name_input.setPlaceholderText(
@@ -317,7 +1599,9 @@ class CreateProjectDialog(QDialog):
             db_type = ds.get("db_type")
             credentials = ds.get("credentials", {})
 
-            db_dialog = DatabaseConnectionDialog(self)
+            db_dialog = DatabaseConnectionDialog(
+                self, force_nlp=ConfigManager.get_interaction_mode() == "cxo"
+            )
             # Pre-fill known fields; avoid pre-filling password for security
             db_dialog.db_type_combo.setCurrentText(db_type)
             if "host" in credentials:
@@ -379,66 +1663,100 @@ class CreateProjectDialog(QDialog):
                 ConfigManager.get_table_selection_method(),
             )
             semantic_layer = ds.get("semantic_layer")
+            is_cxo = ConfigManager.get_interaction_mode() == "cxo"
 
-            # If the project previously stored a table selection, try to reuse it
-            saved_table = ds.get("table")
-            if saved_table:
-                selected_tables = (
-                    saved_table if isinstance(saved_table, list) else [saved_table]
-                )
+            # CxO mode: skip table selection, store lightweight context for NLP at query time
+            if is_cxo:
                 connector.close()
-            else:
-                selected_tables = select_tables_with_method(
-                    self,
-                    connector,
-                    tables,
-                    selection_method,
-                    semantic_layer,
+                logger.info(
+                    f"CxO mode: skipping table selection on project load. {len(tables)} tables available."
                 )
-                connector.close()
-                if not selected_tables:
-                    return
-
-            source_config = {
-                "db_type": new_config["db_type"],
-                "credentials": new_config["credentials"],
-                "table": selected_tables,
-            }
-            merged_dataframe, status = load_data("database", source_config)
-
-            if merged_dataframe is not None:
-                self.backend.loaded_dataframe = merged_dataframe
-                # Update project data_source to reflect the used config (save host/port but don't store password)
+                cxo_context = {
+                    "source_type": "database",
+                    "cxo_mode": True,
+                    "db_type": new_config["db_type"],
+                    "credentials": new_config["credentials"],
+                    "all_tables": tables,
+                    "tables": [],
+                    "table_info": {},
+                    "semantic_layer": semantic_layer,
+                }
+                self.backend.data_context = cxo_context
                 credentials_to_store = new_config["credentials"].copy()
                 if "password" in credentials_to_store:
                     credentials_to_store["password"] = ""
                 project.data_source = {
                     "db_type": new_config["db_type"],
                     "credentials": credentials_to_store,
-                    "table": selected_tables,
-                    "table_selection_method": selection_method,
+                    "table_selection_method": "nlp",
                     "semantic_layer": semantic_layer,
+                    "cxo_mode": True,
                 }
                 QMessageBox.information(
                     self,
                     "Project Loaded",
-                    f"Project '{project.title}' loaded and data connected.",
+                    f"Project '{project.title}' loaded and database connected in CxO mode.",
                 )
+
             else:
-                QMessageBox.warning(
-                    self,
-                    "Data Load",
-                    f"Project loaded but failed to load data: {status}",
-                )
+                # Analyst mode: normal table selection flow
+                # If the project previously stored a table selection, try to reuse it
+                saved_table = ds.get("table")
+                if saved_table:
+                    selected_tables = (
+                        saved_table if isinstance(saved_table, list) else [saved_table]
+                    )
+                    connector.close()
+                else:
+                    selected_tables = select_tables_with_method(
+                        self,
+                        connector,
+                        tables,
+                        selection_method,
+                        semantic_layer,
+                    )
+                    connector.close()
+                    if not selected_tables:
+                        return
+
+                source_config = {
+                    "db_type": new_config["db_type"],
+                    "credentials": new_config["credentials"],
+                    "table": selected_tables,
+                }
+                data_context, status = load_data("database", source_config)
+
+                if data_context is not None:
+                    self.backend.data_context = data_context
+                    # Update project data_source to reflect the used config (save host/port but don't store password)
+                    credentials_to_store = new_config["credentials"].copy()
+                    if "password" in credentials_to_store:
+                        credentials_to_store["password"] = ""
+                    project.data_source = {
+                        "db_type": new_config["db_type"],
+                        "credentials": credentials_to_store,
+                        "table": selected_tables,
+                        "table_selection_method": selection_method,
+                        "semantic_layer": semantic_layer,
+                    }
+                    QMessageBox.information(
+                        self,
+                        "Project Loaded",
+                        f"Project '{project.title}' loaded and data connected.",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Data Load",
+                        f"Project loaded but failed to load data: {status}",
+                    )
 
         elif ds and isinstance(ds, dict) and ds.get("file_paths"):
             # Try to load files recorded in the saved project
             file_paths = ds.get("file_paths", [])
-            merged_dataframe, welcome_msg = self.backend.load_file_data_with_ui(
-                file_paths
-            )
-            if merged_dataframe is not None:
-                self.backend.loaded_dataframe = merged_dataframe
+            data_context, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
+            if data_context is not None:
+                self.backend.data_context = data_context
                 QMessageBox.information(
                     self,
                     "Project Loaded",
@@ -565,6 +1883,15 @@ class DataSourceDialog(QDialog):
         self.file_btn.clicked.connect(self.select_files)
         layout.addWidget(self.file_btn)
 
+        self.multi_db_btn = QPushButton("Connect Multiple Databases")
+        self.multi_db_btn.setMinimumHeight(50)
+        self.multi_db_btn.setToolTip(
+            "Connect to two or more databases and unify them\n"
+            "into a single queryable context."
+        )
+        self.multi_db_btn.clicked.connect(self.select_multi_database)
+        layout.addWidget(self.multi_db_btn)
+
         layout.addSpacing(20)
 
         # Cancel button
@@ -575,12 +1902,27 @@ class DataSourceDialog(QDialog):
     def select_database(self):
         """Show database connection dialog"""
         logger.debug("Opening database connection dialog")
-        db_dialog = DatabaseConnectionDialog(self)
+        is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
         if db_dialog.exec() == QDialog.DialogCode.Accepted:
             logger.info("Database connection configuration accepted")
             self.data_source_type = "database"
             self.data_source_config = db_dialog.get_config()
             self.accept()
+
+    def select_multi_database(self):
+        """Show multi-database connection dialog"""
+        logger.debug("Opening multi-database connection dialog")
+        multi_dialog = MultiDatabaseConnectionDialog(self)
+        if multi_dialog.exec() == QDialog.DialogCode.Accepted:
+            configs = multi_dialog.get_configs()
+            if configs:
+                logger.info(
+                    f"Multi-database configuration accepted: {len(configs)} connections"
+                )
+                self.data_source_type = "multi_database"
+                self.data_source_config = {"connections": configs}
+                self.accept()
 
     def select_files(self):
         """Show file selection dialog"""
@@ -599,16 +1941,140 @@ class DataSourceDialog(QDialog):
             self.accept()
 
 
+class MultiDatabaseConnectionDialog(QDialog):
+    """Dialog for configuring one or more database connections."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Database Connections")
+        self.setModal(True)
+        self.setMinimumWidth(600)
+        self.windowIcon = QIcon("icon.svg")
+        self.setWindowIcon(self.windowIcon)
+
+        self.connections: List[Dict[str, Any]] = []
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        title = QLabel("Configure Multiple Database Connections")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Add two or more database connections. Tables will be prefixed\n"
+            "with an alias to avoid name collisions."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(10)
+
+        # Connection list
+        self.connection_list = QListWidget()
+        self.connection_list.setMinimumHeight(120)
+        layout.addWidget(self.connection_list)
+
+        # Buttons row
+        btn_row = QHBoxLayout()
+
+        self.add_btn = QPushButton("Add Connection")
+        self.add_btn.clicked.connect(self._add_connection)
+        btn_row.addWidget(self.add_btn)
+
+        self.remove_btn = QPushButton("Remove Selected")
+        self.remove_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(self.remove_btn)
+
+        layout.addLayout(btn_row)
+
+        layout.addSpacing(15)
+
+        # OK / Cancel
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._validate_and_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _add_connection(self):
+        """Open a DatabaseConnectionDialog to add a new connection."""
+        is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
+        if db_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        config = db_dialog.get_config()
+        # Generate default alias
+        idx = len(self.connections) + 1
+        db_name = config.get("credentials", {}).get("database", f"db{idx}")
+        alias = f"db{idx}"
+        if db_name:
+            # Use the database name (sanitised) as alias
+            safe_name = "".join(
+                c if c.isalnum() or c == "_" else "_" for c in os.path.basename(db_name)
+            )
+            if safe_name:
+                alias = safe_name
+
+        config["alias"] = alias
+
+        self.connections.append(config)
+        display = f"[{alias}]  {config['db_type']} — {config['credentials'].get('database', '?')}"
+        item = QListWidgetItem(display)
+        self.connection_list.addItem(item)
+        logger.info(f"Added multi-db connection: {alias} ({config['db_type']})")
+
+    def _remove_selected(self):
+        """Remove the currently selected connection from the list."""
+        row = self.connection_list.currentRow()
+        if row < 0:
+            return
+        self.connection_list.takeItem(row)
+        self.connections.pop(row)
+        logger.info(f"Removed multi-db connection at index {row}")
+
+    def _validate_and_accept(self):
+        """Ensure at least two connections before accepting."""
+        if len(self.connections) < 2:
+            QMessageBox.warning(
+                self,
+                "Not Enough Connections",
+                "Please add at least two database connections for multi-database mode.\n"
+                "For a single database, use the regular 'Connect to Database' option.",
+            )
+            return
+        # Ensure aliases are unique
+        aliases = [c["alias"] for c in self.connections]
+        if len(set(aliases)) != len(aliases):
+            QMessageBox.warning(
+                self,
+                "Duplicate Aliases",
+                "Each connection must have a unique alias. Please remove duplicates.",
+            )
+            return
+        self.accept()
+
+    def get_configs(self) -> List[Dict[str, Any]]:
+        """Return the list of connection configurations."""
+        return self.connections
+
+
 class DatabaseConnectionDialog(QDialog):
     """Dialog for database connection details"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, force_nlp: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Database Connection")
         self.setModal(True)
         self.setMinimumWidth(500)
         self.windowIcon = QIcon("icon.svg")
         self.setWindowIcon(self.windowIcon)
+
+        self.force_nlp = force_nlp
 
         self.semantic_layer: Optional[Dict[str, Any]] = None
 
@@ -626,10 +2092,23 @@ class DatabaseConnectionDialog(QDialog):
         # Table selection method
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "NLP (semantic)"])
-        method_pref = ConfigManager.get_table_selection_method()
-        if method_pref == "nlp":
+        if self.force_nlp:
             self.selection_method_combo.setCurrentIndex(1)
-        form_layout.addRow("Table Selection:", self.selection_method_combo)
+            self.selection_method_combo.setEnabled(False)
+        else:
+            method_pref = ConfigManager.get_table_selection_method()
+            if method_pref == "nlp":
+                self.selection_method_combo.setCurrentIndex(1)
+        self.selection_method_combo.currentTextChanged.connect(
+            self.on_selection_method_changed
+        )
+        self.selection_method_row_label = QLabel("Table Selection:")
+        form_layout.addRow(self.selection_method_row_label, self.selection_method_combo)
+
+        # In CxO / force_nlp mode, hide the table selection row entirely
+        if self.force_nlp:
+            self.selection_method_combo.setVisible(False)
+            self.selection_method_row_label.setVisible(False)
 
         # Common fields
         self.host_input = QLineEdit()
@@ -657,8 +2136,12 @@ class DatabaseConnectionDialog(QDialog):
         self.semantic_layer_label = QLabel("No semantic layer loaded")
         self.semantic_layer_button = QPushButton("Import Semantic Layer (JSON)")
         self.semantic_layer_button.clicked.connect(self.import_semantic_layer)
-        form_layout.addRow("", self.semantic_layer_button)
-        form_layout.addRow("", self.semantic_layer_label)
+        self.semantic_layer_container = QWidget()
+        semantic_layout = QVBoxLayout(self.semantic_layer_container)
+        semantic_layout.setContentsMargins(0, 0, 0, 0)
+        semantic_layout.addWidget(self.semantic_layer_button)
+        semantic_layout.addWidget(self.semantic_layer_label)
+        form_layout.addRow("", self.semantic_layer_container)
 
         layout.addLayout(form_layout)
 
@@ -672,6 +2155,10 @@ class DatabaseConnectionDialog(QDialog):
 
         # Initialize field visibility
         self.on_db_type_changed(self.db_type_combo.currentText())
+        self.on_selection_method_changed(self.selection_method_combo.currentText())
+
+        # Auto-load semantic layer from config if available
+        self._try_autoload_semantic_layer()
 
     def on_db_type_changed(self, db_type):
         """Show/hide fields based on database type"""
@@ -689,6 +2176,12 @@ class DatabaseConnectionDialog(QDialog):
             self.database_input.setPlaceholderText("Path to .db or .sqlite file")
         else:
             self.database_input.setPlaceholderText("Database name")
+
+    def on_selection_method_changed(self, method_text):
+        """Show/hide semantic layer controls based on selection method."""
+        logger.debug(f"Table selection method changed to: {method_text}")
+        is_nlp = "nlp" in method_text.lower() or self.force_nlp
+        self.semantic_layer_container.setVisible(is_nlp)
 
     def validate_and_accept(self):
         """Validate inputs before accepting"""
@@ -762,17 +2255,37 @@ class DatabaseConnectionDialog(QDialog):
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("Semantic layer must be a JSON object")
+                data = json.load(
+                    f
+                )  # if this fails it will raise an exception so we don't need to check
             self.semantic_layer = data
             self.semantic_layer_label.setText(f"Loaded: {os.path.basename(file_path)}")
+            # Persist the path so it can be auto-loaded next time
+            ConfigManager.set_semantic_layer_path(file_path)
+            logger.info(f"Semantic layer loaded and path saved: {file_path}")
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Semantic Layer Error",
                 f"Failed to load semantic layer: {str(e)}",
             )
+
+    def _try_autoload_semantic_layer(self) -> None:
+        """Auto-load semantic layer from the saved config path if available."""
+        saved_path = ConfigManager.get_semantic_layer_path()
+        if not saved_path or not os.path.isfile(saved_path):
+            return
+
+        try:
+            with open(saved_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.semantic_layer = data
+            self.semantic_layer_label.setText(
+                f"Auto-loaded: {os.path.basename(saved_path)}"
+            )
+            logger.info(f"Semantic layer auto-loaded from config: {saved_path}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-load semantic layer from {saved_path}: {e}")
 
 
 class NLPPromptDialog(QDialog):
@@ -794,7 +2307,7 @@ class NLPPromptDialog(QDialog):
 
         self.prompt_input = QLineEdit()
         self.prompt_input.setPlaceholderText(
-            "Example: customer orders joined with payments and refunds"
+            NLP_PLACEHOLDER_TEXT[random.randint(0, len(NLP_PLACEHOLDER_TEXT) - 1)]
         )
         self.prompt_input.returnPressed.connect(self.accept)
         layout.addWidget(self.prompt_input)
@@ -898,7 +2411,9 @@ class ProjectLoadDialog(QDialog):
 
         self.file_list = QListWidget()
         for f in files:
-            self.file_list.addItem(QListWidgetItem(f))
+            item = QListWidgetItem(f)
+            item.setToolTip(self._get_project_description(f))
+            self.file_list.addItem(item)
         layout.addWidget(self.file_list)
 
         layout.addSpacing(10)
@@ -924,6 +2439,19 @@ class ProjectLoadDialog(QDialog):
             return None
         return items[0].text()
 
+    def _get_project_description(self, file_name: str) -> str:
+        """Return project description for tooltip display."""
+        path = os.path.join("projects", file_name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            description = (data or {}).get("description")
+            if isinstance(description, str) and description.strip():
+                return description.strip()
+        except Exception as e:
+            logger.debug(f"Failed to read description for project '{file_name}': {e}")
+        return "No description available."
+
 
 def select_tables_with_method(
     parent: QWidget,
@@ -948,6 +2476,34 @@ def select_tables_with_method(
                 "Please provide a description to select tables.",
             )
             return None
+
+        # --- Expand prompt via LLM middleman if enabled ---
+        if ConfigManager.get_prompt_expansion_enabled():
+            logger.info("Prompt expansion enabled — attempting LLM expansion")
+            try:
+                import asyncio
+
+                agent = AIAgent()
+                schema_meta = {"tables": tables}
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    expanded = loop.run_until_complete(
+                        agent.prompt_expansion_agent(
+                            prompt, schema_meta, semantic_layer
+                        )
+                    )
+                finally:
+                    loop.close()
+                if expanded and expanded.strip():
+                    logger.info(f"Expanded prompt: {expanded[:200]}")
+                    prompt = expanded
+                else:
+                    logger.warning(
+                        "Prompt expansion returned empty result, using original"
+                    )
+            except Exception as e:
+                logger.warning(f"Prompt expansion failed, using original: {e}")
 
         try:
             selector = NLPTableSelector(
@@ -997,13 +2553,13 @@ def select_tables_with_method(
 class QueryWorker(QThread):
     """Worker thread to handle long-running queries without blocking UI"""
 
-    result_signal = pyqtSignal(str)
-    error_signal = pyqtSignal(str)
+    result_signal = Signal(str)
+    error_signal = Signal(str)
 
-    def __init__(self, query: str, df: pd.DataFrame):
+    def __init__(self, query: str, data_context: Dict[str, Any]):
         super().__init__()
         self.query = query
-        self.df = df
+        self.data_context = data_context
         self.agent = AIAgent()
 
     def run(self):
@@ -1011,16 +2567,28 @@ class QueryWorker(QThread):
             logger.debug(
                 f"QueryWorker starting execution for query: {self.query[:100]}..."
             )
+
+            # CxO mode: run NLP table selection first, then build context
+            if self.data_context.get("cxo_mode"):
+                effective_context = self._build_cxo_context()
+                if effective_context is None:
+                    self.error_signal.emit(
+                        "Could not identify relevant tables for your question. "
+                        "Please try rephrasing with more specific terms."
+                    )
+                    return
+            else:
+                effective_context = self.data_context
+
             # Run async agent methods in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # Use the new orchestrated execute_query method
-            logger.debug(
-                f"Executing query asynchronously (dataframe shape: {self.df.shape})"
-            )
+            tables = effective_context.get("tables", [])
+            logger.debug(f"Executing query asynchronously (tables: {tables})")
             result = loop.run_until_complete(
-                self.agent.execute_query(self.query, self.df)
+                self.agent.execute_query(self.query, effective_context)
             )
             logger.info(
                 f"Query execution completed successfully (result length: {len(result)} chars)"
@@ -1031,6 +2599,101 @@ class QueryWorker(QThread):
         except Exception as e:
             logger.error(f"Query execution failed: {str(e)}", exc_info=True)
             self.error_signal.emit(f"Error: {str(e)}")
+
+    def _build_cxo_context(self) -> Optional[Dict[str, Any]]:
+        """
+        In CxO mode, connect to the database, run NLP table selection on the
+        user's prompt, collect table info for the selected tables, and return
+        a complete data context ready for execute_query.
+        """
+        from processing import _collect_table_info
+
+        db_type = self.data_context["db_type"]
+        credentials = self.data_context["credentials"]
+        semantic_layer = self.data_context.get("semantic_layer")
+
+        logger.info(f"CxO mode: connecting to {db_type} for NLP table selection...")
+        connector = DatabaseConnector()
+        success, message = connector.connect(db_type, credentials)
+        if not success:
+            logger.error(f"CxO mode: DB connection failed: {message}")
+            connector.close()
+            return None
+
+        try:
+            # --- Expand prompt via LLM middleman if enabled ---
+            effective_prompt = self.query
+            if ConfigManager.get_prompt_expansion_enabled():
+                logger.info(
+                    "CxO mode: prompt expansion enabled — attempting LLM expansion"
+                )
+                try:
+                    all_tables = self.data_context.get("all_tables", [])
+                    schema_meta = {"tables": all_tables}
+                    exp_agent = AIAgent()
+                    exp_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(exp_loop)
+                    try:
+                        expanded = exp_loop.run_until_complete(
+                            exp_agent.prompt_expansion_agent(
+                                self.query, schema_meta, semantic_layer
+                            )
+                        )
+                    finally:
+                        exp_loop.close()
+                    if expanded and expanded.strip():
+                        logger.info(f"CxO prompt expanded: {expanded[:200]}")
+                        effective_prompt = expanded
+                    else:
+                        logger.warning(
+                            "CxO prompt expansion returned empty result, using original"
+                        )
+                except Exception as e:
+                    logger.warning(f"CxO prompt expansion failed, using original: {e}")
+
+            # Run NLP table selector
+            selector = NLPTableSelector(
+                connector,
+                semantic_layer=semantic_layer or {},
+            )
+            result = selector.select_tables(effective_prompt, top_k=5)
+
+            if result.status == "no_match" or not result.tables:
+                logger.warning("CxO mode: NLP found no matching tables")
+                connector.close()
+                return None
+
+            # Use all selected + top candidates
+            selected_tables = result.tables[:]
+            if result.top_candidates:
+                selected_tables = list(
+                    dict.fromkeys(result.tables + result.top_candidates)
+                )
+
+            logger.info(f"CxO mode: NLP selected tables: {selected_tables}")
+
+            # Collect table info for the selected tables
+            table_info: Dict[str, Any] = {}
+            for table_name in selected_tables:
+                info, _skipped = _collect_table_info(connector, table_name)
+                table_info[table_name] = info
+
+            context = {
+                "source_type": "database",
+                "db_type": db_type,
+                "credentials": credentials,
+                "tables": selected_tables,
+                "table_info": table_info,
+            }
+
+            logger.info(f"CxO mode: built context with {len(selected_tables)} tables")
+            return context
+
+        except Exception as e:
+            logger.error(f"CxO mode: NLP table selection failed: {e}", exc_info=True)
+            return None
+        finally:
+            connector.close()
 
 
 class DataWorkspaceGUI(QMainWindow):
@@ -1072,9 +2735,24 @@ class DataWorkspaceGUI(QMainWindow):
         connect_additional_action.triggered.connect(self.connect_additional_data_source)
         file_menu.addAction(connect_additional_action)
 
-        api_settings_action = QAction("API Settings...", self)
+        api_settings_action = QAction("API Key Settings...", self)
         api_settings_action.triggered.connect(self.change_api_settings)
         file_menu.addAction(api_settings_action)
+
+        ai_host_settings_action = QAction("AI Host Settings...", self)
+        ai_host_settings_action.triggered.connect(self.change_ai_host_settings)
+        file_menu.addAction(ai_host_settings_action)
+
+        file_menu.addSeparator()
+
+        export_results_action = QAction("Export Results...", self)
+        export_results_action.setShortcut("Ctrl+E")
+        export_results_action.triggered.connect(self.export_results_dialog)
+        file_menu.addAction(export_results_action)
+
+        export_chat_action = QAction("Export Chat...", self)
+        export_chat_action.triggered.connect(self.export_chat_dialog)
+        file_menu.addAction(export_chat_action)
 
         file_menu.addSeparator()
 
@@ -1128,6 +2806,55 @@ class DataWorkspaceGUI(QMainWindow):
         dec_font_action.setShortcut("Ctrl+-")
         dec_font_action.triggered.connect(lambda: self.adjust_font(-1))
         view_menu.addAction(dec_font_action)
+
+        # ===== Settings Menu =====
+        settings_menu = menu_bar.addMenu("Settings")
+
+        # Interaction Mode submenu
+        mode_menu = settings_menu.addMenu("Interaction Mode")
+        self.mode_action_group = QActionGroup(self)
+        self.mode_action_group.setExclusive(True)
+
+        current_mode = ConfigManager.get_interaction_mode()
+
+        self.cxo_mode_action = QAction("CxO Mode", self)
+        self.cxo_mode_action.setCheckable(True)
+        self.cxo_mode_action.setChecked(current_mode == "cxo")
+        self.cxo_mode_action.triggered.connect(lambda: self.set_interaction_mode("cxo"))
+        self.mode_action_group.addAction(self.cxo_mode_action)
+        mode_menu.addAction(self.cxo_mode_action)
+
+        self.analyst_mode_action = QAction("Analyst Mode", self)
+        self.analyst_mode_action.setCheckable(True)
+        self.analyst_mode_action.setChecked(current_mode == "analyst")
+        self.analyst_mode_action.triggered.connect(
+            lambda: self.set_interaction_mode("analyst")
+        )
+        self.mode_action_group.addAction(self.analyst_mode_action)
+        mode_menu.addAction(self.analyst_mode_action)
+
+        # Prompt Expansion toggle
+        settings_menu.addSeparator()
+        self.prompt_expansion_action = QAction("Prompt Expansion (NLP)", self)
+        self.prompt_expansion_action.setCheckable(True)
+        self.prompt_expansion_action.setChecked(
+            ConfigManager.get_prompt_expansion_enabled()
+        )
+        self.prompt_expansion_action.setToolTip(
+            "When enabled, user prompts are expanded via the LLM\n"
+            "into precise business terms before NLP table selection."
+        )
+        self.prompt_expansion_action.triggered.connect(self.toggle_prompt_expansion)
+        settings_menu.addAction(self.prompt_expansion_action)
+
+        # Local LLM settings
+        settings_menu.addSeparator()
+        local_llm_action = QAction("Local LLM Settings...", self)
+        local_llm_action.setToolTip(
+            "Configure a local LLM server (e.g. Ollama) for fully offline execution."
+        )
+        local_llm_action.triggered.connect(self.open_local_llm_settings)
+        settings_menu.addAction(local_llm_action)
 
         # ===== Help Menu =====
         help_menu = menu_bar.addMenu("Help")
@@ -1241,10 +2968,11 @@ class DataWorkspaceGUI(QMainWindow):
         self.backend = DataWorkspaceBackend()
         self.project_id: Optional[str] = None
         self.chat_id: Optional[str] = None
-        self.dataframe: Optional[pd.DataFrame] = None
+        self.data_context: Optional[Dict[str, Any]] = None
         self.is_running = False
         self.processing_marker = "**Assistant:** _Processing..._"
         self.current_theme = "system"
+        self.font_point_size = QApplication.instance().font().pointSize()
 
         # Load saved theme preference or use system theme
         config = ConfigManager.load_config()
@@ -1267,6 +2995,7 @@ class DataWorkspaceGUI(QMainWindow):
 
         clear_action = menu.addAction("Clear Chat")
         delete_action = menu.addAction("Delete Chat")
+        export_action = menu.addAction("Export Chat...")
 
         action = menu.exec(self.chat_list.mapToGlobal(position))
 
@@ -1274,6 +3003,9 @@ class DataWorkspaceGUI(QMainWindow):
             self.clear_chat_action(item)
         elif action == delete_action:
             self.delete_chat_action(item)
+        elif action == export_action:
+            chat_id = item.data(Qt.ItemDataRole.UserRole)
+            self._export_single_chat(chat_id)
 
     def clear_chat_action(self, item: QListWidgetItem):
         """Clear messages from a chat"""
@@ -1459,7 +3191,7 @@ class DataWorkspaceGUI(QMainWindow):
             logger.debug("Empty query submitted, ignoring")
             return
 
-        if self.dataframe is None:
+        if self.data_context is None:
             logger.warning("Query submitted but no data loaded")
             QMessageBox.warning(
                 self, "No Data", "No data loaded. Please restart and load data first."
@@ -1496,10 +3228,8 @@ class DataWorkspaceGUI(QMainWindow):
         self.add_message_to_chat("user", query)
 
         # Create and start worker thread
-        logger.debug(
-            f"Creating query worker for dataframe with shape: {self.dataframe.shape}"
-        )
-        self.worker = QueryWorker(query, self.dataframe)
+        logger.debug("Creating query worker for active SQL context")
+        self.worker = QueryWorker(query, self.data_context)
         self.worker.result_signal.connect(self.display_result)
         self.worker.error_signal.connect(self.display_error)
         self.worker.finished.connect(self.on_query_finished)
@@ -1557,9 +3287,16 @@ class DataWorkspaceGUI(QMainWindow):
         self.add_message_to_chat("assistant", result)
 
     def display_error(self, error: str):
-        """Display error message"""
+        """Display error message with actionable suggestions"""
         logger.error(f"Query error: {error}")
-        error_md = f"**Error:**\n{error}"
+
+        suggestions = self.backend.get_error_suggestions(error)
+        suggestion_md = ""
+        if suggestions:
+            items = "\n".join(f"- {s}" for s in suggestions)
+            suggestion_md = f"\n\n**Suggestions:**\n{items}"
+
+        error_md = f"**Error:**\n{error}{suggestion_md}"
         current_md = self.conversation_display.toMarkdown()
 
         if self.processing_marker in current_md:
@@ -1600,6 +3337,88 @@ class DataWorkspaceGUI(QMainWindow):
             QMessageBox.warning(
                 self, "Project Not Found", "Could not find project to save."
             )
+
+    # ------------------------------------------------------------------
+    #  Export helpers
+    # ------------------------------------------------------------------
+
+    def export_results_dialog(self):
+        """Show a file dialog and export the current data preview to a file."""
+        if self.backend.data_context is None:
+            QMessageBox.information(
+                self, "No Data", "Load a data source before exporting."
+            )
+            return
+
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Results",
+            "",
+            "CSV Files (*.csv);;Excel Files (*.xlsx);;JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        # Determine format from the chosen filter / extension
+        ext = os.path.splitext(file_path)[1].lower()
+        fmt_map = {".csv": "csv", ".xlsx": "excel", ".json": "json"}
+        fmt = fmt_map.get(ext, "csv")
+
+        # Gather data from all tables in the context
+        table_info = self.backend.data_context.get("table_info", {})
+        rows: list = []
+        columns: list = []
+        for _table, info in table_info.items():
+            sample = info.get("sample_rows", [])
+            cols = info.get("columns", [])
+            if not columns:
+                columns = cols
+            rows.extend(sample)
+
+        data = {"columns": columns, "rows": rows}
+        success, msg = self.backend.export_results(data, fmt, file_path)
+        if success:
+            QMessageBox.information(self, "Export Complete", msg)
+        else:
+            QMessageBox.warning(self, "Export Failed", msg)
+
+    def export_chat_dialog(self):
+        """Export the currently active chat session."""
+        if self.chat_id is None:
+            QMessageBox.information(
+                self, "No Chat", "No chat session is currently active."
+            )
+            return
+        self._export_single_chat(self.chat_id)
+
+    def _export_single_chat(self, chat_id: str):
+        """Prompt for a file path and export a chat session."""
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Chat",
+            "",
+            "Markdown Files (*.md);;JSON Files (*.json);;Text Files (*.txt)",
+        )
+        if not file_path:
+            return
+
+        ext = os.path.splitext(file_path)[1].lower()
+        fmt_map = {".md": "markdown", ".json": "json", ".txt": "txt"}
+        fmt = fmt_map.get(ext, "markdown")
+
+        success, msg, content = self.backend.export_chat_session(chat_id, fmt)
+        if not success:
+            QMessageBox.warning(self, "Export Failed", msg)
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            QMessageBox.information(
+                self, "Export Complete", f"Chat exported to {file_path}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Export Failed", f"Could not write file: {e}")
 
     def refresh_chat_list(self):
         """Refresh the chat list in the sidebar for the active project."""
@@ -1762,137 +3581,270 @@ class DataWorkspaceGUI(QMainWindow):
     def connect_data_source(self):
         """Open dialog to connect to a data source"""
         logger.info("User initiated data source connection")
-        source_dialog = DataSourceDialog(self)
-        if source_dialog.exec() == QDialog.DialogCode.Accepted:
-            source_type = source_dialog.data_source_type
-            source_config = source_dialog.data_source_config
-            logger.info(f"Data source type selected: {source_type}")
 
-            if source_type and source_config:
-                try:
-                    if source_type == "database":
-                        # Database connection flow
-                        db_type = source_config.get("db_type")
-                        credentials = source_config.get("credentials", {})
-                        selection_method = source_config.get(
-                            "table_selection_method",
-                            ConfigManager.get_table_selection_method(),
-                        )
-                        semantic_layer = source_config.get("semantic_layer")
-                        logger.debug(f"Attempting to connect to {db_type} database")
-                        connector = DatabaseConnector()
-                        success, message = connector.connect(db_type, credentials)
+        # Loop until data is successfully loaded or user cancels
+        while True:
+            source_dialog = DataSourceDialog(self)
+            if source_dialog.exec() == QDialog.DialogCode.Accepted:
+                source_type = source_dialog.data_source_type
+                source_config = source_dialog.data_source_config
+                logger.info(f"Data source type selected: {source_type}")
 
-                        if success:
-                            logger.info(f"Successfully connected to {db_type} database")
-                            tables = connector.get_tables()
+                if source_type and source_config:
+                    try:
+                        if source_type == "database":
+                            # Database connection flow
+                            db_type = source_config.get("db_type")
+                            credentials = source_config.get("credentials", {})
+                            selection_method = source_config.get(
+                                "table_selection_method",
+                                ConfigManager.get_table_selection_method(),
+                            )
+                            semantic_layer = source_config.get("semantic_layer")
+                            logger.debug(f"Attempting to connect to {db_type} database")
+                            connector = DatabaseConnector()
+                            success, message = connector.connect(db_type, credentials)
 
-                            if not tables:
-                                connector.close()
-                                QMessageBox.warning(
-                                    self,
-                                    "No Tables Found",
-                                    "The database does not contain any tables.",
+                            if success:
+                                logger.info(
+                                    f"Successfully connected to {db_type} database"
                                 )
-                                return
+                                tables = connector.get_tables()
 
-                            if tables:
-                                selected_tables = select_tables_with_method(
-                                    self,
-                                    connector,
-                                    tables,
-                                    selection_method,
-                                    semantic_layer,
-                                )
-                                connector.close()
+                                if not tables:
+                                    connector.close()
+                                    QMessageBox.warning(
+                                        self,
+                                        "No Tables Found",
+                                        "The database does not contain any tables.",
+                                    )
+                                    continue
 
-                                if selected_tables:
-                                    # Use load_data from processing module
-                                    data_source_config = {
+                                is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+
+                                if is_cxo and tables:
+                                    # CxO mode: skip table selection, defer to query time
+                                    connector.close()
+                                    logger.info(
+                                        f"CxO mode: skipping table selection. {len(tables)} tables available."
+                                    )
+                                    cxo_context = {
+                                        "source_type": "database",
+                                        "cxo_mode": True,
                                         "db_type": db_type,
                                         "credentials": credentials,
-                                        "table": (
-                                            selected_tables[0]
-                                            if len(selected_tables) == 1
-                                            else selected_tables
-                                        ),
+                                        "all_tables": tables,
+                                        "tables": [],
+                                        "table_info": {},
+                                        "semantic_layer": semantic_layer,
                                     }
-                                    df, status = load_data(
-                                        "database", data_source_config
+                                    self.backend.data_context = cxo_context
+                                    self.data_context = cxo_context
+                                    if self.backend.active_project:
+                                        creds_to_store = credentials.copy()
+                                        if "password" in creds_to_store:
+                                            creds_to_store["password"] = ""
+                                        self.backend.active_project.data_source = {
+                                            "db_type": db_type,
+                                            "credentials": creds_to_store,
+                                            "table_selection_method": "nlp",
+                                            "semantic_layer": semantic_layer,
+                                            "cxo_mode": True,
+                                        }
+                                    table_count = len(tables)
+                                    welcome_msg = (
+                                        f"## Connected to {db_type} database\n\n"
+                                        f"**{table_count}** tables available. "
+                                        f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+                                        f"Simply type your question below to get started."
                                     )
-                                    if df is not None:
-                                        self.backend.loaded_dataframe = df
-                                        self.dataframe = df
-                                        logger.info(
-                                            f"Successfully loaded data from tables: {selected_tables}, shape: {df.shape}"
-                                        )
-                                        welcome_msg = self.backend.format_database_welcome_message(
-                                            db_type, selected_tables, df, status
-                                        )
-                                        self.conversation_display.setHtml(
-                                            markdown_to_html(welcome_msg)
-                                        )
-                                        # Store data source in project
-                                        if self.backend.active_project:
-                                            creds_to_store = credentials.copy()
-                                            if "password" in creds_to_store:
-                                                creds_to_store["password"] = ""
-                                            self.backend.active_project.data_source = {
-                                                "db_type": db_type,
-                                                "credentials": creds_to_store,
-                                                "table": selected_tables,
-                                                "table_selection_method": selection_method,
-                                                "semantic_layer": semantic_layer,
-                                            }
-                                        QMessageBox.information(
-                                            self,
-                                            "Data Loaded",
-                                            "Database data loaded successfully.",
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"Failed to load data from database: {status}"
-                                        )
-                                        QMessageBox.warning(self, "Load Failed", status)
-                        else:
-                            logger.warning(f"Database connection failed: {message}")
-                            QMessageBox.warning(self, "Connection Failed", message)
+                                    self.conversation_display.setHtml(
+                                        markdown_to_html(welcome_msg)
+                                    )
+                                    QMessageBox.information(
+                                        self,
+                                        "Data Loaded",
+                                        "Database connected in CxO mode.",
+                                    )
+                                    return
 
-                    elif source_type == "file":
-                        # File load flow
-                        file_paths = source_config.get("file_paths", [])
-                        logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
-                        if file_paths:
-                            df, welcome_msg = self.backend.load_file_data_with_ui(
-                                file_paths
+                                elif tables:
+                                    selected_tables = select_tables_with_method(
+                                        self,
+                                        connector,
+                                        tables,
+                                        selection_method,
+                                        semantic_layer,
+                                    )
+                                    connector.close()
+
+                                    if selected_tables is None:
+                                        logger.info(
+                                            "User cancelled table selection, returning to data source selection"
+                                        )
+                                        continue
+
+                                    if selected_tables:
+                                        # Use load_data from processing module
+                                        data_source_config = {
+                                            "db_type": db_type,
+                                            "credentials": credentials,
+                                            "table": (
+                                                selected_tables[0]
+                                                if len(selected_tables) == 1
+                                                else selected_tables
+                                            ),
+                                        }
+                                        data_context, status = load_data(
+                                            "database", data_source_config
+                                        )
+                                        if data_context is not None:
+                                            self.backend.data_context = data_context
+                                            self.data_context = data_context
+                                            logger.info(
+                                                f"Successfully loaded data from tables: {selected_tables}"
+                                            )
+                                            welcome_msg = self.backend.format_database_welcome_message(
+                                                db_type,
+                                                selected_tables,
+                                                data_context,
+                                                status,
+                                            )
+                                            self.conversation_display.setHtml(
+                                                markdown_to_html(welcome_msg)
+                                            )
+                                            # Store data source in project
+                                            if self.backend.active_project:
+                                                creds_to_store = credentials.copy()
+                                                if "password" in creds_to_store:
+                                                    creds_to_store["password"] = ""
+                                                self.backend.active_project.data_source = {
+                                                    "db_type": db_type,
+                                                    "credentials": creds_to_store,
+                                                    "table": selected_tables,
+                                                    "table_selection_method": selection_method,
+                                                    "semantic_layer": semantic_layer,
+                                                }
+                                            QMessageBox.information(
+                                                self,
+                                                "Data Loaded",
+                                                "Database data loaded successfully.",
+                                            )
+                                            return
+                                        else:
+                                            logger.warning(
+                                                f"Failed to load data from database: {status}"
+                                            )
+                                            QMessageBox.warning(
+                                                self, "Load Failed", status
+                                            )
+                                            continue
+                            else:
+                                logger.warning(f"Database connection failed: {message}")
+                                QMessageBox.warning(self, "Connection Failed", message)
+                                continue
+
+                        elif source_type == "multi_database":
+                            # Multi-database connection flow
+                            configs = source_config.get("connections", [])
+                            logger.info(
+                                f"Loading multi-database with {len(configs)} connections"
                             )
-                            if df is not None:
-                                self.dataframe = df
-                                logger.info(
-                                    f"Successfully loaded {len(file_paths)} file(s), data shape: {df.shape}"
+                            from processing import load_multi_database
+
+                            data_context, status = load_multi_database(configs)
+                            if data_context is not None:
+                                self.backend.data_context = data_context
+                                self.data_context = data_context
+                                logger.info(f"Multi-database loaded: {status}")
+                                # Persist configs (passwords stripped)
+                                ConfigManager.save_multi_db_config(configs)
+                                if self.backend.active_project:
+                                    safe_configs = []
+                                    for cfg in configs:
+                                        safe = dict(cfg)
+                                        c = safe.get("credentials", {}).copy()
+                                        c.pop("password", None)
+                                        safe["credentials"] = c
+                                        safe_configs.append(safe)
+                                    self.backend.active_project.data_source = {
+                                        "source_type": "multi_database",
+                                        "connections": safe_configs,
+                                    }
+                                aliases = list(
+                                    data_context.get("connections", {}).keys()
+                                )
+                                table_count = len(data_context.get("tables", []))
+                                welcome_msg = (
+                                    f"## Multi-Database Connected\n\n"
+                                    f"**{table_count}** tables loaded across "
+                                    f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                                    f"Tables are prefixed with their database alias "
+                                    f"(e.g. `alias__table`). Ask your question below."
                                 )
                                 self.conversation_display.setHtml(
                                     markdown_to_html(welcome_msg)
                                 )
                                 QMessageBox.information(
-                                    self, "Data Loaded", "Files loaded successfully."
+                                    self,
+                                    "Data Loaded",
+                                    f"Multi-database loaded: {table_count} tables.",
                                 )
+                                return
                             else:
-                                logger.warning(f"Failed to load files: {welcome_msg}")
-                                QMessageBox.warning(self, "Load Failed", welcome_msg)
-                except Exception as e:
-                    logger.error(f"Error loading data source: {str(e)}", exc_info=True)
-                    QMessageBox.critical(
-                        self, "Error", f"Failed to load data: {str(e)}"
-                    )
-        else:
-            logger.info("User cancelled data source connection")
+                                logger.warning(f"Multi-database load failed: {status}")
+                                QMessageBox.warning(self, "Load Failed", status)
+                                continue
+
+                        elif source_type == "file":
+                            # File load flow
+                            file_paths = source_config.get("file_paths", [])
+                            logger.debug(
+                                f"Loading {len(file_paths)} file(s): {file_paths}"
+                            )
+                            if file_paths:
+                                data_context, welcome_msg = (
+                                    self.backend.load_file_data_with_ui(file_paths)
+                                )
+                                if data_context is not None:
+                                    self.data_context = data_context
+                                    logger.info(
+                                        f"Successfully loaded {len(file_paths)} file(s)"
+                                    )
+                                    self.conversation_display.setHtml(
+                                        markdown_to_html(welcome_msg)
+                                    )
+                                    QMessageBox.information(
+                                        self,
+                                        "Data Loaded",
+                                        "Files loaded successfully.",
+                                    )
+                                    return
+                                else:
+                                    logger.warning(
+                                        f"Failed to load files: {welcome_msg}"
+                                    )
+                                    QMessageBox.warning(
+                                        self, "Load Failed", welcome_msg
+                                    )
+                                    continue
+                    except Exception as e:
+                        logger.error(
+                            f"Error loading data source: {str(e)}", exc_info=True
+                        )
+                        QMessageBox.critical(
+                            self, "Error", f"Failed to load data: {str(e)}"
+                        )
+                        continue
+            else:
+                logger.info("User cancelled data source connection")
+                return
 
     def connect_additional_data_source(self):
         """Connect additional data sources without overwriting existing data."""
         logger.info("User initiated additional data source connection")
 
-        if self.dataframe is None:
+        if self.data_context is None:
             QMessageBox.information(
                 self,
                 "No Data Loaded",
@@ -1909,10 +3861,6 @@ class DataWorkspaceGUI(QMainWindow):
         source_type = source_dialog.data_source_type
         source_config = source_dialog.data_source_config
         logger.info(f"Additional data source type selected: {source_type}")
-
-        new_df: Optional[pd.DataFrame] = None
-        source_label = ""
-        source_entry: Dict[str, Any] = {}
 
         try:
             if source_type == "database":
@@ -1961,24 +3909,70 @@ class DataWorkspaceGUI(QMainWindow):
                         else selected_tables
                     ),
                 }
-                new_df, status = load_data("database", data_source_config)
-                if new_df is None:
+                new_context, status = load_data("database", data_source_config)
+                if new_context is None:
                     QMessageBox.warning(self, "Load Failed", status)
                     return
 
-                source_label = (
-                    f"Database ({db_type}) tables: {', '.join(selected_tables)}"
+                if self.data_context.get("source_type") != "database":
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Additional database sources can only be added to an existing database workspace.",
+                    )
+                    return
+
+                if (
+                    self.data_context.get("db_type") != db_type
+                    or self.data_context.get("credentials") != credentials
+                ):
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Adding tables from a different database connection is not supported in SQL-first mode.",
+                    )
+                    return
+
+                existing_tables = set(self.data_context.get("tables", []))
+                table_info = self.data_context.get("table_info", {})
+                skipped_cols = self.data_context.get("skipped_columns", {})
+
+                for table_name in new_context.get("tables", []):
+                    if table_name not in existing_tables:
+                        existing_tables.add(table_name)
+                        table_info[table_name] = new_context.get("table_info", {}).get(
+                            table_name, {}
+                        )
+                        skipped = new_context.get("skipped_columns", {}).get(table_name)
+                        if skipped:
+                            skipped_cols[table_name] = skipped
+
+                self.data_context["tables"] = list(existing_tables)
+                self.data_context["table_info"] = table_info
+                self.data_context["skipped_columns"] = skipped_cols
+                self.backend.data_context = self.data_context
+
+                if self.backend.active_project is not None:
+                    creds_to_store = credentials.copy()
+                    if "password" in creds_to_store:
+                        creds_to_store["password"] = ""
+                    self.backend.active_project.data_source = {
+                        "db_type": db_type,
+                        "credentials": creds_to_store,
+                        "table": list(existing_tables),
+                        "table_selection_method": selection_method,
+                        "semantic_layer": semantic_layer,
+                    }
+
+                welcome_msg = self.backend.format_database_welcome_message(
+                    db_type, list(existing_tables), self.data_context, status
                 )
-                creds_to_store = credentials.copy()
-                if "password" in creds_to_store:
-                    creds_to_store["password"] = ""
-                source_entry = {
-                    "db_type": db_type,
-                    "credentials": creds_to_store,
-                    "table": selected_tables,
-                    "table_selection_method": selection_method,
-                    "semantic_layer": semantic_layer,
-                }
+                self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                QMessageBox.information(
+                    self,
+                    "Data Loaded",
+                    "Additional tables added to the database workspace.",
+                )
 
             elif source_type == "file":
                 file_paths = source_config.get("file_paths", [])
@@ -1986,49 +3980,36 @@ class DataWorkspaceGUI(QMainWindow):
                     QMessageBox.warning(self, "Load Failed", "No files selected.")
                     return
 
-                new_df, welcome_msg = self.backend.load_file_data_with_ui(file_paths)
-                if new_df is None:
-                    QMessageBox.warning(self, "Load Failed", welcome_msg)
+                if self.data_context.get("source_type") != "file":
+                    QMessageBox.warning(
+                        self,
+                        "Not Supported",
+                        "Additional files can only be added to an existing file workspace.",
+                    )
                     return
 
-                source_label = (
-                    f"Files: {', '.join([os.path.basename(p) for p in file_paths])}"
+                updated_context, status = add_files_to_sqlite(
+                    self.data_context, file_paths
                 )
-                source_entry = {"file_paths": file_paths}
+                if updated_context is None:
+                    QMessageBox.warning(self, "Load Failed", status)
+                    return
+
+                self.data_context = updated_context
+                self.backend.data_context = updated_context
+                welcome_msg = self.backend.format_file_welcome_message(
+                    file_paths, updated_context, status
+                )
+                self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                QMessageBox.information(
+                    self,
+                    "Data Loaded",
+                    "Additional files added to the SQLite workspace.",
+                )
 
             else:
                 QMessageBox.warning(self, "Error", "Unknown source type.")
                 return
-
-            merged_df, merge_strategy = merge_dataframes([self.dataframe, new_df])
-            self.dataframe = merged_df
-            self.backend.loaded_dataframe = merged_df
-
-            if self.backend.active_project is not None:
-                project_ds = self.backend.active_project.data_source
-                if not isinstance(project_ds, dict):
-                    project_ds = {}
-                additional_sources = project_ds.get("additional_sources", [])
-                additional_sources.append(source_entry)
-                project_ds["additional_sources"] = additional_sources
-                self.backend.active_project.data_source = project_ds
-
-            merge_label = merge_strategy or "Merged with existing data"
-            combined_msg = self.backend._join_markdown_blocks(
-                [
-                    "### Additional Data Loaded",
-                    f"**Previous Data Source:** {self.backend.active_project.data_source if self.backend.active_project else 'N/A'}",
-                    f"**Added:** {source_label}",
-                    f"**Merge Strategy:** {merge_label}",
-                    f"**Combined Shape:** {len(merged_df)} rows, {len(merged_df.columns)} columns",
-                ]
-            )
-            self.conversation_display.setHtml(markdown_to_html(combined_msg))
-            QMessageBox.information(
-                self,
-                "Data Loaded",
-                "Additional data loaded and merged successfully.",
-            )
 
         except Exception as e:
             logger.error(
@@ -2039,21 +4020,39 @@ class DataWorkspaceGUI(QMainWindow):
             )
 
     def change_api_settings(self):
-        """Open API settings dialog"""
-        logger.info("User opened API settings dialog")
+        """Open API key settings dialog"""
+        logger.info("User opened API key settings dialog")
         try:
-            api_dialog = APIKeyConfigDialog(self)
+            api_dialog = APIKeyDialog(self)
             if api_dialog.exec() == QDialog.DialogCode.Accepted:
-                logger.info("API settings updated successfully")
+                logger.info("API key settings updated successfully")
                 QMessageBox.information(
-                    self, "API Settings", "API settings updated successfully."
+                    self, "API Settings", "API key settings updated successfully."
                 )
             else:
-                logger.info("User cancelled API settings change")
+                logger.info("User cancelled API key settings change")
         except Exception as e:
-            logger.error(f"Error changing API settings: {str(e)}", exc_info=True)
+            logger.error(f"Error changing API key settings: {str(e)}", exc_info=True)
             QMessageBox.critical(
-                self, "Error", f"Failed to update API settings: {str(e)}"
+                self, "Error", f"Failed to update API key settings: {str(e)}"
+            )
+
+    def change_ai_host_settings(self):
+        """Open AI host settings dialog"""
+        logger.info("User opened AI host settings dialog")
+        try:
+            host_dialog = AIHostConfigDialog(self, include_cloud=True)
+            if host_dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("AI host settings updated successfully")
+                QMessageBox.information(
+                    self, "AI Host Settings", "AI host settings updated successfully."
+                )
+            else:
+                logger.info("User cancelled AI host settings change")
+        except Exception as e:
+            logger.error(f"Error changing AI host settings: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to update AI host settings: {str(e)}"
             )
 
     def clear_conversation(self):
@@ -2096,7 +4095,7 @@ class DataWorkspaceGUI(QMainWindow):
                 self.backend = DataWorkspaceBackend()
                 self.project_id = None
                 self.chat_id = None
-                self.dataframe = None
+                self.data_context = None
                 self.conversation_display.clear()
                 self.query_input.clear()
                 self.chat_list.clear()
@@ -2114,6 +4113,81 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         else:
             logger.info("User cancelled workspace reset")
+
+    def toggle_prompt_expansion(self, checked: bool):
+        """Toggle the prompt-expansion middleman agent on or off."""
+        success, message = ConfigManager.set_prompt_expansion_enabled(checked)
+        if success:
+            state = "enabled" if checked else "disabled"
+            logger.info(f"Prompt expansion {state}")
+        else:
+            logger.error(f"Failed to toggle prompt expansion: {message}")
+            # Revert the checkbox
+            self.prompt_expansion_action.setChecked(not checked)
+            QMessageBox.warning(
+                self, "Settings Error", f"Failed to save setting: {message}"
+            )
+
+    def open_local_llm_settings(self):
+        """Open a dialog to configure the local LLM server connection or host a model."""
+        logger.info("User opened Local LLM settings dialog")
+        try:
+            dialog = LocalLLMSettingsDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("Local LLM settings updated successfully")
+        except Exception as e:
+            logger.error(f"Error opening Local LLM settings: {e}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to open Local LLM settings: {e}"
+            )
+
+    def set_interaction_mode(self, mode: str):
+        """Set the interaction mode (cxo or analyst) and persist it."""
+        # If switching to analyst mode while in CxO mode with no tables loaded,
+        # offer to reload the project so the user can select tables.
+        if (
+            mode == "analyst"
+            and self.data_context
+            and self.data_context.get("cxo_mode")
+        ):
+            reply = QMessageBox.question(
+                self,
+                "Analyst Mode Requires Tables",
+                "Analyst mode requires loaded tables, but no tables are currently selected.\n\n"
+                "Would you like to switch to Analyst mode and reconnect to select tables?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                # Revert the menu toggle back to CxO
+                self.cxo_mode_action.setChecked(True)
+                return
+
+            # Persist analyst mode
+            ConfigManager.set_interaction_mode("analyst")
+            self.analyst_mode_action.setChecked(True)
+            logger.info(
+                "Switched to Analyst mode, re-opening data source connection for table selection"
+            )
+            self.connect_data_source()
+            return
+
+        success, message = ConfigManager.set_interaction_mode(mode)
+        if success:
+            logger.info(f"Interaction mode changed to: {mode}")
+            mode_label = "CxO" if mode == "cxo" else "Analyst"
+            QMessageBox.information(
+                self,
+                "Mode Changed",
+                f"Interaction mode set to {mode_label}.\n\n"
+                + (
+                    "Responses will now focus on concise executive insights."
+                    if mode == "cxo"
+                    else "Responses will include full technical detail and SQL."
+                ),
+            )
+        else:
+            logger.error(f"Failed to set interaction mode: {message}")
+            QMessageBox.warning(self, "Error", f"Failed to change mode: {message}")
 
     def set_theme(self, theme: str):
         """Set application theme"""
@@ -2147,16 +4221,31 @@ class DataWorkspaceGUI(QMainWindow):
 
     def _apply_theme(self, theme: str) -> None:
         """Apply the selected theme to the application"""
+        stylesheet = self._build_theme_stylesheet(theme)
         if theme == "dark":
-            QApplication.instance().setStyleSheet(DARK_THEME_STYLESHEET)
+            QApplication.instance().setStyleSheet(stylesheet)
             self.dark_theme_action.setChecked(True)
         elif theme == "light":
-            QApplication.instance().setStyleSheet(LIGHT_THEME_STYLESHEET)
+            QApplication.instance().setStyleSheet(stylesheet)
             self.light_theme_action.setChecked(True)
         elif theme == "system":
             # Reset to system theme (empty stylesheet)
-            QApplication.instance().setStyleSheet("")
+            QApplication.instance().setStyleSheet(stylesheet)
             self.system_theme_action.setChecked(True)
+
+    def _build_theme_stylesheet(self, theme: str) -> str:
+        if theme == "dark":
+            base = DARK_THEME_STYLESHEET
+        elif theme == "light":
+            base = LIGHT_THEME_STYLESHEET
+        else:
+            base = ""
+
+        if not self.font_point_size:
+            return base
+
+        font_override = f"\nQWidget {{ font-size: {self.font_point_size}pt; }}\n"
+        return f"{base}{font_override}"
 
     def adjust_font(self, delta: int):
         """Adjust font size"""
@@ -2170,6 +4259,8 @@ class DataWorkspaceGUI(QMainWindow):
             font.setPointSize(new_size)
             self.setFont(font)
             QApplication.instance().setFont(font)
+            self.font_point_size = new_size
+            self._apply_theme(self.current_theme)
             logger.debug("Font size adjusted successfully")
         except Exception as e:
             logger.error(f"Failed to adjust font size: {str(e)}", exc_info=True)
@@ -2195,29 +4286,27 @@ class DataWorkspaceGUI(QMainWindow):
         """Show about dialog"""
         logger.info("User opened About dialog")
         about_text = (
-            "<h2>AI Data Workspace</h2>"
+            "<h2>Data Workspace</h2>"
             "<p>Version 1.0.0</p>"
-            "<p>An intelligent application for data analysis and visualization with AI assistance.</p>"
-            "<p><b>Features:</b></p>"
+            "<p>A powerful AI-driven workspace for analyzing data across multiple sources with natural language queries.</p>"
+            "<p><b>Key Features:</b></p>"
             "<ul>"
-            "<li>Multi-source data loading (CSV, Excel, Database)</li>"
-            "<li>AI-powered data analysis and insights</li>"
-            "<li>Project and chat session management</li>"
-            "<li>Multi-database support</li>"
+            "<li>Connect to databases, files, or multiple data sources simultaneously</li>"
+            "<li>Query data using natural language, no SQL expertise required</li>"
+            "<li>AI-powered insights tailored for executives (CxO) or deep technical analysis (Analyst)</li>"
+            "<li>Organize analysis into projects with persistent chat histories</li>"
+            "<li>Import semantic layers for business-aligned table descriptions</li>"
+            "<li>Support for local LLM servers for fully offline operation</li>"
             "</ul>"
-            "<p>© 2026 AI Data Workspace. All rights reserved.</p>"
+            "<p><b>Supported Databases:</b> SQLite, MySQL, MariaDB, PostgreSQL, SQL Server, Oracle, ODBC</p>"
+            "<p><b>Supported File Formats:</b> CSV, Excel (XLSX/XLS)</p>"
+            "<p>© 2026 Write Frame Communications. All rights reserved.</p>"
         )
-        QMessageBox.about(self, "About AI Data Workspace", about_text)
+        QMessageBox.about(self, "About Data Workspace", about_text)
 
 
-def start_application():
-    """Start the AI Data Workspace application."""
-    logger.info("=" * 60)
-    logger.info("Starting AI Data Workspace application")
-    logger.info("=" * 60)
-    app = QApplication(sys.argv)
-
-    # Preload theme before any dialogs are shown
+def _preload_theme(app: QApplication) -> None:
+    """Preload the saved theme before any dialogs are shown."""
     try:
         config = ConfigManager.load_config()
         saved_theme = config.get("theme", "system")
@@ -2231,38 +4320,109 @@ def start_application():
     except Exception as e:
         logger.warning(f"Failed to preload theme: {str(e)}")
 
-    # Check if API keys are configured, if not prompt user to set them up
+
+def _ensure_api_configured() -> bool:
+    """Ensure API keys or local LLM are configured. Shows dialog if needed. Returns True if configured."""
+    # Local LLM doesn't need an API key
+    if ConfigManager.get_default_api() == "local":
+        logger.info(
+            "Local LLM is configured as default provider, skipping API key check"
+        )
+        return True
+
     if not ConfigManager.has_any_api_key():
         logger.warning("No API keys configured, prompting user for setup")
-        # Show API key configuration dialog
-        api_config_dialog = APIKeyConfigDialog()
-        if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
-            # User cancelled API key setup
-            logger.error("API key setup cancelled by user, application cannot start")
-            QMessageBox.warning(
-                None,
-                "API Key Required",
-                "An API key is required to use this application.\n"
-                "Please configure your API key and try again.",
-            )
-            return
-        logger.info("API key configured successfully")
 
+        # Ask user whether they want cloud API keys or a local AI host
+        choice = QMessageBox.question(
+            None,
+            "AI Provider Setup",
+            "No AI provider is configured yet.\n\n"
+            "Would you like to set up a Cloud API Key (OpenAI / Claude)?\n\n"
+            "Click 'Yes' for a cloud API key, or 'No' to configure a local AI host instead.",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if choice == QMessageBox.StandardButton.Cancel:
+            logger.error("AI provider setup cancelled by user")
+            return False
+
+        if choice == QMessageBox.StandardButton.No:
+            # Show AI Host config (Local LLM / Self-Host)
+            host_dialog = AIHostConfigDialog()
+            if host_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.error(
+                    "AI host setup cancelled by user, application cannot start"
+                )
+                QMessageBox.warning(
+                    None,
+                    "AI Provider Required",
+                    "An AI provider (cloud API key or local LLM) is required.\n"
+                    "Please configure one and try again.",
+                )
+                return False
+            logger.info("AI host configured successfully")
+        else:
+            # Show API Key dialog (OpenAI / Claude)
+            api_config_dialog = APIKeyDialog(first_time_setup=True)
+            if api_config_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.error(
+                    "API key setup cancelled by user, application cannot start"
+                )
+                QMessageBox.warning(
+                    None,
+                    "API Key Required",
+                    "An API key (or local LLM) is required to use this application.\n"
+                    "Please configure your API key and try again.",
+                )
+                return False
+            logger.info("API key configured successfully")
+    return True
+
+
+def _ensure_interaction_mode_configured() -> bool:
+    """
+    Show mode selection dialog if no interaction mode has been configured yet.
+    Returns True if a mode is set, False if the user cancelled.
+    """
+    config = ConfigManager.load_config()
+    if "interaction_mode" not in config:
+        logger.info("No interaction mode configured, prompting user")
+        mode_dialog = InteractionModeDialog()
+        if mode_dialog.exec() != QDialog.DialogCode.Accepted:
+            logger.warning(
+                "User cancelled interaction mode selection, defaulting to analyst"
+            )
+            ConfigManager.set_interaction_mode("analyst")
+            return True
+        selected = mode_dialog.get_selected_mode()
+        ConfigManager.set_interaction_mode(selected)
+        logger.info(f"Interaction mode set to: {selected}")
+    return True
+
+
+def _show_project_dialog() -> Optional[tuple[DataWorkspaceGUI, str]]:
+    """Show project creation/load dialog. Returns (window, project_id) or None if cancelled."""
     project_dialog = CreateProjectDialog()
     if project_dialog.exec() != QDialog.DialogCode.Accepted:
         logger.info("Project dialog cancelled, exiting application")
-        return
+        return None
 
     logger.debug("Creating main application window")
     window = DataWorkspaceGUI()
     window.backend = project_dialog.backend
     window.project_id = project_dialog.project_id
     logger.info(f"Main window created with project ID: {window.project_id}")
+    return (window, window.project_id)
 
-    # Load the project and setup the UI
+
+def _load_project_and_chats(window: DataWorkspaceGUI) -> None:
+    """Load the project and display chat history."""
     if window.project_id is not None:
         window.backend.load_project(window.project_id)
-        # Load the first chat from the project
         if window.backend.active_project:
             logger.debug(f"Active project: {window.backend.active_project.title}")
             chats = window.backend.active_project.get_all_chats()
@@ -2272,7 +4432,6 @@ def start_application():
                 logger.info(
                     f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}"
                 )
-                # Display the chat history
                 if success:
                     history = window.backend.get_chat_history()
                     if history:
@@ -2281,57 +4440,82 @@ def start_application():
                             markdown_to_html(chat_history)
                         )
 
-    # Refresh the UI with project and chat info
     window.refresh_project_list()
-
-    # Select the first chat in the list
     if window.chat_list.count() > 0:
         window.chat_list.setCurrentRow(0)
 
-    # Check if data is already loaded from project (e.g., loading saved project with data source)
-    data_already_loaded = window.backend.loaded_dataframe is not None
-    logger.info(f"Data already loaded from project: {data_already_loaded}")
 
-    # Only ask for data source if no data is already loaded
-    if data_already_loaded:
-        logger.info("Using data already loaded from project")
-        # Data was already loaded from project, generate welcome message
-        if window.backend.loaded_dataframe is not None:
-            df = window.backend.loaded_dataframe
-            logger.debug(f"Loaded dataframe shape: {df.shape}")
-            # Check what type of source was used
-            if (
-                window.backend.active_project
-                and window.backend.active_project.data_source
-            ):
-                ds = window.backend.active_project.data_source
-                if ds.get("db_type"):
-                    # Database source
-                    selected_tables = ds.get("table", [])
-                    if not isinstance(selected_tables, list):
-                        selected_tables = [selected_tables]
-                    welcome_msg = window.backend.format_database_welcome_message(
-                        ds.get("db_type"),
-                        selected_tables,
-                        df,
-                        "Data loaded from project",
-                    )
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                elif ds.get("file_paths"):
-                    # File source
-                    welcome_msg = window.backend.load_file_data_with_ui(
-                        ds.get("file_paths", [])
-                    )[1]
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                    window.dataframe = df
-            window.dataframe = df
-    else:
-        logger.info("No data loaded, prompting for data source")
-        # No data loaded yet, ask for data source
+def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
+    """Display welcome message for data that was already loaded from project."""
+    if window.backend.data_context is None:
+        return
+
+    data_context = window.backend.data_context
+    logger.debug("Loaded SQL context from project")
+
+    if window.backend.active_project and window.backend.active_project.data_source:
+        ds = window.backend.active_project.data_source
+        if (
+            ds.get("source_type") == "multi_database"
+            or data_context.get("source_type") == "multi_database"
+        ):
+            aliases = list(data_context.get("connections", {}).keys())
+            table_count = len(data_context.get("tables", []))
+            welcome_msg = (
+                f"## Multi-Database Connected\n\n"
+                f"**{table_count}** tables loaded across "
+                f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                f"Tables are prefixed with their database alias "
+                f"(e.g. `alias__table`). Ask your question below."
+            )
+            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        elif ds.get("db_type"):
+            # CxO mode: show the CxO-specific welcome message
+            if data_context.get("cxo_mode"):
+                all_tables = data_context.get("all_tables", [])
+                table_count = len(all_tables)
+                db_type = ds.get("db_type", "database")
+                welcome_msg = (
+                    f"## Connected to {db_type} database\n\n"
+                    f"**{table_count}** tables available. "
+                    f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+                    f"Simply type your question below to get started."
+                )
+                window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+            else:
+                selected_tables = ds.get("table", [])
+                if not isinstance(selected_tables, list):
+                    selected_tables = [selected_tables]
+                welcome_msg = window.backend.format_database_welcome_message(
+                    ds.get("db_type"),
+                    selected_tables,
+                    data_context,
+                    "Data loaded from project",
+                )
+                window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        elif ds.get("file_paths"):
+            welcome_msg = window.backend.format_file_welcome_message(
+                ds.get("file_paths", []),
+                data_context,
+                "Data loaded from project",
+            )
+            window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+
+    window.data_context = data_context
+
+
+def _load_initial_data(window: DataWorkspaceGUI) -> bool:
+    """
+    Load data source on startup. Loops until data is loaded or user cancels.
+    Returns True if data was successfully loaded, False if user cancelled.
+    """
+    logger.info("No data loaded, prompting for data source")
+
+    while True:
         source_dialog = DataSourceDialog()
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
             logger.info("User cancelled data source selection")
-            return
+            return False
 
         source_type = source_dialog.data_source_type
         source_config = source_dialog.data_source_config
@@ -2339,145 +4523,289 @@ def start_application():
 
         try:
             if source_type == "database":
-                db_type: str = source_config["db_type"]
-                credentials: Dict[str, Any] = source_config["credentials"]
-                selection_method = source_config.get(
-                    "table_selection_method",
-                    ConfigManager.get_table_selection_method(),
-                )
-                semantic_layer = source_config.get("semantic_layer")
-                logger.info(f"Connecting to {db_type} database...")
-
-                connector = DatabaseConnector()
-                while True:
-                    success, message = connector.connect(db_type, credentials)
-                    if success:
-                        logger.info(f"Successfully connected to {db_type} database")
-                        break
-
-                    logger.warning(f"Database connection failed: {message}")
-
-                    retry = QMessageBox.question(
-                        None,
-                        "Database Connection Failed",
-                        f"{message}\n\nWould you like to try again?",
-                        QMessageBox.StandardButton.Retry
-                        | QMessageBox.StandardButton.Cancel,
-                    )
-
-                    if retry == QMessageBox.StandardButton.Retry:
-                        db_dialog = DatabaseConnectionDialog()
-                        if db_dialog.exec() != QDialog.DialogCode.Accepted:
-                            return
-                        source_config = db_dialog.get_config()
-                        db_type = source_config["db_type"]
-                        credentials = source_config["credentials"]
-                    else:
-                        logger.info("User cancelled database connection retry")
-                        return
-
-                try:
-                    tables = connector.get_tables()
-                    logger.debug(
-                        f"Retrieved {len(tables) if tables else 0} tables from database"
-                    )
-                except Exception as e:
-                    logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
-                    QMessageBox.critical(None, "Table Discovery Failed", str(e))
-                    connector.close()
-                    return
-
-                if not tables:
-                    QMessageBox.critical(
-                        None,
-                        "No Tables Found",
-                        "The database does not contain any tables.",
-                    )
-                    return
-
-                selected_tables = select_tables_with_method(
-                    window,
-                    connector,
-                    tables,
-                    selection_method,
-                    semantic_layer,
-                )
-                connector.close()
-                table_value: Any = (
-                    selected_tables if len(selected_tables) > 1 else selected_tables[0]
-                )
-                source_config["table"] = table_value
-
-                if not selected_tables:
-                    return
-
-                merged_dataframe, status = load_data("database", source_config)
-
-                if merged_dataframe is not None:
-                    logger.info(
-                        f"Successfully loaded database data, shape: {merged_dataframe.shape}"
-                    )
-                    window.dataframe = merged_dataframe
-                    window.backend.loaded_dataframe = merged_dataframe
-                    # Store data source in the project
-                    if window.backend.active_project:
-                        creds_to_store = credentials.copy()
-                        if "password" in creds_to_store:
-                            creds_to_store["password"] = ""
-                        window.backend.active_project.data_source = {
-                            "db_type": db_type,
-                            "credentials": creds_to_store,
-                            "table": selected_tables,
-                            "table_selection_method": selection_method,
-                            "semantic_layer": semantic_layer,
-                        }
-                    welcome_msg = window.backend.format_database_welcome_message(
-                        db_type, selected_tables, merged_dataframe, status
-                    )
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                else:
-                    window.conversation_display.setHtml(
-                        markdown_to_html(
-                            f"Connected to {db_type} database, but no data loaded.\n"
-                            f"{status}\nYou can still ask questions!"
-                        )
-                    )
-
+                if _load_database_data(window, source_config):
+                    return True
+            elif source_type == "multi_database":
+                if _load_multi_database_data(window, source_config):
+                    return True
             elif source_type == "file":
-                file_paths = source_config["file_paths"]
-                logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
-                merged_dataframe, welcome_msg = window.backend.load_file_data_with_ui(
-                    file_paths
-                )
-
-                if merged_dataframe is not None:
-                    window.dataframe = merged_dataframe
-                    # Store file paths in the project
-                    if window.backend.active_project:
-                        window.backend.active_project.data_source = {
-                            "file_paths": file_paths
-                        }
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                else:
-                    logger.error(f"Failed to load file data: {welcome_msg}")
-                    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
-                    QMessageBox.critical(
-                        window, "Data Loading Error", "Failed to load any files."
-                    )
-
+                if _load_file_data(window, source_config):
+                    return True
             else:
                 logger.error(f"Unknown data source type: {source_type}")
                 QMessageBox.critical(
                     window, "Error", f"Unknown source type: {source_type}"
                 )
-                return
-
+                continue
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}", exc_info=True)
             error_msg = (
-                "### Error Loading Data\n" f"{str(e)}\n" "Please restart and try again."
+                f"### Error Loading Data\n{str(e)}\nPlease restart and try again."
             )
             window.conversation_display.setHtml(markdown_to_html(error_msg))
+            continue
+
+
+def _load_database_data(
+    window: DataWorkspaceGUI, source_config: Dict[str, Any]
+) -> bool:
+    """
+    Load data from a database. Returns True if successful, False if user wants to retry.
+
+    In CxO mode, skips table selection entirely. Tables are selected at query time
+    via NLP based on the user's prompt.
+    """
+    db_type: str = source_config["db_type"]
+    credentials: Dict[str, Any] = source_config["credentials"]
+    selection_method = source_config.get(
+        "table_selection_method",
+        ConfigManager.get_table_selection_method(),
+    )
+    semantic_layer = source_config.get("semantic_layer")
+    is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+    logger.info(f"Connecting to {db_type} database... (CxO mode: {is_cxo})")
+
+    connector = DatabaseConnector()
+    while True:
+        success, message = connector.connect(db_type, credentials)
+        if success:
+            logger.info(f"Successfully connected to {db_type} database")
+            break
+
+        logger.warning(f"Database connection failed: {message}")
+        retry = QMessageBox.question(
+            None,
+            "Database Connection Failed",
+            f"{message}\n\nWould you like to try again?",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+        )
+
+        if retry == QMessageBox.StandardButton.Retry:
+            db_dialog = DatabaseConnectionDialog(force_nlp=is_cxo)
+            if db_dialog.exec() != QDialog.DialogCode.Accepted:
+                connector.close()
+                return False
+            source_config = db_dialog.get_config()
+            db_type = source_config["db_type"]
+            credentials = source_config["credentials"]
+        else:
+            logger.info("User cancelled database connection retry")
+            connector.close()
+            return False
+
+    try:
+        tables = connector.get_tables()
+        logger.debug(f"Retrieved {len(tables) if tables else 0} tables from database")
+    except Exception as e:
+        logger.error(f"Table discovery failed: {str(e)}", exc_info=True)
+        QMessageBox.critical(None, "Table Discovery Failed", str(e))
+        connector.close()
+        return False
+
+    if not tables:
+        QMessageBox.critical(
+            None, "No Tables Found", "The database does not contain any tables."
+        )
+        connector.close()
+        return False
+
+    # ---- CxO mode: skip table selection, defer to query time via NLP ----
+    if is_cxo:
+        connector.close()
+        logger.info(
+            f"CxO mode: skipping table selection. {len(tables)} tables available for NLP selection at query time."
+        )
+
+        cxo_context = {
+            "source_type": "database",
+            "cxo_mode": True,
+            "db_type": db_type,
+            "credentials": credentials,
+            "all_tables": tables,
+            "tables": [],  # no tables loaded yet; filled at query time
+            "table_info": {},
+            "semantic_layer": semantic_layer,
+        }
+
+        window.data_context = cxo_context
+        window.backend.data_context = cxo_context
+
+        if window.backend.active_project:
+            creds_to_store = credentials.copy()
+            if "password" in creds_to_store:
+                creds_to_store["password"] = ""
+            window.backend.active_project.data_source = {
+                "db_type": db_type,
+                "credentials": creds_to_store,
+                "table_selection_method": "nlp",
+                "semantic_layer": semantic_layer,
+                "cxo_mode": True,
+            }
+
+        table_count = len(tables)
+        welcome_msg = (
+            f"## Connected to {db_type} database\n\n"
+            f"**{table_count}** tables available. "
+            f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+            f"Simply type your question below to get started."
+        )
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+
+    # ---- Analyst mode: normal table selection flow ----
+    selected_tables = select_tables_with_method(
+        window,
+        connector,
+        tables,
+        selection_method,
+        semantic_layer,
+    )
+    connector.close()
+
+    if selected_tables is None:
+        logger.info(
+            "User cancelled table selection, returning to data source selection"
+        )
+        return False
+
+    table_value: Any = (
+        selected_tables if len(selected_tables) > 1 else selected_tables[0]
+    )
+    source_config["table"] = table_value
+
+    data_context, status = load_data("database", source_config)
+
+    if data_context is not None:
+        logger.info("Successfully loaded database data")
+        window.data_context = data_context
+        window.backend.data_context = data_context
+
+        if window.backend.active_project:
+            creds_to_store = credentials.copy()
+            if "password" in creds_to_store:
+                creds_to_store["password"] = ""
+            window.backend.active_project.data_source = {
+                "db_type": db_type,
+                "credentials": creds_to_store,
+                "table": selected_tables,
+                "table_selection_method": selection_method,
+                "semantic_layer": semantic_layer,
+            }
+
+        welcome_msg = window.backend.format_database_welcome_message(
+            db_type, selected_tables, data_context, status
+        )
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+    else:
+        window.conversation_display.setHtml(
+            markdown_to_html(
+                f"Connected to {db_type} database, but no data loaded.\n"
+                f"{status}\nYou can still ask questions!"
+            )
+        )
+        return True
+
+
+def _load_multi_database_data(
+    window: DataWorkspaceGUI, source_config: Dict[str, Any]
+) -> bool:
+    """
+    Load data from multiple databases. Returns True if successful, False to retry.
+    """
+    from processing import load_multi_database
+
+    configs = source_config.get("connections", [])
+    logger.info(f"Loading multi-database with {len(configs)} connections")
+
+    data_context, status = load_multi_database(configs)
+    if data_context is None:
+        logger.warning(f"Multi-database load failed: {status}")
+        QMessageBox.warning(window, "Load Failed", status)
+        return False
+
+    window.data_context = data_context
+    window.backend.data_context = data_context
+    # Persist configs (passwords stripped)
+    ConfigManager.save_multi_db_config(configs)
+
+    if window.backend.active_project:
+        safe_configs = []
+        for cfg in configs:
+            safe = dict(cfg)
+            c = safe.get("credentials", {}).copy()
+            c.pop("password", None)
+            safe["credentials"] = c
+            safe_configs.append(safe)
+        window.backend.active_project.data_source = {
+            "source_type": "multi_database",
+            "connections": safe_configs,
+        }
+
+    aliases = list(data_context.get("connections", {}).keys())
+    table_count = len(data_context.get("tables", []))
+    welcome_msg = (
+        f"## Multi-Database Connected\n\n"
+        f"**{table_count}** tables loaded across "
+        f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+        f"Tables are prefixed with their database alias "
+        f"(e.g. `alias__table`). Ask your question below."
+    )
+    window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+    return True
+
+
+def _load_file_data(window: DataWorkspaceGUI, source_config: Dict[str, Any]) -> bool:
+    """
+    Load data from files. Returns True if successful, False if user wants to retry.
+    """
+    file_paths = source_config["file_paths"]
+    logger.info(f"Loading {len(file_paths)} file(s): {file_paths}")
+    data_context, welcome_msg = window.backend.load_file_data_with_ui(file_paths)
+
+    if data_context is not None:
+        window.data_context = data_context
+        if window.backend.active_project:
+            window.backend.active_project.data_source = {"file_paths": file_paths}
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        return True
+    else:
+        logger.error(f"Failed to load file data: {welcome_msg}")
+        window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+        QMessageBox.critical(window, "Data Loading Error", "Failed to load any files.")
+        return False
+
+
+def start_application():
+    """Start the AI Data Workspace application."""
+    logger.info("=" * 60)
+    logger.info("Starting AI Data Workspace application")
+    logger.info("=" * 60)
+    app = QApplication(sys.argv)
+
+    _preload_theme(app)
+
+    if not _ensure_api_configured():
+        return
+
+    _ensure_interaction_mode_configured()
+
+    result = _show_project_dialog()
+    if result is None:
+        return
+    window, _ = result
+
+    _load_project_and_chats(window)
+
+    data_already_loaded = window.backend.data_context is not None
+    logger.info(f"Data already loaded from project: {data_already_loaded}")
+
+    if data_already_loaded:
+        logger.info("Using data already loaded from project")
+        _display_loaded_project_data(window)
+    else:
+        if not _load_initial_data(window):
+            return
 
     logger.info("Displaying main application window")
     window.show()
@@ -2485,6 +4813,5 @@ def start_application():
     sys.exit(app.exec())
 
 
-"""if __name__ == "__main__":
+if __name__ == "__main__":
     start_application()
-"""

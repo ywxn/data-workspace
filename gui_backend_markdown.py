@@ -1,12 +1,13 @@
 """Backend logic for the AI Data Workspace GUI (Qt Markdown version)."""
 
 from typing import Any, Dict, List, Tuple, Optional
-import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
 import os
 import json
+import shutil
+import tempfile
 from connector import DatabaseConnector
 from processing import load_data
 from logger import get_logger
@@ -84,7 +85,7 @@ class DataWorkspaceBackend:
         self.active_project: Optional[Project] = None
         self.active_chat: Optional[ChatSession] = None
         self.projects: Dict[str, Project] = {}
-        self.loaded_dataframe: Optional[pd.DataFrame] = None
+        self.data_context: Optional[Dict[str, Any]] = None
         self.schema_metadata: Optional[Dict[str, Any]] = None
 
     @staticmethod
@@ -150,6 +151,7 @@ class DataWorkspaceBackend:
         project = self.projects[project_id]
 
         try:
+            self._persist_chart_assets(project)
             os.makedirs("projects", exist_ok=True)
             safe_title = re.sub(r"[^A-Za-z0-9_-]", "_", project.title)[:50]
             filename = f"{project_id}_{safe_title}.json"
@@ -186,6 +188,111 @@ class DataWorkspaceBackend:
         except Exception as e:
             logger.error(f"Error saving project {project_id}: {str(e)}", exc_info=True)
             return False, str(e)
+
+    @staticmethod
+    def _get_temp_chart_dir() -> str:
+        return os.path.abspath(
+            os.path.join(tempfile.gettempdir(), "ai_data_workspace_charts")
+        )
+
+    def _persist_chart_assets(self, project: Project) -> None:
+        graph_dir = os.path.abspath("graph")
+        os.makedirs(graph_dir, exist_ok=True)
+        temp_dir = self._get_temp_chart_dir()
+        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        allowed_ext = {".svg", ".png", ".jpg", ".jpeg", ".gif"}
+
+        logger.debug(f"Persisting chart assets for project: {project.project_id}")
+        for chat in project.get_all_chats():
+            for message in chat.messages:
+                content = message.get("content", "")
+                if not content:
+                    continue
+                updated = self._rewrite_chart_paths(
+                    content, pattern, temp_dir, graph_dir, allowed_ext
+                )
+                if updated != content:
+                    logger.debug(
+                        f"Chart paths rewritten in message: {message.get('role')}"
+                    )
+                    message["content"] = updated
+
+    @staticmethod
+    def _rewrite_chart_paths(
+        content: str,
+        pattern: re.Pattern,
+        temp_dir: str,
+        graph_dir: str,
+        allowed_ext: set,
+    ) -> str:
+        def replace(match: re.Match) -> str:
+            alt_text = match.group(1)
+            raw_path = match.group(2).strip().strip('"').strip("'")
+            lower = raw_path.lower()
+            if lower.startswith("http://") or lower.startswith("https://"):
+                logger.debug(f"Skipping remote URL: {raw_path}")
+                return match.group(0)
+
+            path_candidate = raw_path
+            if not os.path.isabs(path_candidate):
+                path_candidate = os.path.abspath(path_candidate)
+
+            ext = os.path.splitext(path_candidate)[1].lower()
+            if ext not in allowed_ext:
+                logger.debug(f"Unsupported file extension: {ext}")
+                return match.group(0)
+
+            if not os.path.exists(path_candidate):
+                logger.warning(f"Chart file not found: {path_candidate}")
+                return match.group(0)
+
+            try:
+                common = os.path.commonpath([path_candidate, temp_dir])
+            except ValueError:
+                common = ""
+
+            if common != temp_dir:
+                try:
+                    common_graph = os.path.commonpath([path_candidate, graph_dir])
+                except ValueError:
+                    common_graph = ""
+                if common_graph == graph_dir:
+                    rel_path = os.path.relpath(path_candidate, os.getcwd())
+                    rel_path = rel_path.replace("\\", "/")
+                    logger.debug(f"Using relative path from graph dir: {rel_path}")
+                    return f"![{alt_text}]({rel_path})"
+                logger.debug(
+                    f"Chart path outside temp/graph directories: {path_candidate}"
+                )
+                return match.group(0)
+
+            base_name = os.path.basename(path_candidate)
+            target = os.path.join(graph_dir, base_name)
+            if os.path.exists(target):
+                if os.path.getsize(target) != os.path.getsize(path_candidate):
+                    name, ext_name = os.path.splitext(base_name)
+                    counter = 1
+                    while os.path.exists(target):
+                        target = os.path.join(graph_dir, f"{name}_{counter}{ext_name}")
+                        counter += 1
+                    logger.debug(
+                        f"File exists with different size, using new name: {target}"
+                    )
+
+            try:
+                shutil.copy2(path_candidate, target)
+                logger.info(f"Chart asset copied: {path_candidate} -> {target}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to copy chart asset: {path_candidate}", exc_info=True
+                )
+                return match.group(0)
+
+            rel_path = os.path.relpath(target, os.getcwd())
+            rel_path = rel_path.replace("\\", "/")
+            return f"![{alt_text}]({rel_path})"
+
+        return pattern.sub(replace, content)
 
     def list_saved_projects(self) -> List[str]:
         """List saved project files under ./projects."""
@@ -335,25 +442,31 @@ class DataWorkspaceBackend:
 
     def validate_connection(self) -> Tuple[bool, str]:
         """Validate the current data source connection."""
-        if self.loaded_dataframe is not None:
+        if self.data_context is not None:
             return True, "Connection is valid."
         return False, "No active connection."
 
     def load_schema(self) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Load schema metadata from the connected data source."""
-        if self.loaded_dataframe is not None:
+        if self.data_context is not None:
+            table_info = self.data_context.get("table_info", {})
             schema = {
-                "columns": list(self.loaded_dataframe.columns),
-                "dtypes": self.loaded_dataframe.dtypes.astype(str).to_dict(),
+                "tables": self.data_context.get("tables", []),
+                "columns": {
+                    table: info.get("columns", []) for table, info in table_info.items()
+                },
+                "dtypes": {
+                    table: info.get("column_types", {})
+                    for table, info in table_info.items()
+                },
             }
             return True, "Schema loaded successfully.", schema
         return False, "No data loaded.", None
 
     def get_available_tables(self) -> List[str]:
         """Get list of available tables from the data source."""
-        if self.loaded_dataframe is not None:
-            name = self.loaded_dataframe.name or "table"
-            return [str(name)]
+        if self.data_context is not None:
+            return list(self.data_context.get("tables", []))
         return []
 
     # ==================== Chat Session Management ====================
@@ -463,40 +576,279 @@ class DataWorkspaceBackend:
         }
 
     def get_error_suggestions(self, error: str) -> List[str]:
-        """Get suggestions to fix an error."""
-        raise NotImplementedError()
+        """Get suggestions to fix an error based on common error patterns."""
+        error_lower = error.lower()
+        suggestions: List[str] = []
+
+        # Connection / network errors
+        if any(
+            kw in error_lower
+            for kw in [
+                "connection",
+                "connect",
+                "refused",
+                "timeout",
+                "timed out",
+                "unreachable",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Check that the database host and port are correct.",
+                    "Verify that the database server is running.",
+                    "Check your network connection and firewall settings.",
+                ]
+            )
+
+        # Authentication errors
+        if any(
+            kw in error_lower
+            for kw in [
+                "authentication",
+                "password",
+                "credentials",
+                "access denied",
+                "login",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Double-check your database username and password.",
+                    "Ensure the user has the required permissions.",
+                ]
+            )
+
+        # API key errors
+        if any(
+            kw in error_lower
+            for kw in [
+                "api key",
+                "api_key",
+                "unauthorized",
+                "401",
+                "invalid key",
+                "authentication_error",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Reconfigure your API key via File \u2192 API Settings.",
+                    "Verify your API key has not expired or been revoked.",
+                    "Check that you selected the correct AI provider.",
+                ]
+            )
+
+        # Rate limit errors
+        if any(
+            kw in error_lower
+            for kw in ["rate limit", "429", "too many requests", "quota"]
+        ):
+            suggestions.extend(
+                [
+                    "Wait a moment and try again.",
+                    "Consider upgrading your API plan for higher limits.",
+                    "Try a shorter or simpler query.",
+                ]
+            )
+
+        # SQL syntax errors
+        if any(
+            kw in error_lower
+            for kw in [
+                "syntax error",
+                "sql",
+                "no such table",
+                "no such column",
+                "unknown column",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Check that the referenced table and column names exist.",
+                    "Try rephrasing your question with different terms.",
+                    "Use the schema viewer to see available tables and columns.",
+                ]
+            )
+
+        # File-related errors
+        if any(
+            kw in error_lower
+            for kw in [
+                "file not found",
+                "no such file",
+                "permission denied",
+                "encoding",
+                "decode",
+            ]
+        ):
+            suggestions.extend(
+                [
+                    "Verify the file path is correct and the file exists.",
+                    "Ensure the file is a supported format (CSV, Excel).",
+                    "Try re-saving the file with UTF-8 encoding.",
+                ]
+            )
+
+        # Model / LLM errors
+        if any(
+            kw in error_lower
+            for kw in ["model", "llama", "llm", "context length", "token"]
+        ):
+            suggestions.extend(
+                [
+                    "Try a shorter query to reduce token usage.",
+                    "Check that your local LLM server is running (Settings \u2192 Local LLM Settings).",
+                ]
+            )
+
+        # Fallback
+        if not suggestions:
+            suggestions.extend(
+                [
+                    "Try rephrasing your question.",
+                    "Check the application logs for more details.",
+                    "Restart the application and try again.",
+                ]
+            )
+
+        return suggestions
 
     # ==================== Data Export ====================
 
     def export_results(
-        self, data: pd.DataFrame, format: str, file_path: str
+        self, data: Dict[str, Any], format: str, file_path: str
     ) -> Tuple[bool, str]:
-        """Export query results to file (CSV, Excel, JSON)."""
-        raise NotImplementedError()
+        """Export query results to file (CSV, Excel, JSON).
+
+        Args:
+            data: Dict with 'columns' (list of str) and 'rows' (list of lists)
+                  or any dict serialisable to a DataFrame.
+            format: One of 'csv', 'excel', 'json'.
+            file_path: Destination file path.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        try:
+            import pandas as pd  # local import to keep module light
+
+            # Build DataFrame from structured data or raw dict
+            if "columns" in data and "rows" in data:
+                df = pd.DataFrame(data["rows"], columns=data["columns"])
+            else:
+                df = pd.DataFrame(data)
+
+            fmt = format.lower()
+            if fmt == "csv":
+                df.to_csv(file_path, index=False)
+            elif fmt in ("excel", "xlsx"):
+                df.to_excel(file_path, index=False, engine="openpyxl")
+            elif fmt == "json":
+                df.to_json(file_path, orient="records", indent=2)
+            else:
+                return False, f"Unsupported export format: {format}"
+
+            logger.info(f"Exported results to {file_path} ({fmt})")
+            return True, f"Results exported to {file_path}"
+
+        except ImportError:
+            return False, "pandas is required for export but is not installed."
+        except Exception as e:
+            logger.error(f"Export failed: {e}")
+            return False, f"Export failed: {str(e)}"
 
     def export_chat_session(
         self, session_id: str, format: str
     ) -> Tuple[bool, str, Optional[str]]:
-        """Export chat session to file."""
-        raise NotImplementedError()
+        """Export a chat session's messages to a string.
+
+        Args:
+            session_id: ID of the chat session to export.
+            format: One of 'json', 'markdown', 'txt'.
+
+        Returns:
+            Tuple of (success, message, content_string_or_None).
+        """
+        if self.active_project is None:
+            return False, "No active project.", None
+
+        chat = self.active_project.get_chat(session_id)
+        if chat is None:
+            return False, f"Chat session '{session_id}' not found.", None
+
+        messages = chat.get_history()
+        fmt = format.lower()
+
+        try:
+            if fmt == "json":
+                content = json.dumps(
+                    {
+                        "session_id": chat.session_id,
+                        "title": chat.title,
+                        "created_at": chat.created_at.isoformat(),
+                        "messages": messages,
+                    },
+                    indent=2,
+                )
+            elif fmt in ("markdown", "md"):
+                lines = [f"# {chat.title}", ""]
+                for msg in messages:
+                    role = msg.get("role", "unknown").capitalize()
+                    body = msg.get("content", "")
+                    lines.append(f"**{role}:**\n{body}\n")
+                content = "\n".join(lines)
+            elif fmt in ("txt", "text"):
+                lines = [chat.title, "=" * len(chat.title), ""]
+                for msg in messages:
+                    role = msg.get("role", "unknown").capitalize()
+                    body = msg.get("content", "")
+                    lines.append(f"{role}:\n{body}\n")
+                content = "\n".join(lines)
+            else:
+                return False, f"Unsupported format: {format}", None
+
+            logger.info(f"Exported chat '{chat.title}' as {fmt}")
+            return True, "Chat exported successfully.", content
+
+        except Exception as e:
+            logger.error(f"Chat export failed: {e}")
+            return False, f"Export failed: {str(e)}", None
 
     # ==================== Utility Functions ====================
 
-    def get_data_preview(self, limit: int = 5) -> Optional[pd.DataFrame]:
+    def get_data_preview(self, limit: int = 5) -> Optional[Dict[str, Any]]:
         """Get preview of loaded data."""
-        if self.loaded_dataframe is not None:
-            return self.loaded_dataframe.head(limit)
-        return None
+        if self.data_context is None:
+            return None
+
+        tables = self.data_context.get("tables", [])
+        if not tables:
+            return None
+
+        primary_table = tables[0]
+        info = self.data_context.get("table_info", {}).get(primary_table, {})
+        rows = info.get("sample_rows", [])[:limit]
+        return {"table": primary_table, "rows": rows}
 
     def get_column_info(self) -> Optional[Dict[str, Any]]:
         """Get information about columns in loaded data."""
-        if self.loaded_dataframe is not None:
-            return {
-                "columns": list(self.loaded_dataframe.columns),
-                "dtypes": self.loaded_dataframe.dtypes.astype(str).to_dict(),
-                "non_null_counts": self.loaded_dataframe.count().to_dict(),
-            }
-        return None
+        if self.data_context is None:
+            return None
+
+        table_info = self.data_context.get("table_info", {})
+        return {
+            "tables": self.data_context.get("tables", []),
+            "columns": {
+                table: info.get("columns", []) for table, info in table_info.items()
+            },
+            "dtypes": {
+                table: info.get("column_types", {})
+                for table, info in table_info.items()
+            },
+            "row_counts": {
+                table: info.get("row_count", 0) for table, info in table_info.items()
+            },
+        }
 
     def clear_session(self) -> Tuple[bool, str]:
         """Clear the active chat session."""
@@ -509,119 +861,51 @@ class DataWorkspaceBackend:
 
     def load_file_data_with_ui(
         self, file_paths: List[str]
-    ) -> Tuple[Optional[pd.DataFrame], str]:
-        """Load and merge data from multiple files, returning dataframe and markdown welcome message."""
-        from processing import load_data, merge_dataframes
-
-        dataframes = []
-        file_info = []
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Load data from multiple files, returning SQL context and markdown message."""
         errors = []
 
-        for file_path in file_paths:
-            try:
-                if file_path.lower().endswith(".csv"):
-                    df, status = load_data("csv", {"file_path": file_path})
-                elif file_path.lower().endswith((".xlsx", ".xls")):
-                    df, status = load_data("excel", {"file_path": file_path})
-                else:
-                    errors.append(f"Unsupported file type: {file_path}")
-                    continue
+        try:
+            context, status = load_data("file", {"file_paths": file_paths})
+        except Exception as e:
+            context = None
+            status = str(e)
 
-                if df is not None:
-                    dataframes.append(df)
-                    file_info.append(
-                        {
-                            "name": file_path.split("/")[-1].split("\\")[-1],
-                            "rows": len(df),
-                            "columns": len(df.columns),
-                        }
-                    )
-                else:
-                    errors.append(f"Failed to load {file_path}: {status}")
-            except Exception as e:
-                errors.append(f"Error loading {file_path}: {str(e)}")
-
-        if not dataframes:
+        if context is None:
             error_detail = (
                 "\n".join([f"- {err}" for err in errors])
                 if errors
                 else "- Unknown error"
             )
-            return (
-                None,
-                f"Failed to load any files:\n{error_detail}",
-            )
+            return None, f"Failed to load any files:\n{error_detail}\n{status}"
 
-        merged_dataframe, merge_strategy = merge_dataframes(dataframes)
-        self.loaded_dataframe = merged_dataframe
+        self.data_context = context
+        welcome_msg = self.format_file_welcome_message(file_paths, context, status)
 
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
-        else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
-            )
-
-        files_detail = "\n".join(
-            [
-                f"- {info['name']}: {info['rows']} rows, {info['columns']} columns"
-                for info in file_info
-            ]
-        )
-
-        merge_info = f"**Merge Strategy:** {merge_strategy}\n" if merge_strategy else ""
-        file_word = "file" if len(file_info) == 1 else "files"
-
-        welcome_msg = self._join_markdown_blocks(
-            [
-                "### Data Loaded Successfully",
-                f"**Loaded {len(file_info)} {file_word}:**\n{files_detail}",
-                merge_info.strip(),
-                f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
-                f"**Columns:** {columns_list}",
-            ]
-        )
-
-        if errors:
-            error_detail = "\n".join([f"- {err}" for err in errors])
-            welcome_msg = self._join_markdown_blocks(
-                [welcome_msg, f"**Warnings:**\n{error_detail}"]
-            )
-
-        welcome_msg = self._join_markdown_blocks(
-            [
-                welcome_msg,
-                "Ready to analyze your data! Try asking questions like:\n"
-                "- What insights can you find in this data?\n"
-                "- Show me a summary of the data\n"
-                "- What trends are visible?",
-            ]
-        )
-
-        return merged_dataframe, welcome_msg
+        return context, welcome_msg
 
     def format_database_welcome_message(
         self,
         db_type: str,
         selected_tables: Any,
-        merged_dataframe: pd.DataFrame,
+        data_context: Dict[str, Any],
         status: str,
     ) -> str:
         """Format welcome message for database data loading with compact bullets."""
 
-        # Format columns
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
-        else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+        table_info = data_context.get("table_info", {})
+        qualified_columns: List[str] = []
+        for table, info in table_info.items():
+            qualified_columns.extend(
+                [f"{table}.{col}" for col in info.get("columns", [])]
             )
+
+        if len(qualified_columns) <= 50:
+            columns_list = ", ".join(qualified_columns)
+        else:
+            first_cols = ", ".join(qualified_columns[:30])
+            last_cols = ", ".join(qualified_columns[-20:])
+            columns_list = f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
 
         # Prepare example questions list (compact bullets)
         example_questions = [
@@ -632,32 +916,32 @@ class DataWorkspaceBackend:
         example_list = "\n".join([f"- {q}" for q in example_questions])
 
         if isinstance(selected_tables, list):
-            # Prepare table list (compact bullets)
-            tables_detail = "\n".join([f"- {table}" for table in selected_tables])
-
-            merge_info = ""
-            if "Merge strategy:" in status:
-                merge_strategy = status.split("Merge strategy:")[1].strip()
-                merge_info = f"**Merge Strategy:** {merge_strategy}"
+            tables_detail = "\n".join(
+                [
+                    f"- {table}: {table_info.get(table, {}).get('row_count', 0)} rows, "
+                    f"{len(table_info.get(table, {}).get('columns', []))} columns"
+                    for table in selected_tables
+                ]
+            )
 
             table_word = "table" if len(selected_tables) == 1 else "tables"
             welcome_msg = self._join_markdown_blocks(
                 [
                     "### Data Loaded Successfully",
                     f"**Loaded from {db_type} database ({len(selected_tables)} {table_word}):**\n\n{tables_detail}",
-                    merge_info,
-                    f"**Combined Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
                     f"**Columns:** {columns_list}",
                     f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
                 ]
             )
         else:
+            table = str(selected_tables)
+            info = table_info.get(table, {})
             welcome_msg = self._join_markdown_blocks(
                 [
                     "### Data Loaded Successfully",
                     f"**Loaded from {db_type} database**",
-                    f"**Table:** {selected_tables}",
-                    f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                    f"**Table:** {table}",
+                    f"**Rows:** {info.get('row_count', 0)}",
                     f"**Columns:** {columns_list}",
                     f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
                 ]
@@ -668,21 +952,24 @@ class DataWorkspaceBackend:
     def format_file_welcome_message(
         self,
         file_paths: List[str],
-        merged_dataframe: pd.DataFrame,
+        data_context: Dict[str, Any],
         status: str,
     ) -> str:
         """Format welcome message for file data loading with compact bullets."""
 
-        # Format columns
-        all_columns = merged_dataframe.columns.tolist()
-        if len(all_columns) <= 50:
-            columns_list = ", ".join(all_columns)
-        else:
-            first_cols = ", ".join(all_columns[:30])
-            last_cols = ", ".join(all_columns[-20:])
-            columns_list = (
-                f"{first_cols}, ... ({len(all_columns) - 50} more) ..., {last_cols}"
+        table_info = data_context.get("table_info", {})
+        qualified_columns: List[str] = []
+        for table, info in table_info.items():
+            qualified_columns.extend(
+                [f"{table}.{col}" for col in info.get("columns", [])]
             )
+
+        if len(qualified_columns) <= 50:
+            columns_list = ", ".join(qualified_columns)
+        else:
+            first_cols = ", ".join(qualified_columns[:30])
+            last_cols = ", ".join(qualified_columns[-20:])
+            columns_list = f"{first_cols}, ... ({len(qualified_columns) - 50} more) ..., {last_cols}"
 
         # Prepare example questions list (compact bullets)
         example_questions = [
@@ -692,24 +979,22 @@ class DataWorkspaceBackend:
         ]
         example_list = "\n".join([f"- {q}" for q in example_questions])
 
-        # Prepare file list (compact bullets)
         file_count = len(file_paths)
         file_word = "file" if file_count == 1 else "files"
-        files_detail = "\n".join(
-            [f"- {fp.split('/')[-1].split(chr(92))[-1]}" for fp in file_paths]
-        )
+        files_detail = "\n".join([f"- {os.path.basename(fp)}" for fp in file_paths])
 
-        merge_info = ""
-        if file_count > 1 and "Merge strategy:" in status:
-            merge_strategy = status.split("Merge strategy:")[1].strip()
-            merge_info = f"**Merge Strategy:** {merge_strategy}"
+        table_detail = "\n".join(
+            [
+                f"- {table}: {info.get('row_count', 0)} rows, {len(info.get('columns', []))} columns"
+                for table, info in table_info.items()
+            ]
+        )
 
         welcome_msg = self._join_markdown_blocks(
             [
                 "### Data Loaded Successfully",
                 f"**Loaded {file_count} {file_word}:**\n\n{files_detail}",
-                merge_info,
-                f"**Shape:** {len(merged_dataframe)} rows, {len(merged_dataframe.columns)} columns",
+                f"**Tables:**\n\n{table_detail}",
                 f"**Columns:** {columns_list}",
                 f"Ready to analyze your data! Try asking questions like:\n\n{example_list}",
             ]

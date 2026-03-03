@@ -16,8 +16,9 @@ __pycache__/
 # Ignore projects
 projects/
 
-# Ignore testing.py (contains sensitive information)
-testing.py
+# Ignore test files
+tests/
+test_outputs/
 
 # vscode
 .vscode/
@@ -30,6 +31,7 @@ testing.py
 *.cmd
 *.exe
 *.dll
+*.spec
 
 # ignore docs for now
 docs/
@@ -38,3 +40,15 @@ docs/
 # misc
 nlp_table_selector_examples.py
 run_tests.py
+
+# graphs
+graph/
+
+# ignore model files
+models/
+
+# ignore dist
+dist/
+build/
+
+bak.config.json

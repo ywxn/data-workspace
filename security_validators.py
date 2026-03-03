@@ -21,23 +21,23 @@ class SecurityRule(NamedTuple):
 FILE_OPERATION_RULES = [
     SecurityRule(
         r"\.to_csv\s*\(",
-        "DataFrame.to_csv() is forbidden - return data as string instead",
+        "CSV export is forbidden - return data as text instead",
     ),
     SecurityRule(
         r"\.to_excel\s*\(",
-        "DataFrame.to_excel() is forbidden - return data as string instead",
+        "Excel export is forbidden - return data as text instead",
     ),
     SecurityRule(
         r"\.to_json\s*\(",
-        "DataFrame.to_json() is forbidden - return data as JSON-compatible dict instead",
+        "JSON export is forbidden - return data as JSON-compatible dict instead",
     ),
     SecurityRule(
         r"\.to_parquet\s*\(",
-        "DataFrame.to_parquet() is forbidden - return data as dict instead",
+        "Parquet export is forbidden - return data as dict instead",
     ),
-    SecurityRule(r"\.to_sql\s*\(", "DataFrame.to_sql() is forbidden"),
-    SecurityRule(r"\.to_pickle\s*\(", "DataFrame.to_pickle() is forbidden"),
-    SecurityRule(r"\.to_hdf\s*\(", "DataFrame.to_hdf() is forbidden"),
+    SecurityRule(r"\.to_sql\s*\(", "SQL export helpers are forbidden"),
+    SecurityRule(r"\.to_pickle\s*\(", "Pickle export is forbidden"),
+    SecurityRule(r"\.to_hdf\s*\(", "HDF export is forbidden"),
     SecurityRule(
         r"open\s*\(", "open() for writing files is forbidden - use tempfile only"
     ),
@@ -153,14 +153,6 @@ def validate_sql_security(
         if re.search(rule.pattern, query, flags):
             return False, f"SQL security violation: {rule.message}"
 
-    if re.search(r"\bwhere\b", query, re.IGNORECASE):
-        has_string_literal = bool(re.search(r"'[^']*'", query))
-        if has_string_literal and not params:
-            return (
-                False,
-                "SQL security violation: missing parameterization for WHERE clause",
-            )
-
     return True, ""
 
 
@@ -183,10 +175,5 @@ def get_sql_security_violations(
         flags = re.IGNORECASE if rule.ignore_case else 0
         if re.search(rule.pattern, query, flags):
             violations.append(f"- {rule.message}")
-
-    if re.search(r"\bwhere\b", query, re.IGNORECASE):
-        has_string_literal = bool(re.search(r"'[^']*'", query))
-        if has_string_literal and not params:
-            violations.append("- Missing parameterization for WHERE clause")
 
     return violations

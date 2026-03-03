@@ -1,4 +1,4 @@
-"""
+﻿"""
 Application-wide constants and configuration.
 
 Centralizes constants used across modules for easier maintenance
@@ -18,125 +18,94 @@ LLM_TEMPERATURE_CODE = 0.4
 LLM_TEMPERATURE_ANALYSIS = 0.6
 
 # Note that these may not be available, so changing them may be necessary. Users should check the latest model availability from OpenAI and Anthropic.
+# TODO: Add user model selection to GUI
 LLM_MODELS = {
     "claude": "claude-3-5-sonnet-20241022",
     "openai": "gpt-4o-2024-08-06",
-}  # TODO: Add model management UI?
-
-# LLM Prompt Templates
-PLANNER_SYSTEM_PROMPT_TEMPLATE = """You are a senior data analysis planner responsible for translating a user’s question into a precise, executable analysis plan based ONLY on the provided DataFrame schema and sample.
-
-You do NOT write code. You ONLY produce a structured plan.
-
-DATAFRAME METADATA
-Columns: $columns
-Shape: $shape  # (rows, columns)
-Data types: $dtypes
-Sample rows:
-${sample}
-
-USER QUESTION
-$user_query
-
-PLANNING RULES
-- Base all reasoning ONLY on the provided columns and data types
-- NEVER assume columns or data that are not listed
-- If the question cannot be answered with available data, mark task_type="unsupported"
-- Prefer the simplest valid approach
-- Visualization is required only if it meaningfully improves interpretation
-- Code is required if computation, grouping, filtering, statistics, or plotting is needed
-- Summary-only tasks require no computation
-
-OUTPUT SCHEMA (STRICT JSON ONLY)
-{
-    "task_type": "analysis" | "visualization" | "summary" | "transformation" | "unsupported",
-    "objective": "one-sentence description of what will be computed or examined",
-    "analysis_focus": ["specific metrics, segments, or relationships to evaluate"],
-    "steps": ["ordered atomic actions referencing exact column names"],
-    "requires_code": true | false,
-    "requires_visualization": true | false,
-    "expected_result_type": "scalar" | "table" | "chart" | "text" | "unknown"
+    "local": "mistral",  # default local model name; overridden by config
 }
 
-Return ONLY valid JSON. No markdown. No commentary.
-"""
+# Local LLM defaults
+LOCAL_LLM_DEFAULT_URL = "http://localhost:11434/v1"
+LOCAL_LLM_DEFAULT_MODEL = "mistral"
+LOCAL_LLM_REQUEST_TIMEOUT = 120.0  # seconds
 
-CODE_GENERATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Python data analysis engine that generates safe, deterministic pandas and Altair code from an approved analysis plan.
+# Hosted (built-in) LLM server defaults
+HOSTED_LLM_DEFAULT_PORT = 8911
+HOSTED_LLM_DEFAULT_HOST = "127.0.0.1"
+HOSTED_LLM_CONTEXT_SIZE = 4096
+HOSTED_LLM_GPU_LAYERS = 0  # 0 = CPU-only by default; increase for GPU offload
 
-You operate in a restricted execution environment.
+# Models directory (relative to project root)
+MODELS_DIR = Path(__file__).resolve().parent / "models"
 
-DATAFRAME METADATA
-Columns: $columns
-Data types: $dtypes
-Shape: $shape
-Sample rows:
-${sample}
-
-APPROVED PLAN
-$plan
-
-EXECUTION CONTRACT
-- The DataFrame is preloaded as: df
-- NEVER modify df in-place
-- ALL outputs must be assigned to a variable named: result
-- result must match the plan’s expected_result_type when possible
-- Use only referenced columns from the schema
-- Handle nulls and type issues defensively
-- Prefer vectorized pandas operations
-- Avoid unnecessary computation or copies
-
-VISUALIZATION CONTRACT (ALTair ONLY)
-- Use Altair for ALL charts
-- Charts must be saved to a PNG file
-- Save ONLY to: tempfile.gettempdir()
-- Use: tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-- Save via: chart.save(file_path)
-- result must contain {"chart_path": path}
-
-FORMAT & READABILITY
-- Round floats to 2–4 decimals when appropriate
-- Convert timestamps to readable strings if returned
-- Sort grouped outputs for interpretability
-- Use clear column names in outputs
-
-SECURITY RULES (MANDATORY)
-- FORBIDDEN: to_csv, to_excel, to_json, to_parquet, to_sql, to_pickle with paths
-- FORBIDDEN: os.system, subprocess, eval, exec, __import__
-- FORBIDDEN: writing outside tempfile directory
-- FORBIDDEN: network or shell access
-- Assume all inputs are untrusted
-- Do not access environment variables or filesystem except tempfile
-
-FAILURE HANDLING
-If the plan cannot be executed with given data:
-    result = {"error": "reason"}
-
-OUTPUT
-Return ONLY executable Python code.
-No markdown.
-No explanations.
-"""
-
-ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """You are a clear, practical data analyst explaining results from a DataFrame analysis to non-technical stakeholders.
-
-CONTEXT
-$context
-
-Write a concise explanation that:
-
-1. Answers the user’s question directly in 1–2 sentences.
-2. Summarizes the key supporting values, comparisons, or trends from the result.
-3. Explains what the finding means in plain language and why it matters.
-4. Notes any important limitations, assumptions, or missing data if relevant.
-5. Do not mention temporary file paths.
-6. Code details can be mentioned ONLY if they aid understanding.
-
-STYLE
-- Use concrete numbers from the result
-- Do not speculate beyond provided data
-- Prefer clarity over technical jargon
-- Keep length moderate (≈120–180 words)
-"""
+# Recommended GGUF models for self-hosted inference
+HOSTED_MODEL_CATALOG = {
+    "mistral-7b-q4": {
+        "name": "Mistral 7B Instruct v0.3 (Q4_K_M)",
+        "filename": "Mistral-7B-Instruct-v0.3.Q4_K_M.gguf",
+        "url": "https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q4_K_M.gguf",
+        "size_gb": 4.4,
+        "description": "Fast and capable for data analysis tasks (recommended)",
+        "recommended": True,
+    },
+    "qwen2.5-7b-q4": {
+        "name": "Qwen 2.5 7B Instruct (Q4_K_M)",
+        "filename": "qwen2.5-7b-instruct-q4_k_m.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
+        "size_gb": 4.7,
+        "description": "Excellent at code generation and data analysis — top-tier 7B model",
+        "recommended": False,
+    },
+    "llama3.1-8b-q4": {
+        "name": "Llama 3.1 8B Instruct (Q4_K_M)",
+        "filename": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        "size_gb": 4.9,
+        "description": "Updated Llama 3 with improved reasoning and longer context",
+        "recommended": False,
+    },
+    "llama3-8b-q4": {
+        "name": "Llama 3 8B Instruct (Q4_K_M)",
+        "filename": "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        "url": "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        "size_gb": 4.9,
+        "description": "Strong general-purpose model from Meta",
+        "recommended": False,
+    },
+    "gemma2-9b-q4": {
+        "name": "Gemma 2 9B Instruct (Q4_K_M)",
+        "filename": "gemma-2-9b-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf",
+        "size_gb": 5.8,
+        "description": "Google's high-quality 9B model — strong analytical performance",
+        "recommended": False,
+    },
+    "qwen2.5-coder-7b-q4": {
+        "name": "Qwen 2.5 Coder 7B Instruct (Q4_K_M)",
+        "filename": "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        "size_gb": 4.7,
+        "description": "Specialized for code and SQL generation — great for data queries",
+        "recommended": False,
+    },
+    "phi3-mini-q4": {
+        "name": "Phi-3 Mini 4K Instruct (Q4_K_M)",
+        "filename": "Phi-3-mini-4k-instruct-q4.gguf",
+        "url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+        "size_gb": 2.4,
+        "description": "Small, fast model — ideal for low-resource machines",
+        "recommended": False,
+    },
+    "gemma2-2b-q4": {
+        "name": "Gemma 2 2B Instruct (Q4_K_M)",
+        "filename": "gemma-2-2b-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+        "size_gb": 1.6,
+        "description": "Ultra-lightweight model — fastest option for limited hardware",
+        "recommended": False,
+    },
+}
 
 
 # Database Configuration
@@ -152,12 +121,12 @@ MERGE_MAX_ESTIMATED_ROWS = 10_000_000
 MERGE_MAX_ROW_MULTIPLIER = 20
 MERGE_WARN_DUPLICATE_RATE = 0.1
 
-# DataFrame Preview
+# Result Preview
 SAMPLE_ROWS_DEFAULT = 5
 SAMPLE_ROWS_INFO = 3
 
 # File Size / Performance
-MAX_DATAFRAME_ROWS_WARNING = 1_000_000
+MAX_RESULT_ROWS_WARNING = 1_000_000
 DB_MAX_ROWS_IN_MEMORY = 200_000
 DB_READ_CHUNK_SIZE = 50_000
 
@@ -468,3 +437,18 @@ DEFAULT_ACRONYMS = {
     "prop": "property",
     "meta": "metadata",
 }
+
+NLP_PLACEHOLDER_TEXT = [
+    "Find the top 5 products by sales in the last quarter.",
+    "What is the monthly revenue trend for the past year?",
+    "Identify customer segments based on purchasing behavior.",
+    "Calculate the average order value for each region.",
+    "Which marketing channels are driving the most traffic?",
+    "Customer orders joined with payments and refunds.",
+    "Analyze the impact of discounts on sales performance.",
+    "Evaluate the effectiveness of marketing campaigns.",
+    "Assess customer satisfaction through survey responses.",
+    "Monitor inventory levels and stock movements.",
+    "Track employee performance and productivity.",
+    "Analyze financial statements and key performance indicators.",
+]
