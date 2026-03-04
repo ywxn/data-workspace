@@ -1043,11 +1043,6 @@ class AIAgent:
                     except Exception as e:
                         logger.error(f"SQL correction agent failed: {e}")
                         break
-                if query_result or "error" in query_result:
-                    logger.info(
-                        f"SQL execution failed despite corrections: {query_result['error']}"
-                    )
-                    return f"### Error\n\n{query_result['error']}\n\nPlease try rephrasing your question or check your query."
 
                 # Step 3: Generate visualization if needed
                 requires_viz = plan.get("requires_visualization", False)
