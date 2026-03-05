@@ -23,6 +23,7 @@ cx_Oracle>=8.3.0
 
 # Data Visualization
 altair>=5.0.0
+pyqtgraph>=0.13.0
 
 # Markdown/HTML Processing
 markdown>=3.4.0

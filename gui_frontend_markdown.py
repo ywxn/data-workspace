@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QGroupBox,
+    QSplitter,
 )
 from gui_backend_markdown import DataWorkspaceBackend
 from agents import AIAgent
@@ -50,6 +51,22 @@ from constants import (
     LIGHT_THEME_STYLESHEET,
 )
 from logger import get_logger
+
+# Import visualization widgets and integration helpers
+try:
+    from chart_widget import InteractiveChartWidget
+    from table_widget import InteractiveTableWidget
+    from visualization_integration import (
+        extract_visualization_data_from_response,
+        create_chart_widget_from_data,
+        create_table_widget_from_data,
+        create_widget_container,
+        should_use_interactive_widgets,
+    )
+    VISUALIZATION_WIDGETS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Visualization widgets not available: {e}")
+    VISUALIZATION_WIDGETS_AVAILABLE = False
 
 # Initialize logger for this module
 logger = get_logger(__name__)
@@ -2234,11 +2251,27 @@ class DatabaseConnectionDialog(QDialog):
         form_layout.addRow("Database Type:", self.db_type_combo)
 
         # Table selection method
+        # Disable if data already loaded to avoid confusion about which tables are actually loaded
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "NLP (semantic)"])
+        
+        # Check if data is already loaded in the parent's backend
+        data_already_loaded = False
+        if hasattr(self.parent(), 'backend') and self.parent().backend:
+            if (self.parent().backend.data_context is not None or 
+                (self.parent().backend.active_project and 
+                 self.parent().backend.active_project.data_source)):
+                data_already_loaded = True
+        
         if self.force_nlp:
             self.selection_method_combo.setCurrentIndex(1)
             self.selection_method_combo.setEnabled(False)
+        elif data_already_loaded:
+            # Disable method selection if data is already loaded
+            self.selection_method_combo.setEnabled(False)
+            method_pref = ConfigManager.get_table_selection_method()
+            if method_pref == "nlp":
+                self.selection_method_combo.setCurrentIndex(1)
         else:
             method_pref = ConfigManager.get_table_selection_method()
             if method_pref == "nlp":
@@ -3162,11 +3195,15 @@ class DataWorkspaceGUI(QMainWindow):
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Conversation area (scrollable), supports Markdown
+        # Conversation title
         conversation_title = QLabel("Conversation")
         conversation_title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
         content_layout.addWidget(conversation_title)
 
+        # Create a splitter for conversation and visualization areas
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Conversation area (scrollable), supports Markdown
         self.conversation_display = QTextEdit()
         self.conversation_display.setReadOnly(True)
         self.conversation_display.setPlaceholderText(
@@ -3175,7 +3212,34 @@ class DataWorkspaceGUI(QMainWindow):
         conversation_scroll = QScrollArea()
         conversation_scroll.setWidgetResizable(True)
         conversation_scroll.setWidget(self.conversation_display)
-        content_layout.addWidget(conversation_scroll, 1)
+        splitter.addWidget(conversation_scroll)
+
+        # Visualization container with tabs for chart and table (in splitter)
+        self.visualization_container = QTabWidget()
+        self.visualization_container.setVisible(False)  # Hidden by default
+        
+        # Chart tab
+        self.chart_container = QWidget()
+        self.chart_layout = QVBoxLayout(self.chart_container)
+        self.chart_layout.setContentsMargins(0, 0, 0, 0)
+        self.visualization_container.addTab(self.chart_container, "📊 Chart")
+        
+        # Table tab
+        self.table_container = QWidget()
+        self.table_layout = QVBoxLayout(self.table_container)
+        self.table_layout.setContentsMargins(0, 0, 0, 0)
+        self.visualization_container.addTab(self.table_container, "📋 Table")
+        
+        splitter.addWidget(self.visualization_container)
+        
+        # Now set collapsible after widgets are added
+        splitter.setCollapsible(0, True)  # Conversation can collapse
+        splitter.setCollapsible(1, True)  # Visualization can collapse
+        
+        # Set splitter sizes (conversation: 60%, visualization: 40%)
+        splitter.setSizes([600, 400])
+        
+        content_layout.addWidget(splitter, 1)
 
         # Input area at bottom
         input_section = QWidget()
@@ -3229,6 +3293,9 @@ class DataWorkspaceGUI(QMainWindow):
         # Clarification flow state
         self.pending_clarification_query: Optional[str] = None
         self.clarification_question: Optional[str] = None
+        # Widget data tracking (to be saved with project)
+        self.current_chart_data: Optional[Dict[str, Any]] = None
+        self.current_table_data: Optional[Dict[str, Any]] = None
         
         # Processing animation state
         self.animation_timer = QTimer(self)
@@ -3371,6 +3438,12 @@ class DataWorkspaceGUI(QMainWindow):
         self.chat_id = item.data(Qt.ItemDataRole.UserRole)
         logger.debug(f"Chat selected: {self.chat_id}")
         if self.chat_id:
+            # Clear visualization widgets when switching chats, but will restore them if they exist
+            self._clear_visualization_widgets()
+            # Reset current widget data
+            self.current_chart_data = None
+            self.current_table_data = None
+            
             success, _ = self.backend.load_chat_session(self.chat_id)
             if success:
                 logger.info(f"Chat session loaded: {self.chat_id}")
@@ -3384,6 +3457,10 @@ class DataWorkspaceGUI(QMainWindow):
                             "No chat history yet. Start typing to begin the conversation."
                         )
                     )
+                
+                # Restore widgets if they were previously saved for this chat
+                if self.backend.active_chat and self.backend.active_chat.widget_data:
+                    self._recreate_widgets_from_data(self.backend.active_chat.widget_data)
             else:
                 logger.warning(f"Failed to load chat session: {self.chat_id}")
                 self.conversation_display.setHtml(
@@ -3436,8 +3513,9 @@ class DataWorkspaceGUI(QMainWindow):
             role = msg.get("role", "unknown").capitalize()
             content = msg.get("content", "")
             formatted_content = self.backend.markdown_to_qt(content)
-            parts.append(f"**{role}:** {formatted_content}")
-        return "\n\n".join(parts)
+            # Format with role on separate line to preserve code block formatting
+            parts.append(f"**{role}:**\n\n{formatted_content}")
+        return "\n\n---\n\n".join(parts)
 
     def _get_current_markdown(self) -> str:
         if self.current_markdown is None:
@@ -3639,8 +3717,39 @@ class DataWorkspaceGUI(QMainWindow):
         self.submit_button.setText("Send")
 
     def display_result(self, result: str):
-        """Display query result with Markdown formatting"""
+        """Display query result with Markdown formatting and optional interactive widgets"""
         logger.info(f"Displaying query result (length: {len(result)} chars)")
+        
+        # Clear previous visualizations
+        self._clear_visualization_widgets()
+        
+        # Extract visualization data if widgets are available
+        chart_widget = None
+        table_widget = None
+        
+        if VISUALIZATION_WIDGETS_AVAILABLE and should_use_interactive_widgets():
+            try:
+                cleaned_result, chart_data, table_data = extract_visualization_data_from_response(result)
+                
+                # Store chart data for persistence
+                if chart_data:
+                    self.current_chart_data = chart_data
+                    chart_widget = create_chart_widget_from_data(chart_data)
+                    if chart_widget:
+                        logger.info("Chart widget created from response data")
+                
+                # Store table data for persistence
+                if table_data:
+                    self.current_table_data = table_data
+                    table_widget = create_table_widget_from_data(table_data)
+                    if table_widget:
+                        logger.info("Table widget created from response data")
+                
+                # Use cleaned result (without embedded data blocks)
+                result = cleaned_result
+            except Exception as e:
+                logger.warning(f"Failed to extract visualization data: {e}")
+        
         formatted_result = self.backend.markdown_to_qt(result)
 
         # Replace the "Processing..." message with the actual result
@@ -3662,8 +3771,16 @@ class DataWorkspaceGUI(QMainWindow):
         if scroll_bar:
             scroll_bar.setValue(scroll_bar.maximum())
 
-        # Add to chat history
+        # Add to chat history with optional widgets
         self.add_message_to_chat("assistant", result)
+        
+        # Update widget data in backend
+        if self.current_chart_data or self.current_table_data:
+            self.backend.update_widget_data(self.current_chart_data, self.current_table_data)
+        
+        # Display interactive widgets if available
+        if chart_widget or table_widget:
+            self._display_visualization_widgets(chart_widget, table_widget)
 
     def display_error(self, error: str):
         """Display error message with actionable suggestions"""
@@ -3687,6 +3804,101 @@ class DataWorkspaceGUI(QMainWindow):
             self._set_current_markdown(combined)
 
         self._reset_processing_state()
+
+    def _clear_visualization_widgets(self):
+        """Clear all visualization widgets from the tabs."""
+        # Clear chart tab
+        while self.chart_layout.count():
+            item = self.chart_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        
+        # Clear table tab
+        while self.table_layout.count():
+            item = self.table_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        
+        # Hide the tabs
+        self.visualization_container.setVisible(False)
+        logger.debug("Cleared visualization widgets and hidden tabs")
+
+    def _recreate_widgets_from_data(self, widget_data: Dict[str, Any]):
+        """Recreate visualization widgets from stored data."""
+        if not VISUALIZATION_WIDGETS_AVAILABLE:
+            logger.debug("Visualization widgets not available, skipping recreation")
+            return
+        
+        try:
+            chart_widget = None
+            table_widget = None
+            
+            # Recreate chart widget if data exists
+            if "chart" in widget_data:
+                chart_data = widget_data["chart"]
+                if chart_data:
+                    self.current_chart_data = chart_data
+                    chart_widget = create_chart_widget_from_data(chart_data)
+                    if chart_widget:
+                        logger.info("Chart widget recreated from stored data")
+            
+            # Recreate table widget if data exists
+            if "table" in widget_data:
+                table_data = widget_data["table"]
+                if table_data:
+                    self.current_table_data = table_data
+                    table_widget = create_table_widget_from_data(table_data)
+                    if table_widget:
+                        logger.info("Table widget recreated from stored data")
+            
+            # Display the recreated widgets
+            if chart_widget or table_widget:
+                self._display_visualization_widgets(chart_widget, table_widget)
+        except Exception as e:
+            logger.error(f"Failed to recreate widgets from stored data: {e}", exc_info=True)
+
+    def _display_visualization_widgets(self, chart_widget, table_widget):
+        """Add visualization widgets to their respective tabs."""
+        try:
+            tabs_to_show = 0
+            
+            if chart_widget:
+                # Add chart widget to chart tab
+                chart_widget.setMinimumHeight(350)
+                self.chart_layout.addWidget(chart_widget)
+                self.visualization_container.setTabEnabled(0, True)
+                tabs_to_show += 1
+            else:
+                # Disable chart tab if no chart
+                self.visualization_container.setTabEnabled(0, False)
+            
+            if table_widget:
+                # Add table widget to table tab
+                table_widget.setMinimumHeight(300)
+                self.table_layout.addWidget(table_widget)
+                self.visualization_container.setTabEnabled(1, True)
+                tabs_to_show += 1
+            else:
+                # Disable table tab if no table
+                self.visualization_container.setTabEnabled(1, False)
+            
+            # Show tabs if we have at least one visualization
+            if tabs_to_show > 0:
+                self.visualization_container.setVisible(True)
+                # Switch to chart tab by default if available
+                if chart_widget:
+                    self.visualization_container.setCurrentIndex(0)
+                else:
+                    self.visualization_container.setCurrentIndex(1)
+                logger.debug(f"Showing visualization tabs ({tabs_to_show} tabs enabled)")
+                
+                # Auto-scroll to bottom to show the widget
+                scroll_bar = self.conversation_display.verticalScrollBar()
+                if scroll_bar:
+                    scroll_bar.setValue(scroll_bar.maximum())
+                logger.debug("Auto-scrolled to bottom after displaying widgets")
+        except Exception as e:
+            logger.error(f"Failed to display visualization widgets: {e}", exc_info=True)
 
     def handle_clarification(self, clarification_question: str):
         """Handle clarification request from agent"""
@@ -3728,6 +3940,7 @@ class DataWorkspaceGUI(QMainWindow):
         """Clear conversation"""
         logger.debug(f"Clearing chat fields for chat_id: {self.chat_id}")
         self.conversation_display.clear()
+        self._clear_visualization_widgets()
         self.query_input.clear()
         self.backend.clear_session()
         logger.info("Chat fields cleared successfully")
@@ -3903,6 +4116,8 @@ class DataWorkspaceGUI(QMainWindow):
                     if self.project_id is not None:
                         self.backend.load_project(self.project_id)
                         if self.backend.active_project:
+                            # Refresh chat list before displaying to ensure UI is updated
+                            self.refresh_project_list()
                             chats = self.backend.active_project.get_all_chats()
                             if chats:
                                 self.chat_id = chats[0].session_id
@@ -3920,17 +4135,22 @@ class DataWorkspaceGUI(QMainWindow):
                                         self.conversation_display.setHtml(
                                             markdown_to_html(chat_history)
                                         )
+                                        # Store the markdown for state tracking
+                                        self.current_markdown = chat_history
                                     else:
+                                        no_history_msg = "No chat history yet. Start typing to begin the conversation."
                                         self.conversation_display.setHtml(
-                                            markdown_to_html(
-                                                "No chat history yet. Start typing to begin the conversation."
-                                            )
+                                            markdown_to_html(no_history_msg)
                                         )
-
-                    self.refresh_project_list()
-                    # Select the first chat in the list
-                    if self.chat_list.count() > 0:
-                        self.chat_list.setCurrentRow(0)
+                                        self.current_markdown = no_history_msg
+                                    
+                                    # Select the first chat in the list
+                                    if self.chat_list.count() > 0:
+                                        self.chat_list.setCurrentRow(0)
+                                        # Restore widgets if they were saved for this chat
+                                        if self.backend.active_chat and self.backend.active_chat.widget_data:
+                                            self._recreate_widgets_from_data(self.backend.active_chat.widget_data)
+                    
                     logger.info("Project creation successful, UI refreshed")
                     QMessageBox.information(
                         self, "New Project", "Project created successfully."
@@ -3967,26 +4187,38 @@ class DataWorkspaceGUI(QMainWindow):
                             logger.debug(
                                 f"Loaded {len(chats)} chat(s), active chat: {self.chat_id}"
                             )
-                            # Load the first chat session and display its history
+                            # Load the first chat session
                             success, _ = self.backend.load_chat_session(self.chat_id)
                             if success:
+                                # Refresh chat list before displaying to ensure UI is updated
+                                self.refresh_project_list()
                                 history = self.backend.get_chat_history()
                                 if history:
                                     chat_history = self._format_chat_history(history)
                                     self.conversation_display.setHtml(
                                         markdown_to_html(chat_history)
                                     )
+                                    # Store the markdown for state tracking
+                                    self.current_markdown = chat_history
                                 else:
+                                    no_history_msg = "No chat history yet. Start typing to begin the conversation."
                                     self.conversation_display.setHtml(
-                                        markdown_to_html(
-                                            "No chat history yet. Start typing to begin the conversation."
-                                        )
+                                        markdown_to_html(no_history_msg)
                                     )
-
-                self.refresh_project_list()
-                # Select the first chat in the list
-                if self.chat_list.count() > 0:
-                    self.chat_list.setCurrentRow(0)
+                                    self.current_markdown = no_history_msg
+                                
+                                # Select the first chat in the list
+                                if self.chat_list.count() > 0:
+                                    self.chat_list.setCurrentRow(0)
+                                    # Restore widgets if they were saved for this chat
+                                    if self.backend.active_chat and self.backend.active_chat.widget_data:
+                                        self._recreate_widgets_from_data(self.backend.active_chat.widget_data)
+                            else:
+                                self.refresh_project_list()
+                                logger.warning(f"Failed to load first chat: {self.chat_id}")
+                        else:
+                            self.refresh_project_list()
+                    
                 logger.info("Project load successful, UI refreshed")
             else:
                 logger.info("User cancelled project load")

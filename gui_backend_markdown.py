@@ -25,6 +25,7 @@ class ChatSession:
     created_at: datetime
     messages: List[Dict[str, str]]
     data_source: Optional[Dict[str, Any]] = None
+    widget_data: Optional[Dict[str, Any]] = None  # Store chart and table widget data
 
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the session."""
@@ -170,6 +171,7 @@ class DataWorkspaceBackend:
                         "created_at": chat.created_at.isoformat(),
                         "messages": chat.messages,
                         "data_source": chat.data_source,
+                        "widget_data": chat.widget_data,
                     }
                 )
 
@@ -379,6 +381,7 @@ class DataWorkspaceBackend:
                     ),
                     messages=chat_data.get("messages", []),
                     data_source=chat_data.get("data_source"),
+                    widget_data=chat_data.get("widget_data"),
                 )
                 project.add_chat(chat)
 
@@ -568,6 +571,21 @@ class DataWorkspaceBackend:
             return False, "No active chat session."
         self.active_chat.add_message(role, content)
         return True, "Message added successfully."
+
+    def update_widget_data(self, chart_data: Optional[Dict[str, Any]] = None, table_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+        """Update widget data for the active chat session."""
+        if self.active_chat is None:
+            return False, "No active chat session."
+        
+        if self.active_chat.widget_data is None:
+            self.active_chat.widget_data = {}
+        
+        if chart_data is not None:
+            self.active_chat.widget_data["chart"] = chart_data
+        if table_data is not None:
+            self.active_chat.widget_data["table"] = table_data
+        
+        return True, "Widget data updated successfully."
 
     def get_last_n_messages(self, n: int = 10) -> List[Dict[str, str]]:
         """Get the last n messages from active session."""

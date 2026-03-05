@@ -943,15 +943,17 @@ class AIAgent:
         stream: bool = False,
     ) -> Optional[str]:
         """
-        Visualization agent that generates Altair charts from query results.
+        Visualization agent that generates interactive charts and tables from query results.
+        Uses new PyQtGraph-based interactive visualizations with fallback to Altair.
 
         Args:
             query_result: Dictionary with 'columns' and 'rows' from SQL execution
             plan: Execution plan with visualization requirements
             user_query: Original user query for context
+            stream: Whether to stream the response
 
         Returns:
-            Path to saved chart image, or None if visualization fails
+            Formatted response with [[CHART_DATA]] blocks for GUI integration, or None if visualization fails
         """
         if "error" in query_result:
             logger.warning("Cannot visualize error result")
@@ -964,6 +966,67 @@ class AIAgent:
             logger.warning("Cannot visualize empty result set")
             return None
 
+        # Convert to list of dictionaries and DataFrame
+        data_records = self._normalize_sql_rows(rows, columns)
+        df = pd.DataFrame(data_records)
+
+        # Sanitize DataFrame types for JSON serialization
+        df = self._sanitize_dataframe_for_json(df)
+
+        logger.info("Generating interactive visualization data...")
+        try:
+            # Generate visualization data in new interactive format
+            viz_data = self._generate_visualization_data(df, user_query)
+            
+            # Build response with data blocks for GUI
+            response_parts = []
+            
+            # Add chart data block if available
+            if viz_data.get('interactive_data'):
+                chart_data = viz_data['interactive_data']
+                chart_json = json.dumps(chart_data, default=str)
+                response_parts.append(f"[[CHART_DATA_START]]\n{chart_json}\n[[CHART_DATA_END]]")
+            
+            # Add table data block if available (for large result sets)
+            if len(df) > 10:  # Only show table for substantial result sets
+                table_data = {
+                    'headers': list(df.columns),
+                    'rows': df.values.tolist(),
+                    'row_count': len(df)
+                }
+                table_json = json.dumps(table_data, default=str)
+                response_parts.append(f"[[TABLE_DATA_START]]\n{table_json}\n[[TABLE_DATA_END]]")
+            
+            # Add natural language description
+            viz_type = viz_data['interactive_data'].get('type', 'chart')
+            title = viz_data['interactive_data'].get('title', 'Data Visualization')
+            num_series = len(viz_data['interactive_data'].get('series', []))
+            
+            # Note: Response includes CHART_DATA and TABLE_DATA blocks for GUI extraction
+            # GUI will handle widget creation and display from these blocks
+            response = "\n\n".join(response_parts)
+            logger.info("Visualization data generated successfully")
+            return response
+
+        except Exception as e:
+            logger.error(f"Visualization generation failed: {str(e)}", exc_info=True)
+            # Fallback to old method
+            return await self._visualization_agent_legacy(query_result, plan, user_query, stream)
+
+    async def _visualization_agent_legacy(
+        self,
+        query_result: Dict[str, Any],
+        plan: Dict[str, Any],
+        user_query: str,
+        stream: bool = False,
+    ) -> Optional[str]:
+        """
+        Legacy visualization agent using Altair for backward compatibility.
+        Falls back to this method if new interactive visualization generation fails.
+        """
+        columns = query_result.get("columns", [])
+        rows = query_result.get("rows", [])
+        
         # Convert to list of dictionaries and DataFrame for Altair
         data_records = self._normalize_sql_rows(rows, columns)
         df = pd.DataFrame(data_records)
@@ -991,7 +1054,7 @@ class AIAgent:
             {"role": "user", "content": f"Generate visualization for: {user_query}"},
         ]
 
-        logger.info("Calling visualization agent...")
+        logger.info("Calling legacy Altair visualization agent...")
         try:
             viz_code = await self._call_llm(
                 messages,
@@ -1008,7 +1071,7 @@ class AIAgent:
             return chart_path
 
         except Exception as e:
-            logger.error(f"Visualization generation failed: {str(e)}", exc_info=True)
+            logger.error(f"Legacy visualization generation failed: {str(e)}", exc_info=True)
             return None
 
     def _execute_visualization_code(
@@ -1061,6 +1124,211 @@ class AIAgent:
                 f"Failed to execute visualization code: {str(e)}", exc_info=True
             )
             return None
+
+    def _generate_visualization_data(
+        self, query_result: pd.DataFrame, prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Generate visualization data in both Altair spec (legacy) and PyQtGraph-ready format.
+
+        This method supports backward compatibility with Altair while providing
+        new interactive PyQtGraph-ready data structure for enhanced interactivity.
+
+        Args:
+            query_result: pandas DataFrame with query results
+            prompt: User's visualization request
+
+        Returns:
+            Dictionary with both legacy and new formats:
+            {
+                'altair_spec': {...},  # Legacy Altair spec for backward compatibility
+                'interactive_data': {...},  # PyQtGraph-ready data structure
+                'raw_data': [...]  # Raw data for table widget
+            }
+        """
+        try:
+            # Generate legacy Altair spec (existing behavior)
+            columns = list(query_result.columns)
+            sample_rows = (
+                query_result.head(5).to_dict(orient="records")
+                if not query_result.empty
+                else []
+            )
+
+            requirements = f"{prompt}\n\nDataFrame shape: {query_result.shape}"
+            system_message = Template(VISUALIZATION_SYSTEM_PROMPT_TEMPLATE).substitute(
+                columns=columns,
+                sample_rows=sample_rows,
+                requirements=requirements,
+            )
+
+            # Build PyQtGraph-ready data structure
+            pyqtgraph_data: Dict[str, Any] = {
+                "type": self._detect_chart_type_from_prompt(prompt, query_result),
+                "title": self._extract_chart_title_from_prompt(prompt),
+                "x_label": columns[0] if columns else "Index",
+                "y_label": columns[1] if len(columns) > 1 else "Value",
+                "series": [],
+            }
+
+            # Convert DataFrame to series data for PyQtGraph
+            if len(columns) >= 2:
+                # Multi-column: create series for each numeric column
+                numeric_cols = query_result.select_dtypes(
+                    include=["number"]
+                ).columns.tolist()
+
+                if numeric_cols:
+                    # Use first column as X, rest as Y series
+                    x_col = columns[0]
+                    x_data_raw = query_result[x_col].tolist()
+                    
+                    # Convert X data to numeric if it's datetime or string
+                    x_data = self._convert_x_data_to_numeric(x_data_raw)
+                    # Keep original labels for axis display
+                    x_labels = [str(val) for val in x_data_raw]
+
+                    for idx, y_col in enumerate(numeric_cols[:5]):  # Limit to 5 series
+                        y_data = query_result[y_col].tolist()
+                        pyqtgraph_data["series"].append(
+                            {
+                                "name": y_col,
+                                "x": x_data,
+                                "y": y_data,
+                                "color": self.DEFAULT_COLORS[
+                                    idx % len(self.DEFAULT_COLORS)
+                                ]
+                                if hasattr(self, "DEFAULT_COLORS")
+                                else ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"][
+                                    idx % 4
+                                ],
+                            }
+                        )
+                else:
+                    # No numeric columns; create a simple series from first two columns
+                    x_data_raw = query_result[columns[0]].tolist()
+                    x_data = self._convert_x_data_to_numeric(x_data_raw)
+                    y_data = query_result[columns[1]].tolist()
+                    pyqtgraph_data["series"].append(
+                        {
+                            "name": columns[1],
+                            "x": x_data,
+                            "y": y_data,
+                            "color": "#1f77b4",
+                        }
+                    )
+            elif len(columns) == 1:
+                # Single column: create indexed Y series
+                y_data = query_result[columns[0]].tolist()
+                pyqtgraph_data["series"].append(
+                    {
+                        "name": columns[0],
+                        "x": list(range(len(y_data))),
+                        "y": y_data,
+                        "color": "#1f77b4",
+                    }
+                )
+
+            return {
+                "interactive_data": pyqtgraph_data,
+                "raw_data": query_result.to_dict("records"),
+            }
+
+        except Exception as e:
+            logger.error(
+                f"Failed to generate visualization data: {str(e)}", exc_info=True
+            )
+            return {
+                "interactive_data": {"type": "error", "series": []},
+                "raw_data": [],
+            }
+
+    @staticmethod
+    def _convert_x_data_to_numeric(x_data: list) -> list:
+        """
+        Convert X-axis data to numeric values for PyQtGraph rendering.
+        
+        Handles datetime, string, and numeric data by converting to numeric indices.
+        
+        Args:
+            x_data: List of X-axis values (can be datetime, string, or numeric)
+            
+        Returns:
+            List of numeric values suitable for PyQtGraph plotting
+        """
+        if not x_data:
+            return []
+        
+        # Check if already numeric
+        try:
+            numeric_data = [float(val) for val in x_data]
+            return numeric_data
+        except (ValueError, TypeError):
+            # Not purely numeric, convert to indices
+            # This handles datetime strings and other non-numeric values
+            return list(range(len(x_data)))
+
+    @staticmethod
+    def _detect_chart_type_from_prompt(prompt: str, df: pd.DataFrame) -> str:
+        """
+        Detect appropriate chart type from user prompt and data shape.
+
+        Args:
+            prompt: User's visualization request
+            df: DataFrame being visualized
+
+        Returns:
+            Chart type: 'line', 'bar', 'scatter', 'area', or 'multi-series'
+        """
+        prompt_lower = prompt.lower()
+
+        # Check for explicit chart type requests
+        if any(word in prompt_lower for word in ["scatter", "point", "cloud"]):
+            return "scatter"
+        elif any(word in prompt_lower for word in ["bar", "column"]):
+            return "bar"
+        elif any(word in prompt_lower for word in ["area", "filled"]):
+            return "area"
+        elif any(word in prompt_lower for word in ["line", "trend", "over time"]):
+            return "line"
+
+        # Heuristics based on data characteristics
+        if len(df) > 100:
+            return "line"  # Many points better visualized as line
+        elif len(df.select_dtypes(include=["number"]).columns) > 2:
+            return "multi-series"
+        else:
+            return "line"  # Default to line
+
+    @staticmethod
+    def _extract_chart_title_from_prompt(prompt: str) -> str:
+        """
+        Extract or generate a chart title from user prompt.
+
+        Args:
+            prompt: User's visualization request
+
+        Returns:
+            Chart title string
+        """
+        # Try to extract title from prompt
+        # Look for common patterns like "Chart of X" or "X over time"
+        import re
+
+        patterns = [
+            r"chart (?:of |for )?(.+?)(?:\s+(?:over|by|grouped|colored)|\?|$)",
+            r"visualiz(?:e|ation) (?:of |for )?(.+?)(?:\?|$)",
+            r"plot (?:of |for )?(.+?)(?:\?|$)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, prompt, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+
+        # Fallback: use first N words of prompt as title
+        words = prompt.split()[:5]
+        return " ".join(words).rstrip("?")
 
     async def analysis_agent(
         self,
@@ -1308,8 +1576,11 @@ class AIAgent:
                     chart_path = await self.visualization_agent(
                         query_result, plan, user_query, stream=True
                     )
+                else:
+                    chart_path = None
             else:
                 logger.info("SQL generation not required")
+                chart_path = None
 
             # Step 4: Get analysis
             if status_callback:
@@ -1338,9 +1609,16 @@ class AIAgent:
             
             response = None
             if mode == "cxo":
-                response = self._format_cxo_response(analysis, chart_path)
+                response = self._format_cxo_response(analysis, None)
+            elif chart_path:
+                # If visualization was generated, combine it with analysis
+                response = chart_path
+                if analysis:
+                    # Append analysis after visualization data blocks
+                    response = f"{response}\n\n### Analysis:\n{analysis}"
             else:
-                response = self._format_response(query_result, analysis, chart_path)
+                # No visualization, format with analysis only
+                response = self._format_response(query_result, analysis, None)
             
             # Store in memory service if available
             if self.memory_service:
