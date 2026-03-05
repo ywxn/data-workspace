@@ -151,26 +151,26 @@ This prevents:
 
 ### Rollout Boundaries and Success Criteria
 
-**Stage 1 (Current):**
+**Stage 1 (Finished):** Core architecture and configuration contracts established
 - ✅ Architecture contracts documented
 - ✅ Config schema extended for retention and model settings
 
-**Stage 2 (Next):**
+**Stage 2 (Finished):** Model selection system fully implemented and tested
 - ✅ Model selection persists and is used at runtime
 - ✅ Precedence rule enforced correctly in all code paths
 
-**Stage 3 (Next):**
+**Stage 3 (Finished):** Clarification flow implemented and tested
 - ✅ Ambiguous requests trigger clarification (not all requests)
 - ✅ Clarifications do not break chat flow or lose context
 
-**Stage 4 (Future):**
+**Stage 4 (Next):** Memory system fully implemented and integrated
 - Repeated prompts produce memory cache hits
 - Retention policies prune correctly without data loss
 
-**Stage 5 (Future):**
+**Stage 5 (Future):** Enhanced visualization features
 - Interactive tables/graphs function without breaking static render/export
 
-**Stage 6 (Future):**
+**Stage 6 (Future):** Full refactor for separation of concerns
 - No functional regressions in query generation, execution, or analysis
 - Separation of concerns improves testability and maintainability
 
