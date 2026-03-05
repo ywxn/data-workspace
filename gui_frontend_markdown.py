@@ -2235,7 +2235,13 @@ class DatabaseConnectionDialog(QDialog):
 
         # Table selection method
         self.selection_method_combo = QComboBox()
-        self.selection_method_combo.addItems(["Manual", "NLP (semantic)"])
+        self.selection_method_combo.addItems(["Manual", "Filter (slow)"])
+        
+        data_already_loaded = False
+        if hasattr(self.parent(), 'backend') and self.parent().backend:
+            if (self.parent().backend.data_context is not None or (self.parent().backend.active_project and self.parent().backend.active_project.data_source)):
+                data_already_loaded = True
+
         if self.force_nlp:
             self.selection_method_combo.setCurrentIndex(1)
             self.selection_method_combo.setEnabled(False)
@@ -2246,8 +2252,9 @@ class DatabaseConnectionDialog(QDialog):
         self.selection_method_combo.currentTextChanged.connect(
             self.on_selection_method_changed
         )
-        self.selection_method_row_label = QLabel("Table Selection:")
-        form_layout.addRow(self.selection_method_row_label, self.selection_method_combo)
+        if not data_already_loaded:
+            self.selection_method_row_label = QLabel("Table Selection:")
+            form_layout.addRow(self.selection_method_row_label, self.selection_method_combo)
 
         # In CxO / force_nlp mode, hide the table selection row entirely
         if self.force_nlp:
