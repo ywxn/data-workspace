@@ -9,7 +9,7 @@ import json
 import os
 import tempfile
 from string import Template
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -23,6 +23,7 @@ from config import ConfigManager
 from connector import DatabaseConnector
 from logger import get_logger
 from security_validators import validate_sql_security
+from memory.query_memory import UnifiedMemoryService
 from constants import (
     LLM_MAX_TOKENS_DEFAULT,
     LLM_MAX_TOKENS_CODE,
@@ -307,13 +308,15 @@ class AIAgent:
     - Analyzer: Provides human-readable insights
     """
 
-    def __init__(self, api_provider: Optional[str] = None):
+    def __init__(self, api_provider: Optional[str] = None, session_model: Optional[str] = None):
         """
         Initialize the AI Agent.
 
         Args:
             api_provider: Which LLM provider to use ('openai' or 'claude').
                          If None, uses DEFAULT_API from config.
+            session_model: Optional model override for this session.
+                          Takes precedence over provider defaults.
 
         Raises:
             ValueError: If provider is unknown or API key is not configured
@@ -323,8 +326,16 @@ class AIAgent:
         # Determine provider at initialization time (read default lazily)
         chosen_default = ConfigManager.get_default_api()
         self.api_provider = (api_provider or chosen_default).lower()
+        
+        # Store session model override
+        self.session_model = session_model
+        
+        # Initialize unified memory service (will be set per project)
+        self.memory_service: Optional[UnifiedMemoryService] = None
 
         logger.info(f"Initializing AIAgent with provider: {self.api_provider}")
+        if session_model:
+            logger.info(f"Session model override: {session_model}")
 
         # Read API keys lazily from config or environment
         openai_key = ConfigManager.get_api_key("openai") or os.getenv(
@@ -419,11 +430,43 @@ class AIAgent:
         # Ensure temp directory exists
         Path(VISUALIZATION_TEMP_DIR).mkdir(exist_ok=True)
 
+    def _resolve_model(self) -> str:
+        """
+        Resolve the model ID using three-tier precedence.
+
+        Precedence order:
+        1. Session override (set at agent initialization)
+        2. Provider default (from config.json model_defaults)
+        3. System fallback (from constants.py LLM_MODELS)
+
+        Returns:
+            Resolved model ID string
+        """
+        # Tier 1: Session override
+        if self.session_model:
+            logger.debug(f"Using session model override: {self.session_model}")
+            return self.session_model
+        
+        # Tier 2: Provider default from config
+        model_defaults = ConfigManager.get_model_defaults()
+        provider_default = model_defaults.get(self.api_provider)
+        if provider_default:
+            logger.debug(f"Using provider default for {self.api_provider}: {provider_default}")
+            return provider_default
+        
+        # Tier 3: System fallback
+        from constants import LLM_MODELS
+        fallback = LLM_MODELS.get(self.api_provider, "")
+        logger.debug(f"Using system fallback for {self.api_provider}: {fallback}")
+        return fallback
+
     async def _call_llm(
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
+        stream: bool = False,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         """
         Unified LLM call interface that works with both OpenAI and Claude.
@@ -441,10 +484,20 @@ class AIAgent:
         """
         try:
             if self.api_provider == "claude":
-                return self._call_claude(messages, max_tokens, temperature)
+                response = self._call_claude(messages, max_tokens, temperature)
+                if stream_callback:
+                    stream_callback(response)
+                return response
             elif self.api_provider == "local":
-                return await self._call_local(messages, max_tokens, temperature)
+                response = await self._call_local(messages, max_tokens, temperature)
+                if stream_callback:
+                    stream_callback(response)
+                return response
             else:  # openai
+                if stream:
+                    return await self._call_openai_stream(
+                        messages, max_tokens, temperature, stream_callback
+                    )
                 return await self._call_openai(messages, max_tokens, temperature)
         except Exception as e:
             logger.error(f"LLM call failed: {str(e)}")
@@ -463,8 +516,9 @@ class AIAgent:
             if m["role"] != "system"
         ]
 
+        model_id = self._resolve_model()
         response = self.client.messages.create(
-            model=CLAUDE_MODEL,
+            model=model_id,
             max_tokens=max_tokens,
             temperature=temperature,
             system=system_message,
@@ -476,13 +530,44 @@ class AIAgent:
         self, messages: List[Dict[str, str]], max_tokens: int, temperature: float
     ) -> str:
         """Call OpenAI API asynchronously."""
+        model_id = self._resolve_model()
         response = await self.client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=model_id,
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
         )
         return response.choices[0].message.content or ""
+
+    async def _call_openai_stream(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        """Call OpenAI API with streaming and return full text."""
+        model_id = self._resolve_model()
+        response = await self.client.chat.completions.create(
+            model=model_id,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+
+        full_text = ""
+        async for event in response:
+            if not event.choices:
+                continue
+            delta = event.choices[0].delta
+            chunk = getattr(delta, "content", None)
+            if chunk:
+                full_text += chunk
+                if stream_callback:
+                    stream_callback(chunk)
+
+        return full_text
 
     async def _call_local(
         self, messages: List[Dict[str, str]], max_tokens: int, temperature: float
@@ -616,8 +701,93 @@ class AIAgent:
             temperature=LLM_TEMPERATURE_DEFAULT,
         )
 
+    async def clarification_detector(
+        self,
+        user_query: str,
+        context: Dict[str, Any],
+        semantic_layer: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Detect if the user query contains ambiguous business meaning that
+        would require guessing.
+
+        Returns a clarification question if ambiguity is detected, None otherwise.
+
+        Args:
+            user_query: The user's data analysis question
+            context: SQL context with schema metadata
+            semantic_layer: Optional semantic layer for business context
+
+        Returns:
+            Clarification question string, or None if no clarification needed
+        """
+        # Check if clarification is enabled in config
+        if not ConfigManager.get_clarification_enabled():
+            logger.debug("Clarification flow disabled in config")
+            return None
+
+        schema_metadata = self._build_schema_metadata(context)
+        
+        # Build semantic context
+        entity_names = []
+        glossary_terms = {}
+        if semantic_layer:
+            entity_names = [
+                e.get("business_name", e["name"])
+                for e in semantic_layer.get("entities", [])
+            ]
+            glossary_terms = semantic_layer.get("term_glossary") or {}
+
+        # Construct detection prompt
+        system_message = (
+            "You are an expert at detecting ambiguity in data analysis questions.\n\n"
+            "Your task: Determine if the user's question contains ambiguous business terms, "
+            "unclear ID codes, or references that cannot be resolved from the provided schema and glossary.\n\n"
+            "SCHEMA CONTEXT:\n"
+            f"Tables: {schema_metadata['tables']}\n"
+            f"Columns: {schema_metadata['columns_by_table']}\n"
+            f"Sample data:\n{schema_metadata['sample_rows']}\n\n"
+            f"Business entities: {entity_names}\n"
+            f"Term glossary: {list(glossary_terms.keys())}\n\n"
+            "DETECTION RULES:\n"
+            "- If the question references specific IDs, codes, or categories not visible in sample data, flag as ambiguous\n"
+            "- If the question uses business terms not in entities or glossary, flag as ambiguous\n"
+            "- If column relationships are unclear and would require assumptions, flag as ambiguous\n"
+            "- If the question is answerable with available schema/glossary, do NOT flag\n\n"
+            "OUTPUT FORMAT:\n"
+            "If ambiguous: output ONLY a single clarifying question that would resolve the ambiguity.\n"
+            "If clear: output ONLY the word 'CLEAR'.\n\n"
+            "Be conservative: only ask when you would genuinely need to GUESS unknown business meaning."
+        )
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"Question: {user_query}"},
+        ]
+
+        logger.info("Checking for ambiguity in user query...")
+        response = await self._call_llm(
+            messages,
+            max_tokens=300,
+            temperature=0.2,  # Low temperature for consistent detection
+        )
+
+        response = response.strip()
+        
+        # If response is "CLEAR" or similar, no clarification needed
+        if response.upper().startswith("CLEAR"):
+            logger.info("No ambiguity detected - proceeding with query")
+            return None
+        
+        # Otherwise, return the clarification question
+        logger.info(f"Ambiguity detected - clarification needed: {response}")
+        return response
+
     async def planner_agent(
-        self, user_query: str, context: Dict[str, Any]
+        self,
+        user_query: str,
+        context: Dict[str, Any],
+        stream: bool = False,
     ) -> Dict[str, Any]:
         """
         Planner agent that breaks down user queries into actionable steps.
@@ -650,7 +820,10 @@ class AIAgent:
 
         logger.info("Calling planner agent...")
         raw_plan_response = await self._call_llm(
-            messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE
+            messages,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            temperature=DEFAULT_TEMPERATURE,
+            stream=stream,
         )
 
         return self._parse_json_response(
@@ -666,7 +839,11 @@ class AIAgent:
         )
 
     async def sql_generation_agent(
-        self, plan: Dict[str, Any], user_query: str, context: Dict[str, Any]
+        self,
+        plan: Dict[str, Any],
+        user_query: str,
+        context: Dict[str, Any],
+        stream: bool = False,
     ) -> str:
         """
         SQL generation agent that creates executable SQL.
@@ -701,6 +878,7 @@ class AIAgent:
             messages,
             max_tokens=CODE_GENERATION_MAX_TOKENS,
             temperature=CODE_GENERATION_TEMPERATURE,
+            stream=stream,
         )
 
         logger.info(f"Generated SQL: {generated_sql}")
@@ -712,6 +890,7 @@ class AIAgent:
         failed_sql: str,
         error_message: str,
         context: Dict[str, Any],
+        stream: bool = False,
     ) -> str:
         """
         SQL correction agent that fixes a failed SQL query based on the error.
@@ -750,6 +929,7 @@ class AIAgent:
             messages,
             max_tokens=CODE_GENERATION_MAX_TOKENS,
             temperature=CODE_GENERATION_TEMPERATURE,
+            stream=stream,
         )
 
         logger.info(f"Corrected SQL: {corrected_sql}")
@@ -760,6 +940,7 @@ class AIAgent:
         query_result: Dict[str, Any],
         plan: Dict[str, Any],
         user_query: str,
+        stream: bool = False,
     ) -> Optional[str]:
         """
         Visualization agent that generates Altair charts from query results.
@@ -816,6 +997,7 @@ class AIAgent:
                 messages,
                 max_tokens=VISUALIZATION_MAX_TOKENS,
                 temperature=VISUALIZATION_TEMPERATURE,
+                stream=stream,
             )
 
             # Clean code output
@@ -886,6 +1068,7 @@ class AIAgent:
         context: Dict[str, Any],
         plan: Optional[Dict[str, Any]] = None,
         code_output: Optional[Any] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         """
         Analysis agent that provides insights and interprets results.
@@ -966,7 +1149,11 @@ class AIAgent:
 
         logger.info("Calling analysis agent...")
         analysis = await self._call_llm(
-            messages, max_tokens=ANALYSIS_MAX_TOKENS, temperature=ANALYSIS_TEMPERATURE
+            messages,
+            max_tokens=ANALYSIS_MAX_TOKENS,
+            temperature=ANALYSIS_TEMPERATURE,
+            stream=True,
+            stream_callback=stream_callback,
         )
         analysis = analysis.strip()
 
@@ -976,7 +1163,37 @@ class AIAgent:
 
         return analysis
 
-    async def execute_query(self, user_query: str, context: Dict[str, Any]) -> str:
+    def set_project_context(self, project_id: Optional[str] = None) -> None:
+        """
+        Set the project context for memory service.
+        
+        Args:
+            project_id: Project identifier for scoping query memory
+        """
+        if project_id:
+            # Load memory retention config
+            config = ConfigManager.load_config()
+            retention_config = config.get("memory_retention", {})
+            
+            self.memory_service = UnifiedMemoryService(
+                project_id=project_id,
+                retention_policy=retention_config.get("policy", "keep_all"),
+                rolling_n=retention_config.get("rolling_n", 100),
+                ttl_days=retention_config.get("ttl_days", 90),
+                global_index_enabled=True
+            )
+            logger.info(f"Memory service initialized for project: {project_id}")
+        else:
+            self.memory_service = None
+            logger.info("Memory service disabled (no project context)")
+
+    async def execute_query(
+        self,
+        user_query: str,
+        context: Dict[str, Any],
+        status_callback: Optional[Callable[[str], None]] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         """
         Main orchestration method that coordinates all agents.
 
@@ -987,18 +1204,44 @@ class AIAgent:
             context: SQL context with schema metadata
 
         Returns:
-            Formatted response with results and analysis
+            Formatted response with results and analysis, or a clarification question
 
         Raises:
             Exception: Logs error and returns error message
         """
+        # Track execution metadata for memory service
+        execution_start = pd.Timestamp.now()
+        generated_sql = None
+        execution_success = False
+        execution_metadata = {}
+        result_summary = None
+        error_message = None
+        normalized_prompt = user_query  # Will be updated if prompt expansion is used
+        
         try:
             logger.info(f"Starting execute_query with query: {user_query}")
             mode = ConfigManager.get_interaction_mode()
             logger.info(f"Interaction mode: {mode}")
 
+            if status_callback:
+                status_callback("Checking for clarification...")
+
+            # Step 0: Check for clarification needs (pre-SQL stage)
+            semantic_layer = context.get("semantic_layer")
+            clarification_question = await self.clarification_detector(
+                user_query, context, semantic_layer
+            )
+            
+            if clarification_question:
+                # Return clarification question with special marker
+                logger.info("Returning clarification question to user")
+                return f"[[CLARIFICATION_NEEDED]]\n{clarification_question}"
+
+            if status_callback:
+                status_callback("Planning the request...")
+
             # Step 1: Plan the task
-            plan = await self.planner_agent(user_query, context)
+            plan = await self.planner_agent(user_query, context, stream=True)
             logger.info(f"Generated plan: {plan}")
 
             if (
@@ -1018,11 +1261,17 @@ class AIAgent:
                 requires_sql = plan.get("requires_code", False)
 
             if requires_sql:
+                if status_callback:
+                    status_callback("Generating SQL...")
                 logger.info("SQL generation required")
                 generated_sql = await self.sql_generation_agent(
-                    plan, user_query, context
+                    plan, user_query, context, stream=True
                 )
-                query_result = self._execute_sql_query(generated_sql, context)
+                if status_callback:
+                    status_callback("Executing query...")
+                query_result = self._execute_sql_query(
+                    generated_sql, context, status_callback
+                )
 
                 # Retry loop: if SQL fails, use correction agent (up to 2 attempts)
                 current_sql = generated_sql
@@ -1035,10 +1284,16 @@ class AIAgent:
                         f"invoking correction agent: {error_msg}"
                     )
                     try:
+                        if status_callback:
+                            status_callback("Correcting SQL...")
                         corrected_sql = await self.sql_correction_agent(
-                            current_sql, error_msg, context
+                            current_sql, error_msg, context, stream=True
                         )
-                        query_result = self._execute_sql_query(corrected_sql, context)
+                        if status_callback:
+                            status_callback("Re-executing corrected query...")
+                        query_result = self._execute_sql_query(
+                            corrected_sql, context, status_callback
+                        )
                         current_sql = corrected_sql
                     except Exception as e:
                         logger.error(f"SQL correction agent failed: {e}")
@@ -1047,30 +1302,97 @@ class AIAgent:
                 # Step 3: Generate visualization if needed
                 requires_viz = plan.get("requires_visualization", False)
                 if requires_viz and query_result and "error" not in query_result:
+                    if status_callback:
+                        status_callback("Generating visualization...")
                     logger.info("Visualization generation required")
                     chart_path = await self.visualization_agent(
-                        query_result, plan, user_query
+                        query_result, plan, user_query, stream=True
                     )
             else:
                 logger.info("SQL generation not required")
 
             # Step 4: Get analysis
+            if status_callback:
+                status_callback("Analyzing results...")
             logger.info("Getting analysis from analysis agent")
             analysis = await self.analysis_agent(
-                user_query, context, plan, query_result
+                user_query,
+                context,
+                plan,
+                query_result,
+                stream_callback=stream_callback,
             )
 
+            # Track execution success
+            execution_success = True
+            if query_result and "data" in query_result:
+                execution_metadata["row_count"] = len(query_result["data"])
+            execution_metadata["execution_time_seconds"] = (
+                pd.Timestamp.now() - execution_start
+            ).total_seconds()
+            result_summary = analysis[:200] if analysis else None  # Store brief summary
+            
             # Step 5: Format response based on mode
+            if status_callback:
+                status_callback("Formatting response...")
+            
+            response = None
             if mode == "cxo":
-                return self._format_cxo_response(analysis, chart_path)
+                response = self._format_cxo_response(analysis, chart_path)
             else:
-                return self._format_response(query_result, analysis, chart_path)
+                response = self._format_response(query_result, analysis, chart_path)
+            
+            # Store in memory service if available
+            if self.memory_service:
+                try:
+                    model_name = self._get_current_model()
+                    self.memory_service.store_query(
+                        user_prompt=user_query,
+                        normalized_prompt=normalized_prompt,
+                        generated_sql=generated_sql,
+                        execution_success=execution_success,
+                        execution_metadata=execution_metadata,
+                        model_provider=self.api_provider,
+                        model_name=model_name,
+                        result_summary=result_summary,
+                        error_message=error_message
+                    )
+                    logger.info("Query stored in memory service")
+                except Exception as mem_err:
+                    logger.warning(f"Failed to store query in memory: {mem_err}")
+            
+            return response
 
         except Exception as e:
             logger.error(f"Error in execute_query: {str(e)}", exc_info=True)
+            error_message = str(e)
+            
+            # Store failed query in memory if available
+            if self.memory_service:
+                try:
+                    model_name = self._get_current_model()
+                    self.memory_service.store_query(
+                        user_prompt=user_query,
+                        normalized_prompt=normalized_prompt,
+                        generated_sql=generated_sql,
+                        execution_success=False,
+                        execution_metadata=execution_metadata,
+                        model_provider=self.api_provider,
+                        model_name=model_name,
+                        result_summary=None,
+                        error_message=error_message
+                    )
+                except Exception as mem_err:
+                    logger.warning(f"Failed to store failed query in memory: {mem_err}")
+            
             return f"Error processing query: {str(e)}\n\nPlease try rephrasing your question."
 
-    def _execute_sql_query(self, sql: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_sql_query(
+        self,
+        sql: str,
+        context: Dict[str, Any],
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Execute generated SQL safely using SQLAlchemy Core.
 
@@ -1125,12 +1447,17 @@ class AIAgent:
             rows: List[Dict[str, Any]] = []
             truncated = False
 
+            last_reported = 0
+
             while True:
                 chunk = result.fetchmany(DB_READ_CHUNK_SIZE)
                 if not chunk:
                     break
                 normalized_chunk = self._normalize_sql_rows(chunk, columns)
                 rows.extend(normalized_chunk)
+                if progress_callback and len(rows) - last_reported >= DB_READ_CHUNK_SIZE:
+                    last_reported = len(rows)
+                    progress_callback(f"Fetched {len(rows):,} rows...")
                 if len(rows) >= DB_MAX_ROWS_IN_MEMORY:
                     rows = rows[:DB_MAX_ROWS_IN_MEMORY]
                     truncated = True
@@ -1139,6 +1466,10 @@ class AIAgent:
             payload: Dict[str, Any] = {"columns": columns, "rows": rows}
             if truncated:
                 payload["truncated"] = True
+                if progress_callback:
+                    progress_callback(
+                        f"Result truncated to {DB_MAX_ROWS_IN_MEMORY:,} rows."
+                    )
             return payload
         except Exception as e:
             logger.error(f"SQL execution error: {str(e)}", exc_info=True)

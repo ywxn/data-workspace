@@ -2,7 +2,8 @@ import sys
 import asyncio
 import webbrowser
 import json
-from PySide6.QtCore import Qt, Signal, QThread
+from datetime import datetime
+from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -84,7 +85,7 @@ class InteractionModeDialog(QDialog):
         self.setWindowTitle("Select Interaction Mode")
         self.setModal(True)
         self.setMinimumWidth(480)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
@@ -169,7 +170,7 @@ class APIKeyDialog(QDialog):
         self.setWindowTitle("API Key Configuration")
         self.setModal(True)
         self.setMinimumWidth(480)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
         self._first_time_setup = first_time_setup
 
@@ -285,6 +286,134 @@ class APIKeyDialog(QDialog):
             QMessageBox.critical(self, "Error", f"Failed to save API key: {message}")
 
 
+class ModelSettingsDialog(QDialog):
+    """Dialog to configure the default model for the currently active LLM provider."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Model Settings")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.windowIcon = QIcon("icon.ico")
+        self.setWindowIcon(self.windowIcon)
+
+        layout = QVBoxLayout(self)
+
+        # Get current default provider and model defaults
+        self.current_provider = ConfigManager.get_default_api()
+        self.model_defaults = ConfigManager.get_model_defaults()
+
+        # Provider display (read-only)
+        provider_display = QLabel(f"Current Provider: <b>{self.current_provider.upper()}</b>")
+        provider_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(provider_display)
+
+        layout.addSpacing(15)
+
+        # Title
+        title = QLabel(f"Configure {self._get_provider_display_name()} Model")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Instructions
+        instructions = QLabel(
+            f"Enter the model ID for {self._get_provider_display_name()}.\n"
+            "This model will be used for all queries unless overridden at the session level."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(15)
+
+        # Form layout - only show field for current provider
+        form_layout = QFormLayout()
+
+        self.model_input = QLineEdit()
+        self.model_input.setText(self.model_defaults.get(self.current_provider, ""))
+        self.model_input.setPlaceholderText(
+            self._get_placeholder_for_provider(self.current_provider)
+        )
+        form_layout.addRow(f"{self._get_provider_display_name()} Model ID:", self.model_input)
+
+        layout.addLayout(form_layout)
+
+        layout.addSpacing(15)
+
+        # Help text with provider-specific links
+        help_text = self._get_help_text_for_provider(self.current_provider)
+        help_label = QLabel(help_text)
+        help_label.setStyleSheet("color: gray; font-size: 9pt;")
+        help_label.setWordWrap(True)
+        help_label.setOpenExternalLinks(True)
+        layout.addWidget(help_label)
+
+        layout.addSpacing(10)
+
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._save_settings)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _get_provider_display_name(self) -> str:
+        """Get human-readable provider name."""
+        mapping = {
+            "openai": "OpenAI",
+            "claude": "Claude",
+        }
+        return mapping.get(self.current_provider, self.current_provider.title())
+
+    def _get_placeholder_for_provider(self, provider: str) -> str:
+        """Get placeholder text for the provider."""
+        placeholders = {
+            "openai": "gpt-4o-2024-08-06",
+            "claude": "claude-3-5-sonnet-20241022",
+        }
+        return placeholders.get(provider, "Enter model ID")
+
+    def _get_help_text_for_provider(self, provider: str) -> str:
+        """Get help text and link for the provider."""
+        help_texts = {
+            "openai": (
+                "Available models: "
+                '<a href="https://platform.openai.com/docs/models">'
+                "https://platform.openai.com/docs/models</a>"
+            ),
+            "claude": (
+                "Available models: "
+                '<a href="https://docs.anthropic.com/en/docs/about-claude/models">'
+                "https://docs.anthropic.com/en/docs/about-claude/models</a>"
+            ),
+        }
+        return help_texts.get(provider, "Check your provider's documentation for available models.")
+
+    def _save_settings(self):
+        """Save the model setting for the current provider."""
+        model_id = self.model_input.text().strip()
+
+        if not model_id:
+            QMessageBox.warning(
+                self, "Empty Model ID", "Please enter a model ID."
+            )
+            return
+
+        success, msg = ConfigManager.set_model_default(self.current_provider, model_id)
+        if not success:
+            QMessageBox.warning(
+                self, "Error", f"Failed to save model: {msg}"
+            )
+            return
+
+        logger.info(f"Model settings saved for {self.current_provider}: {model_id}")
+        QMessageBox.information(
+            self, "Success", f"{self._get_provider_display_name()} model updated successfully!"
+        )
+        self.accept()
+
+
 class AIHostConfigDialog(QDialog):
     """Dialog to configure AI host settings.
 
@@ -298,7 +427,7 @@ class AIHostConfigDialog(QDialog):
         self.setWindowTitle("AI Host Configuration")
         self.setModal(True)
         self.setMinimumWidth(560)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self._include_cloud = include_cloud
@@ -800,7 +929,7 @@ class AIHostConfigDialog(QDialog):
                     "No API Key",
                     f"No API key is configured for {provider}.\n\n"
                     "Please set your API key first via\n"
-                    "File \u2192 API Key Settings.",
+                    "Settings \u2192 API Key Settings.",
                 )
                 return
 
@@ -1483,7 +1612,7 @@ class CreateProjectDialog(QDialog):
         self.setWindowTitle("Create or Load Project")
         self.setModal(True)
         self.setMinimumWidth(480)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self.project_id: Optional[str] = None
@@ -1600,7 +1729,9 @@ class CreateProjectDialog(QDialog):
             credentials = ds.get("credentials", {})
 
             db_dialog = DatabaseConnectionDialog(
-                self, force_nlp=ConfigManager.get_interaction_mode() == "cxo"
+                self, 
+                force_nlp=ConfigManager.get_interaction_mode() == "cxo",
+                semantic_layer=project.semantic_layer
             )
             # Pre-fill known fields; avoid pre-filling password for security
             db_dialog.db_type_combo.setCurrentText(db_type)
@@ -1662,7 +1793,8 @@ class CreateProjectDialog(QDialog):
                 "table_selection_method",
                 ConfigManager.get_table_selection_method(),
             )
-            semantic_layer = ds.get("semantic_layer")
+            # Get semantic layer from project, not from data_source
+            semantic_layer = project.semantic_layer
             is_cxo = ConfigManager.get_interaction_mode() == "cxo"
 
             # CxO mode: skip table selection, store lightweight context for NLP at query time
@@ -1689,9 +1821,11 @@ class CreateProjectDialog(QDialog):
                     "db_type": new_config["db_type"],
                     "credentials": credentials_to_store,
                     "table_selection_method": "nlp",
-                    "semantic_layer": semantic_layer,
                     "cxo_mode": True,
                 }
+                # Update project semantic layer from dialog if changed
+                if db_dialog.semantic_layer:
+                    project.semantic_layer = db_dialog.semantic_layer
                 QMessageBox.information(
                     self,
                     "Project Loaded",
@@ -1737,8 +1871,10 @@ class CreateProjectDialog(QDialog):
                         "credentials": credentials_to_store,
                         "table": selected_tables,
                         "table_selection_method": selection_method,
-                        "semantic_layer": semantic_layer,
                     }
+                    # Update project semantic layer from dialog if changed
+                    if db_dialog.semantic_layer:
+                        project.semantic_layer = db_dialog.semantic_layer
                     QMessageBox.information(
                         self,
                         "Project Loaded",
@@ -1852,7 +1988,7 @@ class DataSourceDialog(QDialog):
         self.setWindowTitle("Select Data Source")
         self.setModal(True)
         self.setMinimumWidth(400)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self.data_source_type = None  # 'database', 'file', or None (cancelled)
@@ -1903,7 +2039,11 @@ class DataSourceDialog(QDialog):
         """Show database connection dialog"""
         logger.debug("Opening database connection dialog")
         is_cxo = ConfigManager.get_interaction_mode() == "cxo"
-        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
+        # Get semantic layer from active project if available
+        semantic_layer = None
+        if hasattr(self, 'backend') and self.backend.active_project:
+            semantic_layer = self.backend.active_project.semantic_layer
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo, semantic_layer=semantic_layer)
         if db_dialog.exec() == QDialog.DialogCode.Accepted:
             logger.info("Database connection configuration accepted")
             self.data_source_type = "database"
@@ -1949,7 +2089,7 @@ class MultiDatabaseConnectionDialog(QDialog):
         self.setWindowTitle("Database Connections")
         self.setModal(True)
         self.setMinimumWidth(600)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self.connections: List[Dict[str, Any]] = []
@@ -2003,7 +2143,11 @@ class MultiDatabaseConnectionDialog(QDialog):
     def _add_connection(self):
         """Open a DatabaseConnectionDialog to add a new connection."""
         is_cxo = ConfigManager.get_interaction_mode() == "cxo"
-        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo)
+        # Try to get semantic layer from parent's backend if available
+        semantic_layer = None
+        if hasattr(self.parent(), 'backend') and self.parent().backend.active_project:
+            semantic_layer = self.parent().backend.active_project.semantic_layer
+        db_dialog = DatabaseConnectionDialog(self, force_nlp=is_cxo, semantic_layer=semantic_layer)
         if db_dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -2066,17 +2210,17 @@ class MultiDatabaseConnectionDialog(QDialog):
 class DatabaseConnectionDialog(QDialog):
     """Dialog for database connection details"""
 
-    def __init__(self, parent=None, force_nlp: bool = False):
+    def __init__(self, parent=None, force_nlp: bool = False, semantic_layer: Optional[Dict[str, Any]] = None):
         super().__init__(parent)
         self.setWindowTitle("Database Connection")
         self.setModal(True)
         self.setMinimumWidth(500)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self.force_nlp = force_nlp
 
-        self.semantic_layer: Optional[Dict[str, Any]] = None
+        self.semantic_layer: Optional[Dict[str, Any]] = semantic_layer
 
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
@@ -2157,8 +2301,13 @@ class DatabaseConnectionDialog(QDialog):
         self.on_db_type_changed(self.db_type_combo.currentText())
         self.on_selection_method_changed(self.selection_method_combo.currentText())
 
-        # Auto-load semantic layer from config if available
-        self._try_autoload_semantic_layer()
+        # If semantic layer was provided, show it as loaded
+        if self.semantic_layer:
+            self.semantic_layer_label.setText("Semantic layer loaded from project")
+            logger.info("Semantic layer loaded from project")
+        else:
+            # Auto-load semantic layer from config if available and no project layer
+            self._try_autoload_semantic_layer()
 
     def on_db_type_changed(self, db_type):
         """Show/hide fields based on database type"""
@@ -2260,9 +2409,8 @@ class DatabaseConnectionDialog(QDialog):
                 )  # if this fails it will raise an exception so we don't need to check
             self.semantic_layer = data
             self.semantic_layer_label.setText(f"Loaded: {os.path.basename(file_path)}")
-            # Persist the path so it can be auto-loaded next time
-            ConfigManager.set_semantic_layer_path(file_path)
-            logger.info(f"Semantic layer loaded and path saved: {file_path}")
+            # Note: Semantic layer will be saved with the project, not in global config
+            logger.info(f"Semantic layer loaded: {file_path}")
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -2296,7 +2444,7 @@ class NLPPromptDialog(QDialog):
         self.setWindowTitle("Describe the Data You Need")
         self.setModal(True)
         self.setMinimumWidth(500)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
@@ -2336,7 +2484,7 @@ class TableSelectionDialog(QDialog):
         self.setWindowTitle("Select Tables")
         self.setModal(True)
         self.setMinimumWidth(400)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         self._table_names = table_names
@@ -2392,8 +2540,8 @@ class ProjectLoadDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Load Local Project")
         self.setModal(True)
-        self.setMinimumWidth(450)
-        self.windowIcon = QIcon("icon.svg")
+        self.setMinimumWidth(600)
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         layout = QVBoxLayout(self)
@@ -2403,17 +2551,68 @@ class ProjectLoadDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        subtitle = QLabel("Select a previously saved project file to load:")
+        subtitle = QLabel("Select a previously saved project to load:")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
         layout.addSpacing(8)
 
         self.file_list = QListWidget()
+        self.file_list.setSpacing(4)
+        
         for f in files:
-            item = QListWidgetItem(f)
-            item.setToolTip(self._get_project_description(f))
-            self.file_list.addItem(item)
+            project_data = self._load_project_data(f)
+            if project_data:
+                # Create list item with project title and date
+                project_title = project_data.get("title", f)
+                project_desc = project_data.get("description", "")
+                created_at = project_data.get("created_at")
+                
+                # Format the creation date
+                date_str = self._format_date(created_at)
+                
+                # Create custom widget for this list item
+                item_widget = QWidget()
+                item_layout = QHBoxLayout(item_widget)
+                item_layout.setContentsMargins(8, 4, 8, 4)
+                
+                # Left side: title and description
+                left_widget = QWidget()
+                left_layout = QVBoxLayout(left_widget)
+                left_layout.setContentsMargins(0, 0, 0, 0)
+                left_layout.setSpacing(2)
+                
+                title_label = QLabel(project_title)
+                title_label.setFont(QFont("Roboto", 10, QFont.Weight.Bold))
+                left_layout.addWidget(title_label)
+                
+                if project_desc:
+                    desc_label = QLabel(project_desc)
+                    desc_label.setFont(QFont("Roboto", 9))
+                    desc_label.setStyleSheet("color: gray;")
+                    left_layout.addWidget(desc_label)
+                
+                item_layout.addWidget(left_widget, 1)
+                
+                # Right side: creation date
+                date_label = QLabel(date_str)
+                date_label.setFont(QFont("Roboto", 9))
+                date_label.setStyleSheet("color: gray;")
+                date_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                item_layout.addWidget(date_label)
+                
+                # Create list item and set custom widget
+                item = QListWidgetItem(self.file_list)
+                item.setSizeHint(item_widget.sizeHint())
+                item.setData(Qt.ItemDataRole.UserRole, f)
+                self.file_list.addItem(item)
+                self.file_list.setItemWidget(item, item_widget)
+            else:
+                # Fallback to filename if we can't load project data
+                item = QListWidgetItem(f)
+                item.setData(Qt.ItemDataRole.UserRole, f)
+                self.file_list.addItem(item)
+                
         layout.addWidget(self.file_list)
 
         layout.addSpacing(10)
@@ -2437,20 +2636,28 @@ class ProjectLoadDialog(QDialog):
         items = self.file_list.selectedItems()
         if not items:
             return None
-        return items[0].text()
+        # Retrieve the actual filename from the item's data
+        return items[0].data(Qt.ItemDataRole.UserRole)
 
-    def _get_project_description(self, file_name: str) -> str:
-        """Return project description for tooltip display."""
+    def _load_project_data(self, file_name: str) -> Optional[Dict[str, Any]]:
+        """Load project data from JSON file."""
         path = os.path.join("projects", file_name)
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            description = (data or {}).get("description")
-            if isinstance(description, str) and description.strip():
-                return description.strip()
+                return json.load(f)
         except Exception as e:
-            logger.debug(f"Failed to read description for project '{file_name}': {e}")
-        return "No description available."
+            logger.debug(f"Failed to load project data for '{file_name}': {e}")
+            return None
+    
+    def _format_date(self, date_str: Optional[str]) -> str:
+        """Format ISO date string to human-readable format."""
+        if not date_str:
+            return "Unknown date"
+        try:
+            dt = datetime.fromisoformat(date_str)
+            return dt.strftime("%b %d, %Y")
+        except Exception:
+            return "Unknown date"
 
 
 def select_tables_with_method(
@@ -2555,12 +2762,19 @@ class QueryWorker(QThread):
 
     result_signal = Signal(str)
     error_signal = Signal(str)
+    clarification_signal = Signal(str)  # New signal for clarification requests
+    progress_signal = Signal(str)
+    stream_signal = Signal(str)
 
-    def __init__(self, query: str, data_context: Dict[str, Any]):
+    def __init__(self, query: str, data_context: Dict[str, Any], clarification_context: Optional[str] = None, project_id: Optional[str] = None):
         super().__init__()
         self.query = query
         self.data_context = data_context
+        self.clarification_context = clarification_context  # Previous clarification answer if any
         self.agent = AIAgent()
+        # Initialize memory service with project context
+        if project_id:
+            self.agent.set_project_context(project_id)
 
     def run(self):
         try:
@@ -2568,9 +2782,25 @@ class QueryWorker(QThread):
                 f"QueryWorker starting execution for query: {self.query[:100]}..."
             )
 
+            def _emit_status(message: str) -> None:
+                if message:
+                    self.progress_signal.emit(message)
+
+            def _emit_stream(chunk: str) -> None:
+                if chunk:
+                    self.stream_signal.emit(chunk)
+
+            # If we have clarification context, enrich the query
+            effective_query = self.query
+            if self.clarification_context:
+                effective_query = (
+                    f"{self.query}\n\nAdditional context: {self.clarification_context}"
+                )
+                logger.info(f"Query enriched with clarification context")
+
             # CxO mode: run NLP table selection first, then build context
             if self.data_context.get("cxo_mode"):
-                effective_context = self._build_cxo_context()
+                effective_context = self._build_cxo_context(effective_query)
                 if effective_context is None:
                     self.error_signal.emit(
                         "Could not identify relevant tables for your question. "
@@ -2588,23 +2818,38 @@ class QueryWorker(QThread):
             tables = effective_context.get("tables", [])
             logger.debug(f"Executing query asynchronously (tables: {tables})")
             result = loop.run_until_complete(
-                self.agent.execute_query(self.query, effective_context)
+                self.agent.execute_query(
+                    effective_query,
+                    effective_context,
+                    status_callback=_emit_status,
+                    stream_callback=_emit_stream,
+                )
             )
-            logger.info(
-                f"Query execution completed successfully (result length: {len(result)} chars)"
-            )
-            self.result_signal.emit(result)
+            
+            # Check if result is a clarification request
+            if result.startswith("[[CLARIFICATION_NEEDED]]"):
+                clarification_text = result.replace("[[CLARIFICATION_NEEDED]]", "").strip()
+                logger.info(f"Clarification requested: {clarification_text}")
+                self.clarification_signal.emit(clarification_text)
+            else:
+                logger.info(
+                    f"Query execution completed successfully (result length: {len(result)} chars)"
+                )
+                self.result_signal.emit(result)
 
             loop.close()
         except Exception as e:
             logger.error(f"Query execution failed: {str(e)}", exc_info=True)
             self.error_signal.emit(f"Error: {str(e)}")
 
-    def _build_cxo_context(self) -> Optional[Dict[str, Any]]:
+    def _build_cxo_context(self, query: str) -> Optional[Dict[str, Any]]:
         """
         In CxO mode, connect to the database, run NLP table selection on the
         user's prompt, collect table info for the selected tables, and return
         a complete data context ready for execute_query.
+        
+        Args:
+            query: The user query (potentially enriched with clarification)
         """
         from processing import _collect_table_info
 
@@ -2622,7 +2867,7 @@ class QueryWorker(QThread):
 
         try:
             # --- Expand prompt via LLM middleman if enabled ---
-            effective_prompt = self.query
+            effective_prompt = query
             if ConfigManager.get_prompt_expansion_enabled():
                 logger.info(
                     "CxO mode: prompt expansion enabled — attempting LLM expansion"
@@ -2636,7 +2881,7 @@ class QueryWorker(QThread):
                     try:
                         expanded = exp_loop.run_until_complete(
                             exp_agent.prompt_expansion_agent(
-                                self.query, schema_meta, semantic_layer
+                                query, schema_meta, semantic_layer
                             )
                         )
                     finally:
@@ -2701,7 +2946,7 @@ class DataWorkspaceGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("AI Data Workspace")
         self.setGeometry(100, 100, 1400, 800)
-        self.windowIcon = QIcon("icon.svg")
+        self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)
 
         # Create menu bar
@@ -2715,7 +2960,7 @@ class DataWorkspaceGUI(QMainWindow):
         new_project_action.triggered.connect(self.new_project)
         file_menu.addAction(new_project_action)
 
-        load_project_action = QAction("Load Project...", self)
+        load_project_action = QAction("Load Project", self)
         load_project_action.setShortcut("Ctrl+O")
         load_project_action.triggered.connect(self.load_project_menu)
         file_menu.addAction(load_project_action)
@@ -2727,30 +2972,18 @@ class DataWorkspaceGUI(QMainWindow):
 
         file_menu.addSeparator()
 
-        connect_data_action = QAction("Connect Data Source...", self)
-        connect_data_action.triggered.connect(self.connect_data_source)
-        file_menu.addAction(connect_data_action)
-
-        connect_additional_action = QAction("Connect Additional Data Source...", self)
+        connect_additional_action = QAction("Connect Data Source", self)
         connect_additional_action.triggered.connect(self.connect_additional_data_source)
         file_menu.addAction(connect_additional_action)
 
-        api_settings_action = QAction("API Key Settings...", self)
-        api_settings_action.triggered.connect(self.change_api_settings)
-        file_menu.addAction(api_settings_action)
-
-        ai_host_settings_action = QAction("AI Host Settings...", self)
-        ai_host_settings_action.triggered.connect(self.change_ai_host_settings)
-        file_menu.addAction(ai_host_settings_action)
-
         file_menu.addSeparator()
 
-        export_results_action = QAction("Export Results...", self)
+        export_results_action = QAction("Export Results", self)
         export_results_action.setShortcut("Ctrl+E")
         export_results_action.triggered.connect(self.export_results_dialog)
         file_menu.addAction(export_results_action)
 
-        export_chat_action = QAction("Export Chat...", self)
+        export_chat_action = QAction("Export Chat", self)
         export_chat_action.triggered.connect(self.export_chat_dialog)
         file_menu.addAction(export_chat_action)
 
@@ -2810,6 +3043,20 @@ class DataWorkspaceGUI(QMainWindow):
         # ===== Settings Menu =====
         settings_menu = menu_bar.addMenu("Settings")
 
+        api_settings_action = QAction("API Key Settings", self)
+        api_settings_action.triggered.connect(self.change_api_settings)
+        settings_menu.addAction(api_settings_action)
+
+        ai_host_settings_action = QAction("AI Host Settings", self)
+        ai_host_settings_action.triggered.connect(self.change_ai_host_settings)
+        settings_menu.addAction(ai_host_settings_action)
+
+        model_settings_action = QAction("Model Settings", self)
+        model_settings_action.triggered.connect(self.change_model_settings)
+        settings_menu.addAction(model_settings_action)
+
+        settings_menu.addSeparator()
+
         # Interaction Mode submenu
         mode_menu = settings_menu.addMenu("Interaction Mode")
         self.mode_action_group = QActionGroup(self)
@@ -2849,7 +3096,7 @@ class DataWorkspaceGUI(QMainWindow):
 
         # Local LLM settings
         settings_menu.addSeparator()
-        local_llm_action = QAction("Local LLM Settings...", self)
+        local_llm_action = QAction("Local LLM Settings", self)
         local_llm_action.setToolTip(
             "Configure a local LLM server (e.g. Ollama) for fully offline execution."
         )
@@ -2971,8 +3218,23 @@ class DataWorkspaceGUI(QMainWindow):
         self.data_context: Optional[Dict[str, Any]] = None
         self.is_running = False
         self.processing_marker = "**Assistant:** _Processing..._"
+        self.processing_token_start = "<!--PROCESSING_BLOCK_START-->"
+        self.processing_token_end = "<!--PROCESSING_BLOCK_END-->"
+        self.current_processing_block: Optional[str] = None
+        self.current_processing_status = ""
+        self.current_partial_response = ""
+        self.current_markdown: Optional[str] = None
         self.current_theme = "system"
         self.font_point_size = QApplication.instance().font().pointSize()
+        # Clarification flow state
+        self.pending_clarification_query: Optional[str] = None
+        self.clarification_question: Optional[str] = None
+        
+        # Processing animation state
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self._update_processing_animation)
+        self.animation_frame = 0
+        self.animation_frames = [".", "..", "...", ".."]  # Pulsing dots
 
         # Load saved theme preference or use system theme
         config = ConfigManager.load_config()
@@ -2995,7 +3257,7 @@ class DataWorkspaceGUI(QMainWindow):
 
         clear_action = menu.addAction("Clear Chat")
         delete_action = menu.addAction("Delete Chat")
-        export_action = menu.addAction("Export Chat...")
+        export_action = menu.addAction("Export Chat")
 
         action = menu.exec(self.chat_list.mapToGlobal(position))
 
@@ -3177,6 +3439,88 @@ class DataWorkspaceGUI(QMainWindow):
             parts.append(f"**{role}:** {formatted_content}")
         return "\n\n".join(parts)
 
+    def _get_current_markdown(self) -> str:
+        if self.current_markdown is None:
+            self.current_markdown = self.conversation_display.toMarkdown()
+        return self.current_markdown
+
+    def _set_current_markdown(self, md: str) -> None:
+        self.current_markdown = md
+        self.conversation_display.setHtml(markdown_to_html(md))
+
+    def _build_processing_block(self) -> str:
+        # Animated dots for processing indicator
+        dots = self.animation_frames[self.animation_frame]
+        lines = [
+            self.processing_token_start,
+            f"**Assistant:** _Processing{dots}_"
+        ]
+        if self.current_processing_status:
+            lines.append(f"**Status:** {self.current_processing_status}")
+        if self.current_partial_response:
+            lines.append("**Partial response:**")
+            lines.append(self.current_partial_response)
+        lines.append(self.processing_token_end)
+        return "\n\n".join(lines)
+    
+    def _update_processing_animation(self) -> None:
+        """Update the processing animation frame."""
+        self.animation_frame = (self.animation_frame + 1) % len(self.animation_frames)
+        # Only update if we have a processing block active
+        if self.current_processing_block is not None:
+            new_block = self._build_processing_block()
+            self._set_processing_block(new_block)
+
+    def _set_processing_block(self, new_block: str) -> None:
+        current_md = self._get_current_markdown()
+        start_idx = current_md.find(self.processing_token_start)
+        end_idx = current_md.find(self.processing_token_end, start_idx)
+        if start_idx != -1 and end_idx != -1:
+            end_idx += len(self.processing_token_end)
+            current_md = current_md[:start_idx] + new_block + current_md[end_idx:]
+        else:
+            current_md = "\n\n".join(
+                [segment for segment in [current_md.strip(), new_block] if segment]
+            )
+        self._set_current_markdown(current_md)
+        self.current_processing_block = new_block
+
+        scroll_bar = self.conversation_display.verticalScrollBar()
+        if scroll_bar:
+            scroll_bar.setValue(scroll_bar.maximum())
+
+    def _reset_processing_state(self) -> None:
+        self.current_processing_status = ""
+        self.current_partial_response = ""
+        self.current_processing_block = None
+        # Stop animation timer
+        if self.animation_timer.isActive():
+            self.animation_timer.stop()
+        self.animation_frame = 0
+
+    def _replace_processing_block(self, replacement: str) -> None:
+        current_md = self._get_current_markdown()
+        start_idx = current_md.find(self.processing_token_start)
+        end_idx = current_md.find(self.processing_token_end, start_idx)
+        if start_idx != -1 and end_idx != -1:
+            end_idx += len(self.processing_token_end)
+            current_md = current_md[:start_idx] + replacement + current_md[end_idx:]
+            self._set_current_markdown(current_md)
+
+    def update_status(self, status: str) -> None:
+        """Update progress status text while a query runs."""
+        self.current_processing_status = status
+        new_block = self._build_processing_block()
+        self._set_processing_block(new_block)
+
+    def update_stream(self, chunk: str) -> None:
+        """Render streaming analysis output as it arrives."""
+        if not chunk:
+            return
+        self.current_partial_response += chunk
+        new_block = self._build_processing_block()
+        self._set_processing_block(new_block)
+
     def submit_query(self):
         """Handle query submission or stop running query"""
         # If currently running, stop the query
@@ -3198,16 +3542,34 @@ class DataWorkspaceGUI(QMainWindow):
             )
             return
 
-        logger.info(f"Submitting query: {query[:100]}...")  # Log first 100 chars
+        # Check if we're responding to a clarification
+        is_clarification_response = self.pending_clarification_query is not None
+        
+        if is_clarification_response:
+            logger.info(f"Submitting clarification response: {query[:100]}...")
+            actual_query = self.pending_clarification_query
+            clarification_context = query
+        else:
+            logger.info(f"Submitting query: {query[:100]}...")
+            actual_query = query
+            clarification_context = None
 
         # Change button to Stop
         self.submit_button.setText("Stop")
         self.is_running = True
 
         # Display user message
-        current_md = self.conversation_display.toMarkdown()
+        current_md = self._get_current_markdown()
         user_message_md = f"**You:** {query}"
-        processing_md = self.processing_marker
+        self.current_processing_status = "Starting..."
+        self.current_partial_response = ""
+        
+        # Start processing animation
+        self.animation_frame = 0
+        self.animation_timer.start(500)  # Update every 500ms for smooth pulsing
+        
+        processing_md = self._build_processing_block()
+        self.current_processing_block = processing_md
         combined = "\n\n".join(
             [
                 segment
@@ -3215,7 +3577,7 @@ class DataWorkspaceGUI(QMainWindow):
                 if segment
             ]
         )
-        self.conversation_display.setHtml(markdown_to_html(combined))
+        self._set_current_markdown(combined)
 
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
@@ -3223,15 +3585,32 @@ class DataWorkspaceGUI(QMainWindow):
             scroll_bar.setValue(scroll_bar.maximum())
 
         self.query_input.clear()
+        
+        # Reset UI if we were in clarification mode
+        if is_clarification_response:
+            self.submit_button.setText("Send")
+            self.query_input.setPlaceholderText(
+                "Type your message here... (Press Enter to send, Shift+Enter for new line)"
+            )
+            self.pending_clarification_query = None
+            self.clarification_question = None
 
         # Add user message to chat history
         self.add_message_to_chat("user", query)
 
         # Create and start worker thread
         logger.debug("Creating query worker for active SQL context")
-        self.worker = QueryWorker(query, self.data_context)
+        self.worker = QueryWorker(
+            actual_query,
+            self.data_context,
+            clarification_context,
+            project_id=self.project_id  # Pass project_id for memory service
+        )
         self.worker.result_signal.connect(self.display_result)
         self.worker.error_signal.connect(self.display_error)
+        self.worker.clarification_signal.connect(self.handle_clarification)
+        self.worker.progress_signal.connect(self.update_status)
+        self.worker.stream_signal.connect(self.update_stream)
         self.worker.finished.connect(self.on_query_finished)
         logger.debug("Starting query worker thread")
         self.worker.start()
@@ -3246,11 +3625,10 @@ class DataWorkspaceGUI(QMainWindow):
             logger.info("Query worker thread successfully terminated")
 
             # Display cancellation message
-            current_md = self.conversation_display.toMarkdown()
+            current_md = self._get_current_markdown()
             cancelled_md = "**Status:** _Query cancelled by user._"
-            if self.processing_marker in current_md:
-                current_md = current_md.replace(self.processing_marker, cancelled_md)
-                self.conversation_display.setHtml(markdown_to_html(current_md))
+            self._replace_processing_block(cancelled_md)
+            self._reset_processing_state()
 
         self.is_running = False
         self.submit_button.setText("Send")
@@ -3266,17 +3644,18 @@ class DataWorkspaceGUI(QMainWindow):
         formatted_result = self.backend.markdown_to_qt(result)
 
         # Replace the "Processing..." message with the actual result
-        current_md = self.conversation_display.toMarkdown()
+        current_md = self._get_current_markdown()
         result_md = f"**Assistant:**\n{formatted_result}"
 
-        if self.processing_marker in current_md:
-            current_md = current_md.replace(self.processing_marker, result_md)
-            self.conversation_display.setHtml(markdown_to_html(current_md))
+        if self.processing_token_start in current_md:
+            self._replace_processing_block(result_md)
         else:
             combined = "\n\n".join(
                 [segment for segment in [current_md.strip(), result_md] if segment]
             )
-            self.conversation_display.setHtml(markdown_to_html(combined))
+            self._set_current_markdown(combined)
+
+        self._reset_processing_state()
 
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
@@ -3297,16 +3676,53 @@ class DataWorkspaceGUI(QMainWindow):
             suggestion_md = f"\n\n**Suggestions:**\n{items}"
 
         error_md = f"**Error:**\n{error}{suggestion_md}"
-        current_md = self.conversation_display.toMarkdown()
+        current_md = self._get_current_markdown()
 
-        if self.processing_marker in current_md:
-            current_md = current_md.replace(self.processing_marker, error_md)
-            self.conversation_display.setHtml(markdown_to_html(current_md))
+        if self.processing_token_start in current_md:
+            self._replace_processing_block(error_md)
         else:
             combined = "\n\n".join(
                 [segment for segment in [current_md.strip(), error_md] if segment]
             )
-            self.conversation_display.setHtml(markdown_to_html(combined))
+            self._set_current_markdown(combined)
+
+        self._reset_processing_state()
+
+    def handle_clarification(self, clarification_question: str):
+        """Handle clarification request from agent"""
+        logger.info(f"Clarification requested: {clarification_question}")
+        
+        # Store the clarification state
+        self.pending_clarification_query = self.query_input.toPlainText().strip()
+        self.clarification_question = clarification_question
+        
+        # Display clarification question
+        current_md = self._get_current_markdown()
+        clarification_md = f"**Clarification Needed:**\n{clarification_question}"
+        if self.processing_token_start in current_md:
+            self._replace_processing_block(clarification_md)
+        else:
+            current_md = "\n\n".join(
+                [segment for segment in [current_md.strip(), clarification_md] if segment]
+            )
+        
+        if self.processing_token_start not in current_md:
+            self._set_current_markdown(current_md)
+
+        self._reset_processing_state()
+        
+        # Update UI to show we're waiting for clarification
+        self.query_input.clear()
+        self.query_input.setPlaceholderText("Please provide the clarification...")
+        self.submit_button.setText("Submit Clarification")
+        self.is_running = False
+        
+        # Scroll to bottom
+        scroll_bar = self.conversation_display.verticalScrollBar()
+        if scroll_bar:
+            scroll_bar.setValue(scroll_bar.maximum())
+        
+        self.query_input.setFocus()
 
     def clear_fields(self):
         """Clear conversation"""
@@ -3648,9 +4064,11 @@ class DataWorkspaceGUI(QMainWindow):
                                             "db_type": db_type,
                                             "credentials": creds_to_store,
                                             "table_selection_method": "nlp",
-                                            "semantic_layer": semantic_layer,
                                             "cxo_mode": True,
                                         }
+                                        # Store semantic layer on project, not in data_source
+                                        if semantic_layer:
+                                            self.backend.active_project.semantic_layer = semantic_layer
                                     table_count = len(tables)
                                     welcome_msg = (
                                         f"## Connected to {db_type} database\n\n"
@@ -3723,8 +4141,10 @@ class DataWorkspaceGUI(QMainWindow):
                                                     "credentials": creds_to_store,
                                                     "table": selected_tables,
                                                     "table_selection_method": selection_method,
-                                                    "semantic_layer": semantic_layer,
                                                 }
+                                                # Store semantic layer on project, not in data_source
+                                                if semantic_layer:
+                                                    self.backend.active_project.semantic_layer = semantic_layer
                                             QMessageBox.information(
                                                 self,
                                                 "Data Loaded",
@@ -3841,17 +4261,46 @@ class DataWorkspaceGUI(QMainWindow):
                 return
 
     def connect_additional_data_source(self):
-        """Connect additional data sources without overwriting existing data."""
+        """Connect a data source, prompting to overwrite or merge when data exists."""
         logger.info("User initiated additional data source connection")
 
         if self.data_context is None:
-            QMessageBox.information(
-                self,
-                "No Data Loaded",
-                "No data is currently loaded. Use Connect Data Source first.",
+            logger.info(
+                "No existing data context found; opening primary data source flow"
             )
             self.connect_data_source()
             return
+
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Icon.Question)
+        prompt.setWindowTitle("Data Source Already Loaded")
+        prompt.setText(
+            "A data source is already loaded. What would you like to do?"
+        )
+        prompt.setInformativeText(
+            "Choose 'Overwrite' to replace current data, or 'Merge' to add new data to the current workspace."
+        )
+        overwrite_btn = prompt.addButton(
+            "Overwrite Current Data Source", QMessageBox.ButtonRole.AcceptRole
+        )
+        merge_btn = prompt.addButton(
+            "Merge New Data", QMessageBox.ButtonRole.ActionRole
+        )
+        cancel_btn = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(merge_btn)
+        prompt.exec()
+
+        clicked = prompt.clickedButton()
+        if clicked == cancel_btn:
+            logger.info("User cancelled data source merge/overwrite prompt")
+            return
+
+        if clicked == overwrite_btn:
+            logger.info("User chose to overwrite current data source")
+            self.connect_data_source()
+            return
+
+        logger.info("User chose to merge new data with current data source")
 
         source_dialog = DataSourceDialog(self)
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3914,11 +4363,35 @@ class DataWorkspaceGUI(QMainWindow):
                     QMessageBox.warning(self, "Load Failed", status)
                     return
 
-                if self.data_context.get("source_type") != "database":
+                current_source_type = self.data_context.get("source_type")
+
+                if current_source_type == "multi_database":
+                    alias = self._build_db_alias(db_type, credentials)
+                    self._append_to_multi_database_context(alias, new_context)
+                    self._persist_multi_db_project_source()
+
+                    aliases = list(self.data_context.get("connections", {}).keys())
+                    table_count = len(self.data_context.get("tables", []))
+                    welcome_msg = (
+                        f"## Multi-Database Connected\n\n"
+                        f"**{table_count}** tables loaded across "
+                        f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                        f"Tables are prefixed with their database alias "
+                        f"(e.g. `alias__table`). Ask your question below."
+                    )
+                    self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                    QMessageBox.information(
+                        self,
+                        "Data Loaded",
+                        f"Database added as alias '{alias}'.",
+                    )
+                    return
+
+                if current_source_type != "database":
                     QMessageBox.warning(
                         self,
                         "Not Supported",
-                        "Additional database sources can only be added to an existing database workspace.",
+                        "Additional database sources can only be added to a database workspace.",
                     )
                     return
 
@@ -3926,10 +4399,63 @@ class DataWorkspaceGUI(QMainWindow):
                     self.data_context.get("db_type") != db_type
                     or self.data_context.get("credentials") != credentials
                 ):
-                    QMessageBox.warning(
+                    existing_db_type = self.data_context.get("db_type")
+                    existing_credentials = self.data_context.get("credentials", {})
+                    existing_alias = self._build_db_alias(
+                        existing_db_type, existing_credentials
+                    )
+                    new_alias = self._build_db_alias(
+                        db_type, credentials, reserved={existing_alias}
+                    )
+
+                    merged_context: Dict[str, Any] = {
+                        "source_type": "multi_database",
+                        "connections": {},
+                        "tables": [],
+                        "table_info": {},
+                        "table_to_connection": {},
+                    }
+
+                    existing_sub_context = {
+                        "source_type": "database",
+                        "db_type": existing_db_type,
+                        "credentials": existing_credentials,
+                        "tables": self.data_context.get("tables", []),
+                        "table_info": self.data_context.get("table_info", {}),
+                        "skipped_columns": self.data_context.get("skipped_columns", {}),
+                    }
+
+                    for alias, sub_ctx in (
+                        (existing_alias, existing_sub_context),
+                        (new_alias, new_context),
+                    ):
+                        merged_context["connections"][alias] = sub_ctx
+                        for table_name in sub_ctx.get("tables", []):
+                            qualified = f"{alias}__{table_name}"
+                            merged_context["tables"].append(qualified)
+                            merged_context["table_info"][qualified] = sub_ctx.get(
+                                "table_info", {}
+                            ).get(table_name, {})
+                            merged_context["table_to_connection"][qualified] = alias
+
+                    self.data_context = merged_context
+                    self.backend.data_context = merged_context
+                    self._persist_multi_db_project_source()
+
+                    aliases = [existing_alias, new_alias]
+                    table_count = len(merged_context.get("tables", []))
+                    welcome_msg = (
+                        f"## Multi-Database Connected\n\n"
+                        f"**{table_count}** tables loaded across "
+                        f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                        f"Tables are prefixed with their database alias "
+                        f"(e.g. `alias__table`). Ask your question below."
+                    )
+                    self.conversation_display.setHtml(markdown_to_html(welcome_msg))
+                    QMessageBox.information(
                         self,
-                        "Not Supported",
-                        "Adding tables from a different database connection is not supported in SQL-first mode.",
+                        "Data Loaded",
+                        "Different database connection added. Workspace switched to multi-database mode.",
                     )
                     return
 
@@ -3961,8 +4487,10 @@ class DataWorkspaceGUI(QMainWindow):
                         "credentials": creds_to_store,
                         "table": list(existing_tables),
                         "table_selection_method": selection_method,
-                        "semantic_layer": semantic_layer,
                     }
+                    # Store semantic layer on project, not in data_source
+                    if semantic_layer:
+                        self.backend.active_project.semantic_layer = semantic_layer
 
                 welcome_msg = self.backend.format_database_welcome_message(
                     db_type, list(existing_tables), self.data_context, status
@@ -4019,6 +4547,82 @@ class DataWorkspaceGUI(QMainWindow):
                 self, "Error", f"Failed to load additional data: {str(e)}"
             )
 
+    def _build_db_alias(
+        self,
+        db_type: Optional[str],
+        credentials: Dict[str, Any],
+        reserved: Optional[set] = None,
+    ) -> str:
+        """Build a stable, unique alias for a database connection."""
+        import re
+
+        reserved_aliases = set(reserved or set())
+        if self.data_context and self.data_context.get("source_type") == "multi_database":
+            reserved_aliases.update(self.data_context.get("connections", {}).keys())
+
+        base_candidate = (
+            credentials.get("database")
+            or credentials.get("host")
+            or db_type
+            or "db"
+        )
+        base_name = os.path.basename(str(base_candidate))
+        safe_base = re.sub(r"[^A-Za-z0-9_]", "_", base_name).strip("_").lower() or "db"
+
+        alias = safe_base
+        suffix = 2
+        while alias in reserved_aliases:
+            alias = f"{safe_base}_{suffix}"
+            suffix += 1
+        return alias
+
+    def _append_to_multi_database_context(
+        self, alias: str, sub_context: Dict[str, Any]
+    ) -> None:
+        """Append a single database sub-context to the active multi-db context."""
+        if self.data_context is None or self.data_context.get("source_type") != "multi_database":
+            return
+
+        self.data_context.setdefault("connections", {})[alias] = sub_context
+        self.data_context.setdefault("tables", [])
+        self.data_context.setdefault("table_info", {})
+        self.data_context.setdefault("table_to_connection", {})
+
+        for table_name in sub_context.get("tables", []):
+            qualified = f"{alias}__{table_name}"
+            if qualified not in self.data_context["tables"]:
+                self.data_context["tables"].append(qualified)
+            self.data_context["table_info"][qualified] = sub_context.get(
+                "table_info", {}
+            ).get(table_name, {})
+            self.data_context["table_to_connection"][qualified] = alias
+
+        self.backend.data_context = self.data_context
+
+    def _persist_multi_db_project_source(self) -> None:
+        """Persist current multi-db source details to active project (passwords stripped)."""
+        if self.backend.active_project is None:
+            return
+        if self.data_context is None or self.data_context.get("source_type") != "multi_database":
+            return
+
+        safe_configs = []
+        for alias, sub_ctx in self.data_context.get("connections", {}).items():
+            creds = dict(sub_ctx.get("credentials", {}))
+            creds.pop("password", None)
+            safe_configs.append(
+                {
+                    "alias": alias,
+                    "db_type": sub_ctx.get("db_type"),
+                    "credentials": creds,
+                }
+            )
+
+        self.backend.active_project.data_source = {
+            "source_type": "multi_database",
+            "connections": safe_configs,
+        }
+
     def change_api_settings(self):
         """Open API key settings dialog"""
         logger.info("User opened API key settings dialog")
@@ -4053,6 +4657,35 @@ class DataWorkspaceGUI(QMainWindow):
             logger.error(f"Error changing AI host settings: {str(e)}", exc_info=True)
             QMessageBox.critical(
                 self, "Error", f"Failed to update AI host settings: {str(e)}"
+            )
+
+    def change_model_settings(self):
+        """Open model settings dialog for online providers only"""
+        logger.info("User opened model settings dialog")
+        
+        current_provider = ConfigManager.get_default_api()
+        
+        # Local model switching is handled in Local LLM Settings
+        if current_provider == "local":
+            logger.info("User attempted to open model settings for local provider")
+            QMessageBox.information(
+                self,
+                "Local Model Settings",
+                "Local model configuration is handled in Settings → Local LLM Settings.\n\n"
+                "To change your local model, go to that dialog instead."
+            )
+            return
+        
+        try:
+            model_dialog = ModelSettingsDialog(self)
+            if model_dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("Model settings updated successfully")
+            else:
+                logger.info("User cancelled model settings change")
+        except Exception as e:
+            logger.error(f"Error changing model settings: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to update model settings: {str(e)}"
             )
 
     def clear_conversation(self):
@@ -4581,7 +5214,9 @@ def _load_database_data(
         )
 
         if retry == QMessageBox.StandardButton.Retry:
-            db_dialog = DatabaseConnectionDialog(force_nlp=is_cxo)
+            # Try to get semantic layer from source_config if available
+            retry_semantic_layer = source_config.get("semantic_layer")
+            db_dialog = DatabaseConnectionDialog(force_nlp=is_cxo, semantic_layer=retry_semantic_layer)
             if db_dialog.exec() != QDialog.DialogCode.Accepted:
                 connector.close()
                 return False
@@ -4638,9 +5273,11 @@ def _load_database_data(
                 "db_type": db_type,
                 "credentials": creds_to_store,
                 "table_selection_method": "nlp",
-                "semantic_layer": semantic_layer,
                 "cxo_mode": True,
             }
+            # Store semantic layer on project, not in data_source
+            if semantic_layer:
+                window.backend.active_project.semantic_layer = semantic_layer
 
         table_count = len(tables)
         welcome_msg = (
@@ -4689,8 +5326,10 @@ def _load_database_data(
                 "credentials": creds_to_store,
                 "table": selected_tables,
                 "table_selection_method": selection_method,
-                "semantic_layer": semantic_layer,
             }
+            # Store semantic layer on project, not in data_source
+            if semantic_layer:
+                window.backend.active_project.semantic_layer = semantic_layer
 
         welcome_msg = window.backend.format_database_welcome_message(
             db_type, selected_tables, data_context, status

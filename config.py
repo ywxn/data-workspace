@@ -556,3 +556,150 @@ class ConfigManager:
         """
         config = ConfigManager.load_config()
         return config.get("multi_db_connections", [])
+
+    # ------------------------------------------------------------------
+    # Model selection and provider defaults (Stage 2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_model_defaults() -> Dict[str, str]:
+        """
+        Get provider-level default model IDs.
+
+        Returns:
+            Dict with keys 'openai', 'claude', 'local' mapping to model IDs
+        """
+        from constants import LLM_MODELS
+
+        config = ConfigManager.load_config()
+        model_defaults = config.get("model_defaults", {})
+        
+        # Merge with system fallback defaults from constants
+        return {
+            "openai": model_defaults.get("openai", LLM_MODELS.get("openai", "")),
+            "claude": model_defaults.get("claude", LLM_MODELS.get("claude", "")),
+            "local": model_defaults.get("local", LLM_MODELS.get("local", "")),
+        }
+
+    @staticmethod
+    def set_model_default(provider: str, model_id: str) -> Tuple[bool, str]:
+        """
+        Set the default model ID for a specific provider.
+
+        Args:
+            provider: Provider name ('openai', 'claude', or 'local')
+            model_id: Model identifier (e.g., 'gpt-4o-2024-08-06')
+
+        Returns:
+            Tuple of (success, message)
+        """
+        provider = provider.lower()
+        if provider not in ("openai", "claude", "local"):
+            return False, "Invalid provider. Must be 'openai', 'claude', or 'local'."
+        
+        if not model_id or not isinstance(model_id, str):
+            return False, "Model ID must be a non-empty string."
+
+        config = ConfigManager.load_config()
+        if "model_defaults" not in config:
+            config["model_defaults"] = {}
+        
+        config["model_defaults"][provider] = model_id
+        ConfigManager._logger.info(f"Model default set for {provider}: {model_id}")
+        return ConfigManager.save_config(config)
+
+    # ------------------------------------------------------------------
+    # Memory retention policy (Stage 4 preparation)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_memory_retention_policy() -> Dict[str, Any]:
+        """
+        Get the unified memory retention policy settings.
+
+        Returns:
+            Dict with keys:
+            - 'policy': one of 'keep_all', 'rolling_n', 'ttl_days'
+            - 'rolling_n': max number of queries to keep (if policy='rolling_n')
+            - 'ttl_days': max age in days (if policy='ttl_days')
+        """
+        config = ConfigManager.load_config()
+        retention = config.get("memory_retention", {})
+        
+        return {
+            "policy": retention.get("policy", "keep_all"),
+            "rolling_n": retention.get("rolling_n", 100),
+            "ttl_days": retention.get("ttl_days", 90),
+        }
+
+    @staticmethod
+    def set_memory_retention_policy(
+        policy: str,
+        rolling_n: int = 100,
+        ttl_days: int = 90,
+    ) -> Tuple[bool, str]:
+        """
+        Set the unified memory retention policy.
+
+        Args:
+            policy: Retention mode ('keep_all', 'rolling_n', 'ttl_days')
+            rolling_n: Number of queries to keep (for rolling_n policy)
+            ttl_days: Max age in days (for ttl_days policy)
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if policy not in ("keep_all", "rolling_n", "ttl_days"):
+            return False, "Invalid policy. Must be 'keep_all', 'rolling_n', or 'ttl_days'."
+        
+        if rolling_n < 1:
+            return False, "rolling_n must be at least 1."
+        
+        if ttl_days < 1:
+            return False, "ttl_days must be at least 1."
+
+        config = ConfigManager.load_config()
+        config["memory_retention"] = {
+            "policy": policy,
+            "rolling_n": rolling_n,
+            "ttl_days": ttl_days,
+        }
+        ConfigManager._logger.info(
+            f"Memory retention policy set: {policy} "
+            f"(rolling_n={rolling_n}, ttl_days={ttl_days})"
+        )
+        return ConfigManager.save_config(config)
+
+    # ------------------------------------------------------------------
+    # Clarification flow settings (Stage 3)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_clarification_enabled() -> bool:
+        """
+        Check if the pre-SQL clarification flow is enabled.
+
+        Returns:
+            True if clarification is enabled, False otherwise
+        """
+        config = ConfigManager.load_config()
+        return config.get("clarification_enabled", True)  # Enabled by default
+
+    @staticmethod
+    def set_clarification_enabled(enabled: bool) -> Tuple[bool, str]:
+        """
+        Enable or disable the pre-SQL clarification flow.
+
+        Args:
+            enabled: True to enable, False to disable
+
+        Returns:
+            Tuple of (success, message)
+        """
+        config = ConfigManager.load_config()
+        config["clarification_enabled"] = bool(enabled)
+        ConfigManager._logger.info(
+            f"Clarification flow {'enabled' if enabled else 'disabled'}"
+        )
+        return ConfigManager.save_config(config)
+

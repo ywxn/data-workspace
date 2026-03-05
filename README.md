@@ -88,6 +88,92 @@ pyinstaller --distpath ./dist --workpath ./build --name "Data Workspace" --conso
 
 API keys are stored securely using the OS keyring (via the `keyring` package). If keyring is unavailable, the application falls back gracefully.
 
+## Architecture Contracts
+
+### Model Selection and Provider Management
+
+The application enforces a **three-tier model resolution precedence**:
+
+1. **Session override** — per-chat or per-project model selection (highest priority)
+2. **Provider default** — user-configured default model for each provider (OpenAI, Claude)
+3. **System fallback** — hardcoded defaults from `constants.py` (lowest priority)
+
+This allows users to:
+- Set a preferred model per provider (e.g., always use `gpt-4o` for OpenAI)
+- Override at the session level for specific analyses requiring different capabilities
+- Fall back to sensible defaults when no explicit choice is made
+
+**Configuration locations:**
+- Provider defaults: stored in `config.json` under `model_defaults`
+- Session overrides: stored in project files alongside chat history
+- System fallback: defined in `constants.py` as `LLM_MODELS`
+
+### Unified Memory and Query History
+
+The application maintains a **hybrid unified memory system** that tracks all prompts, generated SQL, execution results, and metadata:
+
+- **Project-scoped records** — each project maintains its own query history
+- **Optional global index** — cross-project memory for reusing common patterns (stored in `data/`)
+- **Configurable retention policies**:
+  - `keep_all` — preserve all query history indefinitely
+  - `rolling_n` — keep only the most recent N queries per project
+  - `ttl_days` — automatically expire queries older than X days
+
+**Memory storage includes:**
+- Original user prompt
+- Normalized prompt (for similarity matching)
+- Generated SQL query
+- Execution metadata (status, row count, execution time)
+- Model and provider context (which model generated the query)
+
+This enables:
+- Faster responses for repeated or similar questions
+- Learning from past corrections and refinements
+- Audit trails for compliance and debugging
+
+### Clarification Flow
+
+When the agent detects **ambiguous business meaning** (e.g., unclear ID codes, unmapped terminology), it triggers a **pre-SQL clarification stage**:
+
+1. **Must-guess detector** — identifies when the agent would need to infer unknown business context
+2. **Clarification prompt** — asks a targeted follow-up question
+3. **Chat-loop pause/resume** — waits for user response, then continues with enriched context
+
+This prevents:
+- Incorrect assumptions about business logic
+- Silent failures from guessing column meanings
+- Wasted compute on invalid SQL generation
+
+**Clarification trigger policy:**
+- Enabled by default for CxO and Analyst modes
+- Can be disabled in settings for users who prefer speed over accuracy
+- Bypassed when semantic layer provides sufficient business context
+
+### Rollout Boundaries and Success Criteria
+
+**Stage 1 (Current):**
+- ✅ Architecture contracts documented
+- ✅ Config schema extended for retention and model settings
+
+**Stage 2 (Next):**
+- ✅ Model selection persists and is used at runtime
+- ✅ Precedence rule enforced correctly in all code paths
+
+**Stage 3 (Next):**
+- ✅ Ambiguous requests trigger clarification (not all requests)
+- ✅ Clarifications do not break chat flow or lose context
+
+**Stage 4 (Future):**
+- Repeated prompts produce memory cache hits
+- Retention policies prune correctly without data loss
+
+**Stage 5 (Future):**
+- Interactive tables/graphs function without breaking static render/export
+
+**Stage 6 (Future):**
+- No functional regressions in query generation, execution, or analysis
+- Separation of concerns improves testability and maintainability
+
 ## Fully Local Setup (No Cloud APIs)
 
 You can run the entire pipeline without any cloud API calls by using a local LLM server.

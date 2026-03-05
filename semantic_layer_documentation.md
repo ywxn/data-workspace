@@ -927,6 +927,78 @@ When designing and maintaining a semantic layer:
 
 ---
 
+## Semantic Layer Integration Architecture
+
+The semantic layer works in conjunction with several other architectural components to provide intelligent query assistance:
+
+### Unified Memory System
+
+The application maintains a **hybrid unified memory** that records all query interactions:
+
+- **Project-scoped history** — Each project tracks its own prompts, SQL, and results
+- **Global pattern index** — Common queries are indexed across all projects for reuse
+- **Retention policies** — Configurable cleanup rules (`keep_all`, `rolling_n`, `ttl_days`)
+
+**Memory record structure:**
+- Original prompt and normalized form
+- Generated SQL and execution status
+- Model/provider context (which AI generated the query)
+- Semantic layer entities and columns used
+
+This enables:
+- Faster responses for repeated questions
+- Learning from corrections and refinements
+- Cross-project pattern reuse
+
+### Model Selection and Provider Management
+
+The system supports **dynamic model selection** with a three-tier precedence:
+
+1. **Session override** — User selects a specific model for this chat/analysis
+2. **Provider default** — User-configured default per provider (OpenAI/Claude)
+3. **System fallback** — Hardcoded defaults from application constants
+
+This allows users to:
+- Use different models for different complexity levels
+- Experiment with new model versions per-session
+- Have sensible defaults without manual configuration
+
+### Clarification Flow Integration
+
+When the semantic layer **lacks sufficient business context** to resolve a query unambiguously, the agent triggers a **pre-SQL clarification stage**:
+
+**Clarification triggers:**
+- Unknown ID codes or abbreviations not in term glossary
+- Ambiguous column names with multiple plausible interpretations
+- Missing relationships that would require assumptions about join logic
+
+**Clarification behavior:**
+- Pauses query generation to ask a targeted question
+- Integrates user response into semantic context
+- Resumes with enriched understanding
+
+**Configuration:**
+- Enabled by default (prevents silent failures from guessing)
+- Can be disabled for users prioritizing speed
+- Automatically bypassed when semantic layer provides full context
+
+### Success Criteria and Boundaries
+
+The semantic layer is considered **correctly configured** when:
+
+✅ **90%+ of common business questions** resolve to correct SQL without clarification  
+✅ **Ambiguous queries trigger clarification** instead of generating incorrect SQL  
+✅ **Repeated questions hit memory cache** and return sub-100ms  
+✅ **New projects reuse patterns** from the global index for similar domains
+
+**Rollout verification:**
+- Test top 20-30 business questions after semantic layer changes
+- Monitor clarification frequency (should be <20% of queries)
+- Check memory hit rate (target >40% for established projects)
+- Validate that model switching preserves semantic accuracy
+
+---
+
 ## Summary Checklist
 
 Use this checklist when building or updating a semantic layer:

@@ -8,6 +8,7 @@ import os
 import json
 import shutil
 import tempfile
+import uuid
 from connector import DatabaseConnector
 from processing import load_data
 from logger import get_logger
@@ -56,6 +57,7 @@ class Project:
     created_at: datetime
     chats: Dict[str, ChatSession] = field(default_factory=dict)
     data_source: Optional[Dict[str, Any]] = None
+    semantic_layer: Optional[Dict[str, Any]] = None
 
     def add_chat(self, chat: ChatSession) -> None:
         """Add a chat session to the project."""
@@ -121,7 +123,8 @@ class DataWorkspaceBackend:
             )
             return False, "Project name already exists.", None
 
-        project_id = str(len(self.projects) + 1)
+        # Generate unique project ID using UUID
+        project_id = str(uuid.uuid4())
         project = Project(
             project_id=project_id,
             title=project_name,
@@ -154,7 +157,7 @@ class DataWorkspaceBackend:
             self._persist_chart_assets(project)
             os.makedirs("projects", exist_ok=True)
             safe_title = re.sub(r"[^A-Za-z0-9_-]", "_", project.title)[:50]
-            filename = f"{project_id}_{safe_title}.json"
+            filename = f"{safe_title}.json"
             path = os.path.join("projects", filename)
 
             # Serialize all chats in the project
@@ -177,6 +180,7 @@ class DataWorkspaceBackend:
                 "created_at": project.created_at.isoformat(),
                 "chats": chats_data,
                 "data_source": project.data_source,
+                "semantic_layer": project.semantic_layer,
                 "file_name": filename,
             }
 
@@ -330,7 +334,12 @@ class DataWorkspaceBackend:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            project_id = data.get("project_id", str(len(self.projects) + 1))
+            # Load or generate project ID, ensuring uniqueness
+            project_id = data.get("project_id")
+            if not project_id or project_id in self.projects:
+                project_id = str(uuid.uuid4())
+                logger.info(f"Generated new unique project ID: {project_id}")
+            
             title = data.get("title", f"Project {project_id}")
             description = data.get("description", "")
 
@@ -346,6 +355,9 @@ class DataWorkspaceBackend:
 
             data_source = data.get("data_source") or {}
             data_source["file_name"] = file_name
+            
+            # Load semantic layer from project data
+            semantic_layer = data.get("semantic_layer")
 
             project = Project(
                 project_id=project_id,
@@ -353,6 +365,7 @@ class DataWorkspaceBackend:
                 description=description,
                 created_at=created_at,
                 data_source=data_source,
+                semantic_layer=semantic_layer,
             )
 
             # Load all chats from the project
