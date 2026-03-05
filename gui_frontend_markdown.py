@@ -2662,7 +2662,7 @@ class ProjectLoadDialog(QDialog):
             return "Unknown date"
         try:
             dt = datetime.fromisoformat(date_str)
-            return dt.strftime("%b %d, %Y")
+            return dt.strftime("%b %d, %Y") # e.g. "Sep 15, 2023"
         except Exception:
             return "Unknown date"
 
