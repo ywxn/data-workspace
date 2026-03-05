@@ -157,27 +157,36 @@ ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """You are a clear, practical data analyst exp
 CONTEXT
 $context
 
+GRAPH GENERATED: $graph_generated
+
 Write a concise explanation that:
 
-1. Answers the user's question directly in 1\u20132 sentences.
+1. Answers the user's question directly in 1–2 sentences.
 2. Summarizes the key supporting values, comparisons, or trends from the result.
 3. Explains what the finding means in plain language and why it matters.
 4. Notes any important limitations, assumptions, or missing data if relevant.
 5. Do not mention temporary file paths.
 6. Query details can be mentioned ONLY if they aid understanding.
 
+VISUALIZATION RULES
+- If GRAPH GENERATED is true: briefly reference what the chart shows (e.g., trend, comparison, distribution).
+- If GRAPH GENERATED is false: do not mention charts, graphs, plotting, axes, or visualization methods.
+- NEVER explain how to create or plot a graph.
+
 STYLE
 - Use concrete numbers from the result
 - Do not speculate beyond provided data
 - Prefer clarity over technical jargon
-- Keep length moderate (\u2248120\u2013180 words)
+- Keep length moderate (~120–180 words)
+
 GUARDRAILS (MANDATORY)
 - Do NOT describe the schema or table structure
 - Do NOT restate obvious counts like "the query returned X rows"
 - Focus on patterns, trends, anomalies, comparisons, and insights
 - If the dataset is large, rely only on summary statistics and profiles
 - If there is insufficient signal, say so briefly
-- Do NOT invent observations that are not supported by the data"""
+- Do NOT invent observations that are not supported by the data
+"""
 
 VISUALIZATION_SYSTEM_PROMPT_TEMPLATE = """You are a production-grade Altair visualization engine that generates a single, valid chart from SQL query results.
 
@@ -1116,7 +1125,8 @@ class AIAgent:
             )
 
         system_message = Template(ANALYSIS_SYSTEM_PROMPT_TEMPLATE).substitute(
-            context="\n".join(context_parts)
+            context="\n".join(context_parts),
+            graph_generated="True" if plan and plan.get("requires_visualization") else "False",
         )
 
         # Append mode-aware audience instructions
@@ -1242,6 +1252,109 @@ class AIAgent:
                 logger.info("Returning clarification question to user")
                 return f"[[CLARIFICATION_NEEDED]]\n{clarification_question}"
 
+            # Step 0.5: Check memory cache for similar queries
+            if self.memory_service and status_callback:
+                status_callback("Checking memory cache...")
+            
+            cache_hit = None
+            if self.memory_service:
+                try:
+                    similar_queries = self.memory_service.search_similar_queries(
+                        prompt=user_query,
+                        limit=3,
+                        project_scoped=True,
+                        similarity_threshold=0.75,  # Lower threshold for candidates
+                    )
+                    
+                    # Check for high-confidence cache hit (successful queries only)
+                    for result in similar_queries:
+                        if (
+                            result.similarity_score >= 0.85  # High confidence threshold
+                            and result.record.execution_success
+                            and result.record.generated_sql
+                        ):
+                            cache_hit = result
+                            logger.info(
+                                f"CACHE HIT: similarity={result.similarity_score:.3f}, "
+                                f"prompt='{result.record.user_prompt}'"
+                            )
+                            break
+                    
+                    if not cache_hit and similar_queries:
+                        logger.info(
+                            f"CACHE MISS: highest similarity={similar_queries[0].similarity_score:.3f} "
+                            f"(threshold=0.85)"
+                        )
+                    elif not cache_hit:
+                        logger.info("CACHE MISS: no similar queries found")
+                    
+                except Exception as cache_err:
+                    logger.warning(f"Cache lookup failed: {cache_err}")
+
+            # If cache hit found, re-execute the cached SQL
+            if cache_hit:
+                if status_callback:
+                    status_callback("Using cached query...")
+                
+                try:
+                    # Re-execute the cached SQL query
+                    generated_sql = cache_hit.record.generated_sql
+                    if not generated_sql:
+                        logger.warning("Cache hit has no SQL, falling back to normal flow")
+                        raise ValueError("No SQL in cached record")
+                    
+                    logger.info(f"Re-executing cached SQL: {generated_sql}")
+                    
+                    query_result = self._execute_sql_query(
+                        generated_sql, context, status_callback
+                    )
+                    
+                    execution_success = True
+                    execution_metadata = query_result.get("metadata", {})
+                    execution_metadata["cache_hit"] = True
+                    execution_metadata["cache_similarity"] = cache_hit.similarity_score
+                    execution_metadata["original_prompt"] = cache_hit.record.user_prompt
+                    
+                    # Generate analysis and format response
+                    if status_callback:
+                        status_callback("Analyzing results...")
+                    
+                    analysis = await self.analyzer_agent(
+                        user_query, query_result, mode, stream=True
+                    )
+                    
+                    response = None
+                    if mode == "cxo":
+                        response = self._format_cxo_response(analysis, None)
+                    else:
+                        response = self._format_response(query_result, analysis, None)
+                    
+                    # Store cache hit as a new record
+                    if self.memory_service:
+                        try:
+                            model_name = self._get_current_model()
+                            self.memory_service.store_query(
+                                user_prompt=user_query,
+                                normalized_prompt=user_query,
+                                generated_sql=generated_sql,
+                                execution_success=True,
+                                execution_metadata=execution_metadata,
+                                model_provider=self.api_provider,
+                                model_name=model_name,
+                                result_summary="Cache hit",
+                                error_message=None,
+                            )
+                        except Exception as mem_err:
+                            logger.warning(f"Failed to store cache hit: {mem_err}")
+                    
+                    return response
+                    
+                except Exception as cache_exec_err:
+                    logger.warning(
+                        f"Cache hit execution failed, falling back to normal flow: {cache_exec_err}"
+                    )
+                    # Fall through to normal execution flow
+
             if status_callback:
                 status_callback("Planning the request...")
 
@@ -1335,6 +1448,7 @@ class AIAgent:
             execution_metadata["execution_time_seconds"] = (
                 pd.Timestamp.now() - execution_start
             ).total_seconds()
+            execution_metadata["cache_hit"] = False  # Mark as normal execution
             result_summary = analysis[:200] if analysis else None  # Store brief summary
 
             # Step 5: Format response based on mode
@@ -1801,6 +1915,12 @@ class AIAgent:
             Formatted response string
         """
         response_parts = []
+
+        # If analyst mode - include generated SQL code but not raw data tables
+        if ConfigManager.get_interaction_mode() == "analyst" and code_result: # no need to check for error here, pipeline will stop
+            response_parts.append("### Generated SQL:")
+            response_parts.append("")
+            response_parts.append(f"```sql\n{self._clean_sql_output(code_result.get('generated_sql', ''))}\n```")
 
         # Add visualization if available
         if chart_path:

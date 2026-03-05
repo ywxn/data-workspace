@@ -3,10 +3,13 @@ Unified memory service for caching prompts, SQL queries, and execution results.
 
 This module implements a hybrid storage system with project-scoped records
 and optional global indexing, along with configurable retention policies.
+Includes semantic search using sentence-transformers for intelligent query matching.
 """
 
 import json
 import os
+import hashlib
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -15,6 +18,14 @@ from enum import Enum
 from logger import get_logger
 
 logger = get_logger(__name__)
+
+try:
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+except ImportError:
+    SentenceTransformer = None
+    np = None
+    logger.warning("sentence-transformers not available; semantic search will use lexical fallback")
 
 
 class RetentionPolicy(Enum):
@@ -50,6 +61,14 @@ class QueryMemoryRecord:
     def from_dict(cls, data: Dict[str, Any]) -> "QueryMemoryRecord":
         """Create instance from dictionary."""
         return cls(**data)
+
+
+@dataclass
+class QuerySearchResult:
+    """Result from a similarity search with score."""
+
+    record: QueryMemoryRecord
+    similarity_score: float
 
 
 class UnifiedMemoryService:
@@ -93,6 +112,11 @@ class UnifiedMemoryService:
 
         self.global_index_path = self.data_dir / "query_memory_index.jsonl"
 
+        # Semantic search components
+        self._embedding_model = None
+        self._model_load_attempted = False
+        self._embedding_cache: Dict[str, List[float]] = {}
+
         logger.info(
             f"UnifiedMemoryService initialized: "
             f"policy={retention_policy}, project_id={project_id}"
@@ -103,6 +127,108 @@ class UnifiedMemoryService:
         projects_dir = Path("projects")
         projects_dir.mkdir(exist_ok=True)
         return projects_dir / f"{project_id}_memory.jsonl"
+
+    def _get_embedding_model(self):
+        """Lazy-load embedding model for semantic search, with graceful fallback."""
+        if self._embedding_model is not None:
+            return self._embedding_model
+        if self._model_load_attempted:
+            return None
+
+        self._model_load_attempted = True
+        
+        if SentenceTransformer is None:
+            logger.warning("sentence-transformers not installed; using lexical search only")
+            return None
+
+        try:
+            self._embedding_model = SentenceTransformer(
+                "sentence-transformers/all-MiniLM-L6-v2",
+                cache_folder="models",
+            )
+            logger.info("Semantic search model loaded: all-MiniLM-L6-v2")
+        except Exception as exc:
+            logger.warning(
+                f"Semantic model unavailable, using lexical fallback: {exc}"
+            )
+            self._embedding_model = None
+
+        return self._embedding_model
+
+    def _embedding_cache_key(self, text: str) -> str:
+        """Stable cache key for embedding text."""
+        return hashlib.sha256(text.strip().lower().encode("utf-8")).hexdigest()
+
+    def _embed_text(self, text: str) -> Optional[List[float]]:
+        """Embed normalized text using cached vectors when available."""
+        if not text or not text.strip():
+            return None
+
+        cache_key = self._embedding_cache_key(text)
+        cached = self._embedding_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        model = self._get_embedding_model()
+        if model is None:
+            return None
+
+        try:
+            vector = model.encode(text, normalize_embeddings=True)
+            if np is not None and isinstance(vector, np.ndarray):
+                vector_list: List[float] = vector.tolist()
+            elif not isinstance(vector, list):
+                vector_list = list(vector)
+            else:
+                vector_list = vector
+            
+            self._embedding_cache[cache_key] = vector_list
+            return vector_list
+        except Exception as exc:
+            logger.warning(
+                f"Embedding failed, using lexical fallback: {exc}"
+            )
+            return None
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for lexical matching."""
+        if not text:
+            return ""
+        import re
+        # Simple normalization: lowercase, remove extra whitespace
+        normalized = text.lower().strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized
+
+    def _lexical_similarity(self, query_text: str, memory_text: str) -> float:
+        """Compute lexical similarity using Jaccard + containment."""
+        query_tokens = set(self._normalize_text(query_text).split())
+        memory_tokens = set(self._normalize_text(memory_text).split())
+        
+        if not query_tokens or not memory_tokens:
+            return 0.0
+
+        intersection = query_tokens & memory_tokens
+        union = query_tokens | memory_tokens
+        
+        jaccard = len(intersection) / len(union) if union else 0.0
+        containment = len(intersection) / len(query_tokens) if query_tokens else 0.0
+        
+        return 0.7 * jaccard + 0.3 * containment
+
+    def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
+        """Compute cosine similarity between two vectors."""
+        if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+            return 0.0
+        
+        dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
+        norm_a = math.sqrt(sum(a * a for a in vec_a))
+        norm_b = math.sqrt(sum(b * b for b in vec_b))
+        
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        
+        return max(0.0, min(1.0, dot_product / (norm_a * norm_b)))
 
     def store_query(
         self,
@@ -172,6 +298,9 @@ class UnifiedMemoryService:
 
     def _append_to_project_memory(self, record: QueryMemoryRecord) -> None:
         """Append record to project memory file."""
+        if not self.project_id:
+            return
+        
         memory_path = self._get_project_memory_path(self.project_id)
 
         try:
@@ -193,39 +322,49 @@ class UnifiedMemoryService:
             logger.error(f"Failed to append to global index: {e}", exc_info=True)
 
     def search_similar_queries(
-        self, prompt: str, limit: int = 5, project_scoped: bool = True
-    ) -> List[QueryMemoryRecord]:
+        self, 
+        prompt: str, 
+        limit: int = 5, 
+        project_scoped: bool = True,
+        similarity_threshold: float = 0.7,
+        min_success_score: float = 0.8
+    ) -> List[QuerySearchResult]:
         """
-        Search for similar queries in memory.
+        Search for similar queries using semantic embeddings with lexical fallback.
 
         Args:
             prompt: Query to search for
             limit: Maximum number of results
             project_scoped: Whether to limit search to current project
+            similarity_threshold: Minimum similarity score (0.0 to 1.0)
+            min_success_score: Score threshold for considering a cache hit
 
         Returns:
-            List of matching QueryMemoryRecord objects
+            List of QuerySearchResult objects with similarity scores
         """
-        # Simple substring search for now - can be enhanced with embeddings
         results = []
 
         if project_scoped and self.project_id:
             memory_path = self._get_project_memory_path(self.project_id)
             if memory_path.exists():
-                results = self._search_in_file(memory_path, prompt, limit)
+                results = self._search_in_file(
+                    memory_path, prompt, limit, similarity_threshold
+                )
         else:
             # Search global index
             if self.global_index_path.exists():
-                results = self._search_in_file(self.global_index_path, prompt, limit)
+                results = self._search_in_file(
+                    self.global_index_path, prompt, limit, similarity_threshold
+                )
 
         return results
 
     def _search_in_file(
-        self, file_path: Path, prompt: str, limit: int
-    ) -> List[QueryMemoryRecord]:
-        """Search for similar queries in a JSONL file."""
+        self, file_path: Path, prompt: str, limit: int, similarity_threshold: float
+    ) -> List[QuerySearchResult]:
+        """Search for similar queries in a JSONL file using semantic + lexical similarity."""
         results = []
-        prompt_lower = prompt.lower()
+        query_embedding = self._embed_text(prompt)
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -237,22 +376,43 @@ class UnifiedMemoryService:
                         data = json.loads(line)
                         record = QueryMemoryRecord.from_dict(data)
 
-                        # Simple substring match
-                        if (
-                            prompt_lower in record.user_prompt.lower()
-                            or prompt_lower in record.normalized_prompt.lower()
-                        ):
-                            results.append(record)
+                        # Compute similarity using both semantic and lexical approaches
+                        memory_embedding = self._embed_text(record.user_prompt)
+                        
+                        semantic_similarity = (
+                            self._cosine_similarity(query_embedding, memory_embedding)
+                            if query_embedding is not None and memory_embedding is not None
+                            else 0.0
+                        )
+                        
+                        lexical_similarity = self._lexical_similarity(
+                            prompt, record.user_prompt
+                        )
 
-                            if len(results) >= limit:
-                                break
+                        # Combine semantic and lexical (favor semantic when available)
+                        similarity = (
+                            0.75 * semantic_similarity + 0.25 * lexical_similarity
+                            if semantic_similarity > 0.0
+                            else lexical_similarity
+                        )
+
+                        if similarity >= similarity_threshold:
+                            results.append(
+                                QuerySearchResult(
+                                    record=record,
+                                    similarity_score=similarity
+                                )
+                            )
+
                     except Exception as e:
                         logger.warning(f"Failed to parse record: {e}")
                         continue
         except Exception as e:
             logger.error(f"Failed to search file {file_path}: {e}", exc_info=True)
 
-        return results
+        # Sort by similarity descending and limit
+        results.sort(key=lambda x: x.similarity_score, reverse=True)
+        return results[:limit]
 
     def get_recent_queries(self, limit: int = 10) -> List[QueryMemoryRecord]:
         """
