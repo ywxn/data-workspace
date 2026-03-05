@@ -21,11 +21,8 @@ class TestDatabaseConnectorInitialization:
 
     def test_connector_init_sqlite(self):
         """Test initializing SQLite connector."""
-        connector = DatabaseConnector(
-            db_type="sqlite",
-            database=":memory:"
-        )
-        
+        connector = DatabaseConnector(db_type="sqlite", database=":memory:")
+
         assert connector.db_type is None  # Not set until connect()
         assert connector._init_params["db_type"] == "sqlite"
         assert connector._init_params["database"] == ":memory:"
@@ -38,9 +35,9 @@ class TestDatabaseConnectorInitialization:
             port=3306,
             user="root",
             password="password",
-            database="testdb"
+            database="testdb",
         )
-        
+
         assert connector._init_params["db_type"] == "mysql"
         assert connector._init_params["host"] == "localhost"
         assert connector._init_params["port"] == 3306
@@ -53,9 +50,9 @@ class TestDatabaseConnectorInitialization:
             port=5432,
             user="postgres",
             password="password",
-            database="testdb"
+            database="testdb",
         )
-        
+
         assert connector._init_params["db_type"] == "postgresql"
 
     def test_connector_init_with_all_params(self):
@@ -66,11 +63,11 @@ class TestDatabaseConnectorInitialization:
             "port": 3306,
             "user": "dbuser",
             "password": "dbpass",
-            "database": "mydb"
+            "database": "mydb",
         }
-        
+
         connector = DatabaseConnector(**params)
-        
+
         for key, value in params.items():
             assert connector._init_params[key] == value
 
@@ -81,10 +78,17 @@ class TestSupportedDatabases:
     def test_supported_databases_dict(self):
         """Test that SUPPORTED_DATABASES contains expected keys."""
         expected_dbs = [
-            "sqlite", "mysql", "mariadb", "postgresql", "postgres",
-            "sqlserver", "mssql", "oracle", "odbc"
+            "sqlite",
+            "mysql",
+            "mariadb",
+            "postgresql",
+            "postgres",
+            "sqlserver",
+            "mssql",
+            "oracle",
+            "odbc",
         ]
-        
+
         for db in expected_dbs:
             assert db in DatabaseConnector.SUPPORTED_DATABASES
 
@@ -95,9 +99,9 @@ class TestSupportedDatabases:
             "postgresql": "postgresql+psycopg2",
             "sqlite": "sqlite",
             "oracle": "oracle+cx_oracle",
-            "sqlserver": "mssql+pyodbc"
+            "sqlserver": "mssql+pyodbc",
         }
-        
+
         for db_type, dialect in mappings.items():
             assert DatabaseConnector.SUPPORTED_DATABASES[db_type] == dialect
 
@@ -108,16 +112,16 @@ class TestAvailableLibraries:
     def test_get_available_libraries_sqlalchemy_available(self):
         """Test library availability when SQLAlchemy is installed."""
         connector = DatabaseConnector()
-        
-        with patch.dict('sys.modules', {'sqlalchemy': MagicMock()}):
+
+        with patch.dict("sys.modules", {"sqlalchemy": MagicMock()}):
             result = connector.get_available_libraries()
-        
+
         assert isinstance(result, dict)
 
     def test_get_available_libraries_sqlalchemy_missing(self):
         """Test library availability when SQLAlchemy is not installed."""
         connector = DatabaseConnector()
-        
+
         # The method should handle missing libraries gracefully
         result = connector.get_available_libraries()
         assert isinstance(result, dict)
@@ -128,11 +132,8 @@ class TestConnectionManagement:
 
     def test_connect_sqlite(self):
         """Test connecting to SQLite database."""
-        connector = DatabaseConnector(
-            db_type="sqlite",
-            database=":memory:"
-        )
-        
+        connector = DatabaseConnector(db_type="sqlite", database=":memory:")
+
         # Verify connector was created successfully
         assert connector is not None
 
@@ -143,26 +144,26 @@ class TestConnectionManagement:
             host="localhost",
             user="root",
             password="secret",
-            database="mydb"
+            database="mydb",
         )
-        
+
         # Verify connector was created successfully with credentials
         assert connector is not None
 
     def test_connection_attributes(self):
         """Test that connector has connection attributes."""
         connector = DatabaseConnector()
-        
-        assert hasattr(connector, 'connection')
-        assert hasattr(connector, 'engine')
-        assert hasattr(connector, 'db_type')
-        assert hasattr(connector, 'library')
 
-    @patch('connector.DatabaseConnector.disconnect')
+        assert hasattr(connector, "connection")
+        assert hasattr(connector, "engine")
+        assert hasattr(connector, "db_type")
+        assert hasattr(connector, "library")
+
+    @patch("connector.DatabaseConnector.disconnect")
     def test_disconnect(self, mock_disconnect):
         """Test disconnecting from database."""
         connector = DatabaseConnector()
-        
+
         # Test would call disconnect
 
 
@@ -172,7 +173,7 @@ class TestQueryExecution:
     def test_execute_simple_select(self):
         """Test executing a simple SELECT query."""
         query = "SELECT * FROM users LIMIT 10"
-        
+
         # Verify query structure
         assert "SELECT" in query
         assert "LIMIT" in query
@@ -180,7 +181,7 @@ class TestQueryExecution:
     def test_execute_aggregate_query(self):
         """Test executing an aggregate query."""
         query = "SELECT COUNT(*) as count FROM users"
-        
+
         # Verify query structure
         assert "COUNT" in query
         assert "SELECT" in query
@@ -193,7 +194,7 @@ class TestQueryExecution:
             LEFT JOIN orders o ON u.id = o.user_id
             GROUP BY u.id
         """
-        
+
         # Verify query structure
         assert "JOIN" in query
         assert "SELECT" in query
@@ -202,29 +203,29 @@ class TestQueryExecution:
 class TestSchemaDiscovery:
     """Test database schema discovery."""
 
-    @patch('connector.DatabaseConnector.get_tables')
+    @patch("connector.DatabaseConnector.get_tables")
     def test_get_tables(self, mock_get_tables):
         """Test retrieving list of tables."""
         mock_get_tables.return_value = ["users", "orders", "products"]
-        
+
         connector = DatabaseConnector()
         result = connector.get_tables()
-        
+
         assert len(result) == 3
         assert "users" in result
 
-    @patch('connector.DatabaseConnector.get_columns')
+    @patch("connector.DatabaseConnector.get_columns")
     def test_get_columns_for_table(self, mock_get_columns):
         """Test retrieving columns for a specific table."""
         mock_get_columns.return_value = [
             {"name": "id", "type": "INTEGER", "nullable": False},
             {"name": "name", "type": "VARCHAR", "nullable": False},
-            {"name": "email", "type": "VARCHAR", "nullable": True}
+            {"name": "email", "type": "VARCHAR", "nullable": True},
         ]
-        
+
         connector = DatabaseConnector()
         result = connector.get_columns("users")
-        
+
         assert len(result) == 3
         assert result[0]["type"] == "INTEGER"
 
@@ -235,9 +236,9 @@ class TestSchemaDiscovery:
             "name": "users",
             "columns": ["id", "name", "email"],
             "primary_key": "id",
-            "row_count": 1000
+            "row_count": 1000,
         }
-        
+
         # Verify structure
         assert "name" in table_info
         assert table_info["name"] == "users"
@@ -251,7 +252,7 @@ class TestConnectionURLConstruction:
         # sqlite:////absolute/path/to/database.db
         # or sqlite:///:memory:
         connector = DatabaseConnector(db_type="sqlite", database=":memory:")
-        
+
         assert connector._init_params["database"] == ":memory:"
 
     def test_mysql_connection_url(self):
@@ -262,9 +263,9 @@ class TestConnectionURLConstruction:
             password="pass",
             host="localhost",
             port=3306,
-            database="mydb"
+            database="mydb",
         )
-        
+
         # URL would be: mysql+mysqlconnector://root:pass@localhost:3306/mydb
         params = connector._init_params
         assert params["user"] == "root"
@@ -278,9 +279,9 @@ class TestConnectionURLConstruction:
             password="pass",
             host="db.example.com",
             port=5432,
-            database="mydb"
+            database="mydb",
         )
-        
+
         params = connector._init_params
         assert params["host"] == "db.example.com"
         assert params["port"] == 5432
@@ -293,9 +294,9 @@ class TestConnectionURLConstruction:
             password="pass",
             host="oracle.example.com",
             port=1521,
-            database="ORCL"
+            database="ORCL",
         )
-        
+
         params = connector._init_params
         assert params["db_type"] == "oracle"
 
@@ -306,7 +307,7 @@ class TestErrorHandling:
     def test_query_execution_error(self):
         """Test handling of query execution errors."""
         query = "INVALID SQL"
-        
+
         # Verify malformed query can be detected
         assert "INVALID" in query
 
@@ -314,25 +315,22 @@ class TestErrorHandling:
         """Test handling of connection errors."""
         # Verify connector accepts parameters
         connector = DatabaseConnector(
-            db_type="mysql",
-            host="nonexistent.host",
-            user="user",
-            password="pass"
+            db_type="mysql", host="nonexistent.host", user="user", password="pass"
         )
-        
+
         assert connector is not None
 
     def test_invalid_database_type(self):
         """Test handling of invalid database type."""
         connector = DatabaseConnector(db_type="invalid_db_type")
-        
+
         # Check if validation exists
         assert connector._init_params["db_type"] == "invalid_db_type"
 
     def test_sql_injection_attempt(self):
         """Test handling of potential SQL injection."""
         dangerous_query = "'; DROP TABLE users; --"
-        
+
         # Verify dangerous SQL pattern is detectable
         assert "DROP" in dangerous_query
 
@@ -347,18 +345,15 @@ class TestConnectionPooling:
             host="localhost",
             user="root",
             password="pass",
-            database="mydb"
+            database="mydb",
         )
-        
+
         # Check pool settings would go here
 
     def test_connection_timeout(self):
         """Test connection timeout behavior."""
-        connector = DatabaseConnector(
-            db_type="mysql",
-            host="localhost"
-        )
-        
+        connector = DatabaseConnector(db_type="mysql", host="localhost")
+
         # Timeout tests would verify behavior
 
 
@@ -369,12 +364,9 @@ class TestDatabaseConnectorIntegration:
     def test_sqlite_integration(self, tmp_path):
         """Integration test with SQLite."""
         db_file = tmp_path / "test.db"
-        
-        connector = DatabaseConnector(
-            db_type="sqlite",
-            database=str(db_file)
-        )
-        
+
+        connector = DatabaseConnector(db_type="sqlite", database=str(db_file))
+
         assert connector._init_params["database"] == str(db_file)
 
     @pytest.mark.requires_db
@@ -385,7 +377,7 @@ class TestDatabaseConnectorIntegration:
             host="localhost",
             user="test_user",
             password="test_pass",
-            database="test_db"
+            database="test_db",
         )
-        
+
         assert connector._init_params["db_type"] == "mysql"

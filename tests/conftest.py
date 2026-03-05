@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Session-Scoped Fixtures (initialized once per test session)
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
 def temp_dir() -> Generator[str, None, None]:
     """Create a temporary directory for test artifacts."""
@@ -47,10 +48,11 @@ def test_config_dir(temp_dir: str) -> str:
 # Function-Scoped Fixtures (fresh instance per test)
 # ============================================================================
 
+
 @pytest.fixture
 def mock_config_manager(monkeypatch) -> Mock:
     """Mock the ConfigManager class."""
-    with patch('config.ConfigManager') as mock:
+    with patch("config.ConfigManager") as mock:
         mock.get_api_key.return_value = "test-api-key"
         mock.get_default_api.return_value = "openai"
         mock.config_exists.return_value = True
@@ -61,7 +63,7 @@ def mock_config_manager(monkeypatch) -> Mock:
 @pytest.fixture
 def mock_logger(monkeypatch) -> Mock:
     """Mock the logger."""
-    with patch('logger.get_logger') as mock:
+    with patch("logger.get_logger") as mock:
         logger = MagicMock()
         mock.return_value = logger
         yield logger
@@ -70,7 +72,7 @@ def mock_logger(monkeypatch) -> Mock:
 @pytest.fixture
 def mock_database_connector() -> Mock:
     """Mock the DatabaseConnector class."""
-    with patch('connector.DatabaseConnector') as mock:
+    with patch("connector.DatabaseConnector") as mock:
         connector = MagicMock()
         connector.connect.return_value = True
         connector.disconnect.return_value = True
@@ -84,27 +86,18 @@ def mock_database_connector() -> Mock:
 # Test Data Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def sample_config_data() -> Dict[str, Any]:
     """Provide sample configuration data."""
     return {
         "default_api": "openai",
         "apis": {
-            "openai": {
-                "key": "test-api-key",
-                "model": "gpt-4",
-                "max_tokens": 2000
-            },
-            "claude": {
-                "key": "test-claude-key",
-                "model": "claude-3-sonnet"
-            }
+            "openai": {"key": "test-api-key", "model": "gpt-4", "max_tokens": 2000},
+            "claude": {"key": "test-claude-key", "model": "claude-3-sonnet"},
         },
-        "database": {
-            "type": "sqlite",
-            "path": ":memory:"
-        },
-        "semantic_layer": {}
+        "database": {"type": "sqlite", "path": ":memory:"},
+        "semantic_layer": {},
     }
 
 
@@ -118,7 +111,7 @@ def sample_database_metadata() -> Dict[str, Any]:
                 "id": "INTEGER",
                 "name": "VARCHAR(255)",
                 "email": "VARCHAR(255)",
-                "created_at": "DATETIME"
+                "created_at": "DATETIME",
             },
             "orders": {
                 "id": "INTEGER",
@@ -126,20 +119,16 @@ def sample_database_metadata() -> Dict[str, Any]:
                 "product_id": "INTEGER",
                 "quantity": "INTEGER",
                 "total_price": "DECIMAL(10,2)",
-                "order_date": "DATETIME"
+                "order_date": "DATETIME",
             },
             "products": {
                 "id": "INTEGER",
                 "name": "VARCHAR(255)",
                 "price": "DECIMAL(10,2)",
-                "category": "VARCHAR(100)"
-            }
+                "category": "VARCHAR(100)",
+            },
         },
-        "row_counts": {
-            "users": 1000,
-            "orders": 5000,
-            "products": 100
-        }
+        "row_counts": {"users": 1000, "orders": 5000, "products": 100},
     }
 
 
@@ -150,11 +139,11 @@ def sample_query_result() -> Dict[str, Any]:
         "success": True,
         "rows": [
             {"id": 1, "name": "John Doe", "email": "john@example.com"},
-            {"id": 2, "name": "Jane Smith", "email": "jane@example.com"}
+            {"id": 2, "name": "Jane Smith", "email": "jane@example.com"},
         ],
         "row_count": 2,
         "columns": ["id", "name", "email"],
-        "execution_time": 0.125
+        "execution_time": 0.125,
     }
 
 
@@ -174,7 +163,7 @@ def sample_sql_queries() -> Dict[str, str]:
             SELECT * FROM products
             WHERE price > (SELECT AVG(price) FROM products)
         """,
-        "injection_attempt": "'; DROP TABLE users; --"
+        "injection_attempt": "'; DROP TABLE users; --",
     }
 
 
@@ -188,17 +177,17 @@ def sample_semantic_layer() -> Dict[str, Any]:
                 "columns": {
                     "id": "Unique identifier",
                     "name": "Customer full name",
-                    "email": "Contact email address"
-                }
+                    "email": "Contact email address",
+                },
             },
             "orders": {
                 "description": "Customer purchase orders",
                 "columns": {
                     "id": "Order identifier",
                     "user_id": "Customer ID",
-                    "total_price": "Order total amount"
-                }
-            }
+                    "total_price": "Order total amount",
+                },
+            },
         }
     }
 
@@ -207,10 +196,11 @@ def sample_semantic_layer() -> Dict[str, Any]:
 # Mock Service Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def mock_openai_client() -> Mock:
     """Mock OpenAI client."""
-    with patch('openai.OpenAI') as mock:
+    with patch("openai.OpenAI") as mock:
         client = MagicMock()
         client.chat.completions.create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="Test response"))]
@@ -222,7 +212,7 @@ def mock_openai_client() -> Mock:
 @pytest.fixture
 def mock_anthropic_client() -> Mock:
     """Mock Anthropic client."""
-    with patch('anthropic.Anthropic') as mock:
+    with patch("anthropic.Anthropic") as mock:
         client = MagicMock()
         client.messages.create.return_value = MagicMock(
             content=[MagicMock(text="Test response")]
@@ -235,23 +225,14 @@ def mock_anthropic_client() -> Mock:
 # Pytest Hooks
 # ============================================================================
 
+
 def pytest_configure(config):
     """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers", "unit: mark test as a unit test"
-    )
-    config.addinivalue_line(
-        "markers", "integration: mark test as an integration test"
-    )
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow running"
-    )
-    config.addinivalue_line(
-        "markers", "requires_api: mark test as requiring API keys"
-    )
-    config.addinivalue_line(
-        "markers", "requires_db: mark test as requiring database"
-    )
+    config.addinivalue_line("markers", "unit: mark test as a unit test")
+    config.addinivalue_line("markers", "integration: mark test as an integration test")
+    config.addinivalue_line("markers", "slow: mark test as slow running")
+    config.addinivalue_line("markers", "requires_api: mark test as requiring API keys")
+    config.addinivalue_line("markers", "requires_db: mark test as requiring database")
 
 
 @pytest.fixture(autouse=True)
@@ -279,14 +260,11 @@ def pytest_collection_modifyitems(config, items):
 def pytest_addoption(parser):
     """Add custom command-line options."""
     parser.addoption(
-        "--run-slow",
-        action="store_true",
-        default=False,
-        help="run slow tests"
+        "--run-slow", action="store_true", default=False, help="run slow tests"
     )
     parser.addoption(
         "--run-integration",
         action="store_true",
         default=False,
-        help="run integration tests"
+        help="run integration tests",
     )
