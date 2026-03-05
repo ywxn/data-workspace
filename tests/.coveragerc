@@ -1,0 +1,68 @@
+# Coverage.py configuration file
+# Controls behavior of coverage measurement and reporting
+
+[run]
+# Source code to measure
+source = .
+branch = True
+
+# Omit certain files from coverage
+omit =
+    */tests/*
+    */test_*.py
+    */conftest.py
+    setup.py
+    */site-packages/*
+    */venv/*
+    */virtualenv/*
+    __main__.py
+    */migrations/*
+
+[report]
+# Patterns for lines excluded from coverage
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+    
+    # Debug code
+    def __repr__
+    def __str__
+    
+    # Defensive programming
+    raise AssertionError
+    raise NotImplementedError
+    
+    # Non-runnable code
+    if __name__ == .__main__.:
+    
+    # Type checking blocks
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+    
+    # Abstract methods
+    @abstractmethod
+    @abc.abstractmethod
+    
+    # Unreachable code
+    if False:
+    if 0:
+    
+    # Logging
+    logger.debug
+    logger.exception
+
+# Minimum coverage percentage required
+fail_under = 60
+
+# Precision for coverage numbers
+precision = 2
+
+[html]
+# HTML report directory
+directory = htmlcov
+
+[paths]
+# Equivalent paths (for combining coverage from different environments)
+source =
+    .
+    */site-packages

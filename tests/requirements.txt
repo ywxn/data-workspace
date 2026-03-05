@@ -1,0 +1,42 @@
+# Test Suite Dependencies for AI Data Workspace
+# Install with: pip install -r requirements-test.txt
+
+# Core Testing Framework
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-timeout>=2.1.0
+pytest-xdist>=3.3.0
+pytest-watch>=4.2.0
+
+# Testing Utilities
+factory-boy>=3.3.0
+Faker>=19.0.0
+hypothesis>=6.82.0
+
+# Mocking and Patching
+responses>=0.23.0
+requests-mock>=1.11.0
+
+# Code Quality and Coverage
+coverage[toml]>=7.2.0
+pytest-html>=4.0.0
+pytest-json-report>=1.5.0
+pytest-randomly>=3.13.0
+
+# Data Testing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Optional but Recommended
+pytest-benchmark>=4.0.0
+pytest-profiling>=1.7.0
+pytest-repeat>=0.9.0
+pytest-flakes>=4.0.0
+pytest-sugar>=0.9.7
+
+# Documentation
+pytest-lazy-fixture>=0.6.3
+
+# For Integration Tests
+SQLAlchemy[sqlite]>=2.0.0

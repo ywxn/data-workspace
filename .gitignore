@@ -84,3 +84,5 @@ pip-wheel-metadata/
 
 # Plan
 plan-*.prompt.md
+
+reports/
