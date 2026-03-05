@@ -52,23 +52,28 @@ Or run the compiled executable (see Compilation section below).
 
 ### Menu Reference
 
-| Menu | Action | Shortcut |
-|---|---|---|
-| File | New Project | Ctrl+N |
-| File | Load Project | Ctrl+O |
-| File | Save Project | Ctrl+S |
-| File | Connect Data Source | — |
-| File | Connect Additional Data Source | — |
-| File | API Key Settings | — |
-| File | AI Host Settings | — |
-| File | Export Results | Ctrl+E |
-| File | Export Chat | — |
-| Settings | Local LLM Settings | — |
-| View | Dark / Light / System Theme | — |
-| View | Increase Font Size | Ctrl++ |
-| View | Decrease Font Size | Ctrl+- |
-| Help | Documentation | — |
-| Help | About | — |
+| Menu | Option | Shortcut | Description |
+|------|--------|----------|-------------|
+| **File** | New Project | Ctrl+N | Create a new project |
+| | Load Project | Ctrl+O | Load a previously saved project |
+| | Save Project | Ctrl+S | Save the current project |
+| | Connect Data Source | — | Add a new database or file data source |
+| | Export Results | — | Export query results to file |
+| | Export Chat | — | Export the current chat session to file |
+| | Exit | — | Close the application |
+| **View** | Theme | — | Switch between Dark, Light, and System themes |
+| | Font Size | Ctrl++/Ctrl+- | Increase or decrease font size |
+| **Settings** | API Settings | — | Configure API keys for OpenAI or Claude |
+| | Model Settings | — | Set default model for the active provider |
+| | Local LLM Settings | — | Configure local LLM server or model hosting |
+| | AI Host Settings | — | Configure cloud provider (OpenAI/Claude) or local LLM |
+| | Table Selection Method | — | Choose between Manual or NLP-based table selection |
+| | Prompt Expansion | — | Enable/disable automatic prompt enrichment |
+| | Interaction Mode | — | Switch between CxO (executive) or Analyst mode |
+| **Tools** | Clear Conversation | — | Clear the current chat history |
+| | Reset Workspace | — | Reset to initial state and remove all data |
+| **Help** | Documentation | — | Open the online documentation |
+| | About | — | Show application version and information |
 
 ## Compilation
 
