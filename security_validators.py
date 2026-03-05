@@ -16,6 +16,7 @@ from typing import Tuple, List, NamedTuple, Dict, Optional, Iterable
 # Core Rule Model
 # ============================================================
 
+
 class SecurityRule(NamedTuple):
     pattern: str
     message: str
@@ -48,9 +49,7 @@ PATH_TRAVERSAL_RULES = [
 ]
 
 ALL_SECURITY_RULES: Iterable[SecurityRule] = (
-    SHELL_COMMAND_RULES
-    + DANGEROUS_EVAL_RULES
-    + PATH_TRAVERSAL_RULES
+    SHELL_COMMAND_RULES + DANGEROUS_EVAL_RULES + PATH_TRAVERSAL_RULES
 )
 
 
@@ -60,9 +59,18 @@ ALL_SECURITY_RULES: Iterable[SecurityRule] = (
 
 # Hard deny dangerous SQL keywords (DDL/DML/system access)
 FORBIDDEN_SQL_KEYWORDS = [
-    "insert", "update", "delete", "drop", "alter",
-    "truncate", "create", "grant", "revoke",
-    "exec", "execute", "xp_cmdshell",
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "truncate",
+    "create",
+    "grant",
+    "revoke",
+    "exec",
+    "execute",
+    "xp_cmdshell",
 ]
 
 # Injection patterns
@@ -91,6 +99,7 @@ ALL_SQL_RULES = SQL_INJECTION_RULES + SQL_DYNAMIC_BUILD_RULES
 # Utility Helpers
 # ============================================================
 
+
 def _normalize_sql(query: str) -> str:
     """Normalize SQL for analysis."""
     # Remove excessive whitespace
@@ -108,8 +117,7 @@ def _contains_forbidden_keywords(query: str) -> Optional[str]:
 
 
 def _validate_parameterization(
-    query: str,
-    params: Optional[Dict[str, object]]
+    query: str, params: Optional[Dict[str, object]]
 ) -> Optional[str]:
     """
     Enforce parameterized queries using named placeholders.
@@ -163,6 +171,7 @@ def _enforce_select_only(query: str) -> Optional[str]:
 # Public Validation Functions
 # ============================================================
 
+
 def validate_code_security(code: str) -> Tuple[bool, str]:
     """
     Validate Python code against dangerous execution patterns.
@@ -190,8 +199,7 @@ def get_security_violations(code: str) -> List[str]:
 
 
 def validate_sql_security(
-    query: str,
-    params: Optional[Dict[str, object]] = None
+    query: str, params: Optional[Dict[str, object]] = None
 ) -> Tuple[bool, str]:
     """
     Validate SQL query for injection, dynamic construction,
@@ -228,8 +236,7 @@ def validate_sql_security(
 
 
 def get_sql_security_violations(
-    query: str,
-    params: Optional[Dict[str, object]] = None
+    query: str, params: Optional[Dict[str, object]] = None
 ) -> List[str]:
     """
     Return all SQL security violations found.

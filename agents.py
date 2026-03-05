@@ -308,7 +308,9 @@ class AIAgent:
     - Analyzer: Provides human-readable insights
     """
 
-    def __init__(self, api_provider: Optional[str] = None, session_model: Optional[str] = None):
+    def __init__(
+        self, api_provider: Optional[str] = None, session_model: Optional[str] = None
+    ):
         """
         Initialize the AI Agent.
 
@@ -326,10 +328,10 @@ class AIAgent:
         # Determine provider at initialization time (read default lazily)
         chosen_default = ConfigManager.get_default_api()
         self.api_provider = (api_provider or chosen_default).lower()
-        
+
         # Store session model override
         self.session_model = session_model
-        
+
         # Initialize unified memory service (will be set per project)
         self.memory_service: Optional[UnifiedMemoryService] = None
 
@@ -446,16 +448,19 @@ class AIAgent:
         if self.session_model:
             logger.debug(f"Using session model override: {self.session_model}")
             return self.session_model
-        
+
         # Tier 2: Provider default from config
         model_defaults = ConfigManager.get_model_defaults()
         provider_default = model_defaults.get(self.api_provider)
         if provider_default:
-            logger.debug(f"Using provider default for {self.api_provider}: {provider_default}")
+            logger.debug(
+                f"Using provider default for {self.api_provider}: {provider_default}"
+            )
             return provider_default
-        
+
         # Tier 3: System fallback
         from constants import LLM_MODELS
+
         fallback = LLM_MODELS.get(self.api_provider, "")
         logger.debug(f"Using system fallback for {self.api_provider}: {fallback}")
         return fallback
@@ -727,7 +732,7 @@ class AIAgent:
             return None
 
         schema_metadata = self._build_schema_metadata(context)
-        
+
         # Build semantic context
         entity_names = []
         glossary_terms = {}
@@ -773,12 +778,12 @@ class AIAgent:
         )
 
         response = response.strip()
-        
+
         # If response is "CLEAR" or similar, no clarification needed
         if response.upper().startswith("CLEAR"):
             logger.info("No ambiguity detected - proceeding with query")
             return None
-        
+
         # Otherwise, return the clarification question
         logger.info(f"Ambiguity detected - clarification needed: {response}")
         return response
@@ -1166,7 +1171,7 @@ class AIAgent:
     def set_project_context(self, project_id: Optional[str] = None) -> None:
         """
         Set the project context for memory service.
-        
+
         Args:
             project_id: Project identifier for scoping query memory
         """
@@ -1174,13 +1179,13 @@ class AIAgent:
             # Load memory retention config
             config = ConfigManager.load_config()
             retention_config = config.get("memory_retention", {})
-            
+
             self.memory_service = UnifiedMemoryService(
                 project_id=project_id,
                 retention_policy=retention_config.get("policy", "keep_all"),
                 rolling_n=retention_config.get("rolling_n", 100),
                 ttl_days=retention_config.get("ttl_days", 90),
-                global_index_enabled=True
+                global_index_enabled=True,
             )
             logger.info(f"Memory service initialized for project: {project_id}")
         else:
@@ -1217,7 +1222,7 @@ class AIAgent:
         result_summary = None
         error_message = None
         normalized_prompt = user_query  # Will be updated if prompt expansion is used
-        
+
         try:
             logger.info(f"Starting execute_query with query: {user_query}")
             mode = ConfigManager.get_interaction_mode()
@@ -1231,7 +1236,7 @@ class AIAgent:
             clarification_question = await self.clarification_detector(
                 user_query, context, semantic_layer
             )
-            
+
             if clarification_question:
                 # Return clarification question with special marker
                 logger.info("Returning clarification question to user")
@@ -1331,17 +1336,17 @@ class AIAgent:
                 pd.Timestamp.now() - execution_start
             ).total_seconds()
             result_summary = analysis[:200] if analysis else None  # Store brief summary
-            
+
             # Step 5: Format response based on mode
             if status_callback:
                 status_callback("Formatting response...")
-            
+
             response = None
             if mode == "cxo":
                 response = self._format_cxo_response(analysis, chart_path)
             else:
                 response = self._format_response(query_result, analysis, chart_path)
-            
+
             # Store in memory service if available
             if self.memory_service:
                 try:
@@ -1355,18 +1360,18 @@ class AIAgent:
                         model_provider=self.api_provider,
                         model_name=model_name,
                         result_summary=result_summary,
-                        error_message=error_message
+                        error_message=error_message,
                     )
                     logger.info("Query stored in memory service")
                 except Exception as mem_err:
                     logger.warning(f"Failed to store query in memory: {mem_err}")
-            
+
             return response
 
         except Exception as e:
             logger.error(f"Error in execute_query: {str(e)}", exc_info=True)
             error_message = str(e)
-            
+
             # Store failed query in memory if available
             if self.memory_service:
                 try:
@@ -1380,11 +1385,11 @@ class AIAgent:
                         model_provider=self.api_provider,
                         model_name=model_name,
                         result_summary=None,
-                        error_message=error_message
+                        error_message=error_message,
                     )
                 except Exception as mem_err:
                     logger.warning(f"Failed to store failed query in memory: {mem_err}")
-            
+
             return f"Error processing query: {str(e)}\n\nPlease try rephrasing your question."
 
     def _execute_sql_query(
@@ -1455,7 +1460,10 @@ class AIAgent:
                     break
                 normalized_chunk = self._normalize_sql_rows(chunk, columns)
                 rows.extend(normalized_chunk)
-                if progress_callback and len(rows) - last_reported >= DB_READ_CHUNK_SIZE:
+                if (
+                    progress_callback
+                    and len(rows) - last_reported >= DB_READ_CHUNK_SIZE
+                ):
                     last_reported = len(rows)
                     progress_callback(f"Fetched {len(rows):,} rows...")
                 if len(rows) >= DB_MAX_ROWS_IN_MEMORY:

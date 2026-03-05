@@ -573,7 +573,7 @@ class ConfigManager:
 
         config = ConfigManager.load_config()
         model_defaults = config.get("model_defaults", {})
-        
+
         # Merge with system fallback defaults from constants
         return {
             "openai": model_defaults.get("openai", LLM_MODELS.get("openai", "")),
@@ -596,14 +596,14 @@ class ConfigManager:
         provider = provider.lower()
         if provider not in ("openai", "claude", "local"):
             return False, "Invalid provider. Must be 'openai', 'claude', or 'local'."
-        
+
         if not model_id or not isinstance(model_id, str):
             return False, "Model ID must be a non-empty string."
 
         config = ConfigManager.load_config()
         if "model_defaults" not in config:
             config["model_defaults"] = {}
-        
+
         config["model_defaults"][provider] = model_id
         ConfigManager._logger.info(f"Model default set for {provider}: {model_id}")
         return ConfigManager.save_config(config)
@@ -625,7 +625,7 @@ class ConfigManager:
         """
         config = ConfigManager.load_config()
         retention = config.get("memory_retention", {})
-        
+
         return {
             "policy": retention.get("policy", "keep_all"),
             "rolling_n": retention.get("rolling_n", 100),
@@ -650,11 +650,14 @@ class ConfigManager:
             Tuple of (success, message)
         """
         if policy not in ("keep_all", "rolling_n", "ttl_days"):
-            return False, "Invalid policy. Must be 'keep_all', 'rolling_n', or 'ttl_days'."
-        
+            return (
+                False,
+                "Invalid policy. Must be 'keep_all', 'rolling_n', or 'ttl_days'.",
+            )
+
         if rolling_n < 1:
             return False, "rolling_n must be at least 1."
-        
+
         if ttl_days < 1:
             return False, "ttl_days must be at least 1."
 
@@ -702,4 +705,3 @@ class ConfigManager:
             f"Clarification flow {'enabled' if enabled else 'disabled'}"
         )
         return ConfigManager.save_config(config)
-

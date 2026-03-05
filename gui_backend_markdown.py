@@ -339,7 +339,7 @@ class DataWorkspaceBackend:
             if not project_id or project_id in self.projects:
                 project_id = str(uuid.uuid4())
                 logger.info(f"Generated new unique project ID: {project_id}")
-            
+
             title = data.get("title", f"Project {project_id}")
             description = data.get("description", "")
 
@@ -355,7 +355,7 @@ class DataWorkspaceBackend:
 
             data_source = data.get("data_source") or {}
             data_source["file_name"] = file_name
-            
+
             # Load semantic layer from project data
             semantic_layer = data.get("semantic_layer")
 
