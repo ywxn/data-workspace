@@ -3473,7 +3473,12 @@ class DataWorkspaceGUI(QMainWindow):
             role = msg.get("role", "unknown").capitalize()
             content = msg.get("content", "")
             formatted_content = self.backend.markdown_to_qt(content)
-            parts.append(f"**{role}:** {formatted_content}")
+            # Keep role and body on separate lines so markdown headings/lists
+            # in the body render correctly when chat history is reloaded.
+            if formatted_content:
+                parts.append(f"**{role}:**\n\n{formatted_content}")
+            else:
+                parts.append(f"**{role}:**")
         return "\n\n".join(parts)
 
     def _get_current_markdown(self) -> str:

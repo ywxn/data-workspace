@@ -46,6 +46,7 @@ class QueryMemoryRecord:
     user_prompt: str
     normalized_prompt: str
     generated_sql: Optional[str] = None
+    generated_viz_code: Optional[str] = None
     execution_success: bool = False
     execution_metadata: Dict[str, Any] = field(default_factory=dict)
     model_provider: Optional[str] = None
@@ -235,6 +236,7 @@ class UnifiedMemoryService:
         user_prompt: str,
         normalized_prompt: str,
         generated_sql: Optional[str] = None,
+        generated_viz_code: Optional[str] = None,
         execution_success: bool = False,
         execution_metadata: Optional[Dict[str, Any]] = None,
         model_provider: Optional[str] = None,
@@ -249,6 +251,7 @@ class UnifiedMemoryService:
             user_prompt: Original user query
             normalized_prompt: Normalized/expanded query
             generated_sql: Generated SQL query
+            generated_viz_code: Generated Python visualization code
             execution_success: Whether execution succeeded
             execution_metadata: Metadata about execution (rows, duration, etc.)
             model_provider: LLM provider used (openai, claude, local)
@@ -275,6 +278,7 @@ class UnifiedMemoryService:
             user_prompt=user_prompt,
             normalized_prompt=normalized_prompt,
             generated_sql=generated_sql,
+            generated_viz_code=generated_viz_code,
             execution_success=execution_success,
             execution_metadata=execution_metadata or {},
             model_provider=model_provider,

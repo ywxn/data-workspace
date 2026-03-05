@@ -299,16 +299,33 @@ class DataWorkspaceBackend:
         return pattern.sub(replace, content)
 
     def list_saved_projects(self) -> List[str]:
-        """List saved project files under ./projects."""
+        """List saved project files under ./projects.
+        
+        Only returns JSON files that contain valid project_id fields.
+        """
         try:
             if not os.path.isdir("projects"):
                 return []
-            files = [
-                f
-                for f in os.listdir("projects")
-                if os.path.isfile(os.path.join("projects", f))
-            ]
-            return files
+            valid_projects = []
+            
+            for f in os.listdir("projects"):
+                file_path = os.path.join("projects", f)
+                
+                # Only consider JSON files
+                if not (os.path.isfile(file_path) and f.endswith(".json")):
+                    continue
+                
+                # Validate that file contains a project_id
+                try:
+                    with open(file_path, "r", encoding="utf-8") as fp:
+                        data = json.load(fp)
+                        if isinstance(data, dict) and "project_id" in data:
+                            valid_projects.append(f)
+                except (json.JSONDecodeError, IOError):
+                    # Skip files that can't be parsed or read
+                    continue
+            
+            return valid_projects
         except Exception:
             return []
 

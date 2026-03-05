@@ -434,6 +434,9 @@ class AIAgent:
 
         self.execution_context: Dict[str, Any] = {}
 
+        # Initialize visualization code cache (maps data structure to generated Altair code)
+        self.visualization_code_cache: Dict[str, str] = {}
+
         # Ensure temp directory exists
         Path(VISUALIZATION_TEMP_DIR).mkdir(exist_ok=True)
 
@@ -469,6 +472,50 @@ class AIAgent:
         fallback = LLM_MODELS.get(self.api_provider, "")
         logger.debug(f"Using system fallback for {self.api_provider}: {fallback}")
         return fallback
+
+    def _get_current_model(self) -> str:
+        """
+        Get the current model name being used for this agent session.
+        
+        Returns:
+            The resolved model ID string
+        """
+        return self._resolve_model()
+
+    def _generate_visualization_cache_key(
+        self, columns: List[str], column_types: Optional[Dict[str, str]] = None
+    ) -> str:
+        """
+        Generate a cache key for visualization code based on data structure.
+
+        The key is derived from the column names and their types, ensuring
+        that similar data structures reuse the same visualization code.
+
+        Args:
+            columns: List of column names
+            column_types: Optional mapping of column names to their types
+
+        Returns:
+            A hash-based cache key string
+        """
+        import hashlib
+
+        # Build a canonical representation of the data structure
+        if not column_types:
+            column_types = {}
+
+        structure_parts = []
+        for col in sorted(columns):
+            col_type = column_types.get(col, "unknown")
+            structure_parts.append(f"{col}:{col_type}")
+
+        structure_str = "|".join(structure_parts)
+        cache_key = hashlib.md5(structure_str.encode()).hexdigest()
+
+        logger.debug(
+            f"Generated visualization cache key: {cache_key} for columns: {columns}"
+        )
+        return cache_key
 
     async def _call_llm(
         self,
@@ -948,10 +995,10 @@ class AIAgent:
     async def visualization_agent(
         self,
         query_result: Dict[str, Any],
-        plan: Dict[str, Any],
+        plan: Optional[Dict[str, Any]],
         user_query: str,
         stream: bool = False,
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         """
         Visualization agent that generates Altair charts from query results.
 
@@ -961,18 +1008,18 @@ class AIAgent:
             user_query: Original user query for context
 
         Returns:
-            Path to saved chart image, or None if visualization fails
+            Tuple of (chart_path, visualization_code), or (None, None) if visualization fails
         """
         if "error" in query_result:
             logger.warning("Cannot visualize error result")
-            return None
+            return None, None
 
         columns = query_result.get("columns", [])
         rows = query_result.get("rows", [])
 
         if not rows:
             logger.warning("Cannot visualize empty result set")
-            return None
+            return None, None
 
         # Convert to list of dictionaries and DataFrame for Altair
         data_records = self._normalize_sql_rows(rows, columns)
@@ -984,8 +1031,37 @@ class AIAgent:
         # Prepare sample for prompt (first 5 records)
         sample_rows = df.head(5).to_dict(orient="records") if not df.empty else []
 
+        # Check visualization code cache first
+        cache_key = self._generate_visualization_cache_key(columns)
+        cached_viz_code = self.visualization_code_cache.get(cache_key)
+
+        if cached_viz_code:
+            logger.info(
+                f"VISUALIZATION CACHE HIT: Reusing code for columns: {columns}"
+            )
+            try:
+                # Try executing cached code
+                chart_path = self._execute_visualization_code(cached_viz_code, df)
+                if chart_path:
+                    logger.info("Cached visualization code executed successfully")
+                    return chart_path, cached_viz_code
+                else:
+                    logger.warning(
+                        "Cached visualization code execution failed, regenerating..."
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Cached visualization code failed: {e}, regenerating..."
+                )
+
+        # TODO: Add cached analysis if 1.00 similarity, skipping entire pipeline.
+
+        # Cache miss or cached code failed - generate new code
+        logger.info("VISUALIZATION CACHE MISS: Generating new visualization code")
+
         # Determine visualization requirements from plan
-        requirements = plan.get("analysis_focus", [])
+        plan_obj = plan or {}
+        requirements = plan_obj.get("analysis_focus", [])
         if isinstance(requirements, list):
             requirements = ", ".join(requirements)
         requirements = f"{requirements}\n\nUser query: {user_query}"
@@ -1013,13 +1089,19 @@ class AIAgent:
             # Clean code output
             viz_code = self._clean_python_output(viz_code)
 
+            # Store in cache
+            self.visualization_code_cache[cache_key] = viz_code
+            logger.info(
+                f"Stored visualization code in cache (key: {cache_key[:8]}...)"
+            )
+
             # Execute visualization code
             chart_path = self._execute_visualization_code(viz_code, df)
-            return chart_path
+            return chart_path, viz_code
 
         except Exception as e:
             logger.error(f"Visualization generation failed: {str(e)}", exc_info=True)
-            return None
+            return None, None
 
     def _execute_visualization_code(
         self, viz_code: str, df: pd.DataFrame
@@ -1228,6 +1310,7 @@ class AIAgent:
         result_summary = None
         error_message = None
         normalized_prompt = user_query  # Will be updated if prompt expansion is used
+        generated_viz_code = None  # Track generated visualization code
 
         try:
             logger.info(f"Starting execute_query with query: {user_query}")
@@ -1253,28 +1336,44 @@ class AIAgent:
                 status_callback("Checking memory cache...")
             
             cache_hit = None
+            query_requires_viz = self._query_requests_visualization(user_query)
             if self.memory_service:
                 try:
                     similar_queries = self.memory_service.search_similar_queries(
                         prompt=user_query,
-                        limit=3,
+                        limit=10 if query_requires_viz else 3,
                         project_scoped=True,
                         similarity_threshold=0.75,  # Lower threshold for candidates
                     )
                     
-                    # Check for high-confidence cache hit (successful queries only)
+                    # Check for high-confidence cache hit (successful queries only).
+                    # If this query asks for a chart, prefer records that already have
+                    # generated visualization code in memory.
+                    fallback_hit = None
                     for result in similar_queries:
                         if (
                             result.similarity_score >= 0.85  # High confidence threshold
                             and result.record.execution_success
                             and result.record.generated_sql
                         ):
-                            cache_hit = result
-                            logger.info(
-                                f"CACHE HIT: similarity={result.similarity_score:.3f}, "
-                                f"prompt='{result.record.user_prompt}'"
-                            )
-                            break
+                            if (
+                                query_requires_viz
+                                and result.record.generated_viz_code
+                            ):
+                                cache_hit = result
+                                break
+                            if fallback_hit is None:
+                                fallback_hit = result
+
+                    if cache_hit is None:
+                        cache_hit = fallback_hit
+
+                    if cache_hit:
+                        logger.info(
+                            f"CACHE HIT: similarity={cache_hit.similarity_score:.3f}, "
+                            f"prompt='{cache_hit.record.user_prompt}', "
+                            f"has_viz_code={'yes' if bool(cache_hit.record.generated_viz_code) else 'no'}"
+                        )
                     
                     if not cache_hit and similar_queries:
                         logger.info(
@@ -1311,19 +1410,52 @@ class AIAgent:
                     execution_metadata["cache_similarity"] = cache_hit.similarity_score
                     execution_metadata["original_prompt"] = cache_hit.record.user_prompt
                     
+                    # Check if visualization is needed
+                    chart_path = None
+                    requires_viz = query_requires_viz
+                    if requires_viz and query_result and "error" not in query_result:
+                        generated_viz_code = cache_hit.record.generated_viz_code
+                        if generated_viz_code:
+                            # Hydrate in-memory viz cache from persisted query memory.
+                            # This avoids an LLM round-trip for repeated visualizations.
+                            viz_columns = query_result.get("columns", [])
+                            viz_cache_key = self._generate_visualization_cache_key(
+                                viz_columns
+                            )
+                            self.visualization_code_cache[viz_cache_key] = (
+                                generated_viz_code
+                            )
+                            logger.info(
+                                "Visualization code loaded from query memory index"
+                            )
+                        if status_callback:
+                            status_callback("Generating visualization...")
+                        logger.info("Visualization generation required for cached query")
+                        chart_path, generated_viz_code = await self.visualization_agent(
+                            query_result, None, user_query, stream=True
+                        )
+                    
                     # Generate analysis and format response
                     if status_callback:
                         status_callback("Analyzing results...")
                     
-                    analysis = await self.analyzer_agent(
-                        user_query, query_result, mode, stream=True
+                    cached_plan = {
+                        "task_type": "analysis",
+                        "requires_visualization": bool(chart_path),
+                    }
+                    analysis = await self.analysis_agent(
+                        user_query,
+                        context,
+                        plan=cached_plan,
+                        code_output=query_result,
+                        stream_callback=stream_callback,
                     )
                     
                     response = None
                     if mode == "cxo":
-                        response = self._format_cxo_response(analysis, None)
+                        response = self._format_cxo_response(analysis, chart_path)
                     else:
-                        response = self._format_response(query_result, analysis, None)
+                        response = self._format_response(query_result, analysis, chart_path, generated_sql=generated_sql)
                     
                     # Store cache hit as a new record
                     if self.memory_service:
@@ -1333,6 +1465,7 @@ class AIAgent:
                                 user_prompt=user_query,
                                 normalized_prompt=user_query,
                                 generated_sql=generated_sql,
+                                generated_viz_code=generated_viz_code,
                                 execution_success=True,
                                 execution_metadata=execution_metadata,
                                 model_provider=self.api_provider,
@@ -1419,7 +1552,7 @@ class AIAgent:
                     if status_callback:
                         status_callback("Generating visualization...")
                     logger.info("Visualization generation required")
-                    chart_path = await self.visualization_agent(
+                    chart_path, generated_viz_code = await self.visualization_agent(
                         query_result, plan, user_query, stream=True
                     )
             else:
@@ -1455,7 +1588,7 @@ class AIAgent:
             if mode == "cxo":
                 response = self._format_cxo_response(analysis, chart_path)
             else:
-                response = self._format_response(query_result, analysis, chart_path)
+                response = self._format_response(query_result, analysis, chart_path, generated_sql=generated_sql)
 
             # Store in memory service if available
             if self.memory_service:
@@ -1465,6 +1598,7 @@ class AIAgent:
                         user_prompt=user_query,
                         normalized_prompt=normalized_prompt,
                         generated_sql=generated_sql,
+                        generated_viz_code=generated_viz_code,
                         execution_success=execution_success,
                         execution_metadata=execution_metadata,
                         model_provider=self.api_provider,
@@ -1490,6 +1624,7 @@ class AIAgent:
                         user_prompt=user_query,
                         normalized_prompt=normalized_prompt,
                         generated_sql=generated_sql,
+                        generated_viz_code=generated_viz_code,
                         execution_success=False,
                         execution_metadata=execution_metadata,
                         model_provider=self.api_provider,
@@ -1897,7 +2032,7 @@ class AIAgent:
         return "\n".join(parts) if parts else "No insights available for this query."
 
     def _format_response(
-        self, code_result: Any, analysis: str, chart_path: Optional[str] = None
+        self, code_result: Any, analysis: str, chart_path: Optional[str] = None, generated_sql: Optional[str] = None
     ) -> str:
         """
         Format the final response with code execution results, visualizations, and analysis.
@@ -1906,6 +2041,7 @@ class AIAgent:
             code_result: Output from code execution
             analysis: Text analysis from the analyzer
             chart_path: Optional path to generated chart
+            generated_sql: Optional SQL query that was executed
 
         Returns:
             Formatted response string
@@ -1913,10 +2049,10 @@ class AIAgent:
         response_parts = []
 
         # If analyst mode - include generated SQL code but not raw data tables
-        if ConfigManager.get_interaction_mode() == "analyst" and code_result: # no need to check for error here, pipeline will stop
+        if ConfigManager.get_interaction_mode() == "analyst" and generated_sql: # no need to check for error here, pipeline will stop
             response_parts.append("### Generated SQL:")
             response_parts.append("")
-            response_parts.append(f"```sql\n{self._clean_sql_output(code_result.get('generated_sql', ''))}\n```")
+            response_parts.append(f"```sql\n{self._clean_sql_output(generated_sql)}\n```")
 
         # Add visualization if available
         if chart_path:
