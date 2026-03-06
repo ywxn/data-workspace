@@ -926,16 +926,44 @@ class AIAgent:
             temperature=0.2,  # Low temperature for consistent detection
         )
 
-        response = response.strip()
+        response = self._normalize_clarification_detector_response(response)
 
         # If response is "CLEAR" or similar, no clarification needed
-        if response.upper().startswith("CLEAR"):
+        if response is None:
             logger.info("No ambiguity detected - proceeding with query")
             return None
 
         # Otherwise, return the clarification question
         logger.info(f"Ambiguity detected - clarification needed: {response}")
         return response
+
+    @staticmethod
+    def _normalize_clarification_detector_response(response: str) -> Optional[str]:
+        """Normalize detector output and guard against prompt-instruction echoes."""
+        cleaned = (response or "").strip()
+        if not cleaned:
+            return None
+
+        # Explicit CLEAR/clear-like outputs.
+        if cleaned.upper().startswith("CLEAR"):
+            return None
+
+        # Some models echo the detector instruction prefix verbatim.
+        cleaned = re.sub(r"^\s*if\s+ambiguous\s*:\s*", "", cleaned, flags=re.I)
+
+        lower = cleaned.lower()
+        instruction_echo_markers = (
+            "output only a single clarifying question",
+            "if clear: output only the word",
+            "be highly conservative: prefer clear",
+        )
+        if any(marker in lower for marker in instruction_echo_markers):
+            logger.warning(
+                "Clarification detector returned instruction text; treating as CLEAR"
+            )
+            return None
+
+        return cleaned
 
     @staticmethod
     def _can_infer_query_meaning(
@@ -1746,6 +1774,9 @@ class AIAgent:
             logger.info(f"Starting execute_query with query: {user_query}")
             mode = ConfigManager.get_interaction_mode()
             logger.info(f"Interaction mode: {mode}")
+            clarification_already_provided = bool(
+                context.get("_skip_clarification", False)
+            )
 
             # Step 0: Check memory cache for similar queries first.
             # This avoids unnecessary clarification/prompt expansion work on cache hits.
@@ -1968,10 +1999,16 @@ class AIAgent:
                 status_callback("Checking for clarification...")
 
             # Step 0.5: Check for clarification needs (pre-SQL stage)
-            semantic_layer = context.get("semantic_layer")
-            clarification_question = await self.clarification_detector(
-                user_query, context, semantic_layer
-            )
+            clarification_question = None
+            if clarification_already_provided:
+                logger.info(
+                    "Skipping clarification detector: user already provided follow-up context"
+                )
+            else:
+                semantic_layer = context.get("semantic_layer")
+                clarification_question = await self.clarification_detector(
+                    user_query, context, semantic_layer
+                )
 
             if clarification_question:
                 # Return clarification question with special marker

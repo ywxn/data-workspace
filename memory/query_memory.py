@@ -16,18 +16,14 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from logger import get_logger
+from embedding_model_cache import get_sentence_transformer
 
 logger = get_logger(__name__)
 
 try:
-    from sentence_transformers import SentenceTransformer
     import numpy as np
 except ImportError:
-    SentenceTransformer = None
     np = None
-    logger.warning(
-        "sentence-transformers not available; semantic search will use lexical fallback"
-    )
 
 
 class RetentionPolicy(Enum):
@@ -140,21 +136,14 @@ class UnifiedMemoryService:
 
         self._model_load_attempted = True
 
-        if SentenceTransformer is None:
-            logger.warning(
-                "sentence-transformers not installed; using lexical search only"
-            )
-            return None
-
-        try:
-            self._embedding_model = SentenceTransformer(
-                "sentence-transformers/all-MiniLM-L6-v2",
-                cache_folder="models",
-            )
-            logger.info("Semantic search model loaded: all-MiniLM-L6-v2")
-        except Exception as exc:
-            logger.warning(f"Semantic model unavailable, using lexical fallback: {exc}")
-            self._embedding_model = None
+        self._embedding_model = get_sentence_transformer(
+            "all-MiniLM-L6-v2",
+            cache_folder="models",
+        )
+        if self._embedding_model is not None:
+            logger.info("Semantic search model ready: all-MiniLM-L6-v2")
+        else:
+            logger.warning("Semantic model unavailable; using lexical fallback")
 
         return self._embedding_model
 

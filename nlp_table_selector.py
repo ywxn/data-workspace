@@ -20,6 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 from constants import DEFAULT_ACRONYMS
+from embedding_model_cache import get_sentence_transformer
 
 import numpy as np
 
@@ -280,15 +281,12 @@ class NLPTableSelector:
         # Initialize normalizer
         self.normalizer = SchemaNormalizer(acronym_map=acronym_map)
 
-        # Load embedding model
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            self.model = SentenceTransformer(
-                model_name,
-                cache_folder="models",  # will download unless file exists
-            )
-        except ImportError:
+        # Load (or reuse) embedding model
+        self.model = get_sentence_transformer(
+            model_name,
+            cache_folder="models",
+        )
+        if self.model is None:
             raise ImportError(
                 "sentence-transformers required. Install with: "
                 "pip install sentence-transformers"

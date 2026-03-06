@@ -2875,6 +2875,13 @@ class QueryWorker(QThread):
             else:
                 effective_context = self.data_context
 
+            # Clarification follow-up should continue execution, not ask for
+            # another ambiguity question for the same intent.
+            effective_context = dict(effective_context)
+            effective_context["_skip_clarification"] = bool(
+                self.clarification_context
+            )
+
             # Run async agent methods in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -2896,7 +2903,7 @@ class QueryWorker(QThread):
                 clarification_text = result.replace(
                     "[[CLARIFICATION_NEEDED]]", ""
                 ).strip()
-                logger.info(f"Clarification requested: {clarification_text}")
+                logger.debug("Clarification requested; emitting clarification signal")
                 self.clarification_signal.emit(clarification_text)
             else:
                 logger.info(
