@@ -3,7 +3,7 @@ import asyncio
 import webbrowser
 import json
 from datetime import datetime
-from PySide6.QtCore import Qt, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, Signal, QThread, QTimer, QMimeData
 from PySide6.QtGui import QFont, QKeyEvent, QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -75,6 +75,13 @@ class MessageTextEdit(QTextEdit):
         else:
             # All other keys: default behavior
             super().keyPressEvent(e)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:
+        """Paste only plain text to prevent external rich-text formatting."""
+        if source and source.hasText():
+            self.insertPlainText(source.text())
+            return
+        super().insertFromMimeData(source)
 
 
 class InteractionModeDialog(QDialog):

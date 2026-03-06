@@ -377,6 +377,39 @@ class TestAgentResponses:
         assert "error" in error_response
 
 
+class TestAudienceMarkdownNormalization:
+    """Test normalization of stage-2 audience markdown output."""
+
+    def test_normalizes_inline_sections_and_bullets(self):
+        from agents import AIAgent
+
+        raw = (
+            "Headline Insight: Item 407 has emerged as the most frequently requested item, receiving 68 requests. "
+            "Key Patterns and Insights: - Item 407 leads in demand with 68 requests. - The average request count among the top 10 items is 36.4. "
+            "Business Implications: - Prioritize Item 407 inventory and marketing. "
+            "Suggested Actions: - Increase stock for Item 407."
+        )
+
+        normalized = AIAgent._normalize_audience_markdown(raw)
+
+        assert "### Headline Insight" in normalized
+        assert "### Key Patterns and Insights" in normalized
+        assert "### Business Implications" in normalized
+        assert "### Suggested Actions" in normalized
+        assert "\n\n- Item 407 leads in demand with 68 requests." in normalized
+
+    def test_keeps_existing_markdown_headings(self):
+        from agents import AIAgent
+
+        raw = (
+            "### Headline Insight\nThe top item is 407.\n\n"
+            "### Key Patterns and Insights\n- Item 407 has 68 requests."
+        )
+
+        normalized = AIAgent._normalize_audience_markdown(raw)
+        assert normalized == raw
+
+
 @pytest.mark.requires_api
 class TestAgentsWithRealLLMs:
     """Tests that require real LLM API calls."""

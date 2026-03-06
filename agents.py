@@ -229,6 +229,16 @@ GENERAL RULES
 - Do not invent new insights.
 - Do not reference SQL, queries, or database structures.
 - Integrate chart and table interpretations naturally if present.
+- Output MUST be valid markdown.
+- Use exactly these section headings in this order:
+    1) Headline Insight
+    2) Key Patterns and Insights
+    3) Business Implications
+    4) Suggested Actions
+- Each heading must be on its own line using markdown heading syntax: `### <Heading>`.
+- For sections 2, 3, and 4, use markdown bullet points with one point per line.
+- Do not place bullets on the same line as the heading label.
+- Do not output JSON.
 
 AUDIENCE DEFINITIONS
 
@@ -1494,13 +1504,84 @@ class AIAgent:
         ]
 
         logger.info(f"Calling audience translation stage for mode: {audience_mode}")
-        return await self._call_llm(
+        translated = await self._call_llm(
             messages,
             max_tokens=ANALYSIS_MAX_TOKENS,
             temperature=ANALYSIS_TEMPERATURE,
             stream=True,
             stream_callback=stream_callback,
         )
+        return self._normalize_audience_markdown(translated)
+
+    @staticmethod
+    def _normalize_audience_markdown(text: str) -> str:
+        """Repair common inline section formatting issues in stage 2 markdown output."""
+        content = (text or "").strip()
+        if not content:
+            return ""
+
+        # If the model already produced markdown headings, keep output as-is.
+        if re.search(
+            r"(?im)^\s*#{1,6}\s*(Headline Insight|Key Patterns and Insights|Business Implications|Suggested Actions)\b",
+            content,
+        ):
+            return content
+
+        section_re = re.compile(
+            r"(?is)(?:\*\*)?\s*(Headline Insight|Key Patterns and Insights|Business Implications|Suggested Actions)\s*:\s*"
+        )
+        matches = list(section_re.finditer(content))
+        if len(matches) < 2:
+            return content
+
+        sections: Dict[str, str] = {}
+        for idx, match in enumerate(matches):
+            name = match.group(1)
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+            sections[name] = content[start:end].strip()
+
+        def _normalize_bullets(block: str) -> List[str]:
+            raw = (block or "").strip()
+            if not raw:
+                return []
+
+            if "\n- " in raw or raw.startswith("-"):
+                lines = [line.strip().lstrip("-").strip() for line in raw.splitlines()]
+                return [line for line in lines if line]
+
+            cleaned = re.sub(r"\s+", " ", raw).strip()
+
+            parts = [part.strip(" -\t") for part in re.split(r"\s+-\s+", cleaned) if part.strip(" -\t")]
+            if len(parts) > 1:
+                return parts
+
+            return [cleaned]
+
+        heading_order = [
+            "Headline Insight",
+            "Key Patterns and Insights",
+            "Business Implications",
+            "Suggested Actions",
+        ]
+        output_blocks: List[str] = []
+        for heading in heading_order:
+            section_text = sections.get(heading, "").strip()
+            if not section_text:
+                continue
+
+            output_blocks.append(f"### {heading}")
+            if heading == "Headline Insight":
+                output_blocks.append(re.sub(r"\s+", " ", section_text).strip())
+                continue
+
+            for bullet in _normalize_bullets(section_text):
+                output_blocks.append(f"- {bullet}")
+
+        if not output_blocks:
+            return content
+
+        return "\n\n".join(output_blocks)
 
     @staticmethod
     def _resolve_audience_mode() -> str:
