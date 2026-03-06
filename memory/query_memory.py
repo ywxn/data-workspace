@@ -25,7 +25,9 @@ try:
 except ImportError:
     SentenceTransformer = None
     np = None
-    logger.warning("sentence-transformers not available; semantic search will use lexical fallback")
+    logger.warning(
+        "sentence-transformers not available; semantic search will use lexical fallback"
+    )
 
 
 class RetentionPolicy(Enum):
@@ -137,9 +139,11 @@ class UnifiedMemoryService:
             return None
 
         self._model_load_attempted = True
-        
+
         if SentenceTransformer is None:
-            logger.warning("sentence-transformers not installed; using lexical search only")
+            logger.warning(
+                "sentence-transformers not installed; using lexical search only"
+            )
             return None
 
         try:
@@ -149,9 +153,7 @@ class UnifiedMemoryService:
             )
             logger.info("Semantic search model loaded: all-MiniLM-L6-v2")
         except Exception as exc:
-            logger.warning(
-                f"Semantic model unavailable, using lexical fallback: {exc}"
-            )
+            logger.warning(f"Semantic model unavailable, using lexical fallback: {exc}")
             self._embedding_model = None
 
         return self._embedding_model
@@ -182,13 +184,11 @@ class UnifiedMemoryService:
                 vector_list = list(vector)
             else:
                 vector_list = vector
-            
+
             self._embedding_cache[cache_key] = vector_list
             return vector_list
         except Exception as exc:
-            logger.warning(
-                f"Embedding failed, using lexical fallback: {exc}"
-            )
+            logger.warning(f"Embedding failed, using lexical fallback: {exc}")
             return None
 
     def _normalize_text(self, text: str) -> str:
@@ -196,6 +196,7 @@ class UnifiedMemoryService:
         if not text:
             return ""
         import re
+
         # Simple normalization: lowercase, remove extra whitespace
         normalized = text.lower().strip()
         normalized = re.sub(r"\s+", " ", normalized)
@@ -205,30 +206,30 @@ class UnifiedMemoryService:
         """Compute lexical similarity using Jaccard + containment."""
         query_tokens = set(self._normalize_text(query_text).split())
         memory_tokens = set(self._normalize_text(memory_text).split())
-        
+
         if not query_tokens or not memory_tokens:
             return 0.0
 
         intersection = query_tokens & memory_tokens
         union = query_tokens | memory_tokens
-        
+
         jaccard = len(intersection) / len(union) if union else 0.0
         containment = len(intersection) / len(query_tokens) if query_tokens else 0.0
-        
+
         return 0.7 * jaccard + 0.3 * containment
 
     def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
         """Compute cosine similarity between two vectors."""
         if not vec_a or not vec_b or len(vec_a) != len(vec_b):
             return 0.0
-        
+
         dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
         norm_a = math.sqrt(sum(a * a for a in vec_a))
         norm_b = math.sqrt(sum(b * b for b in vec_b))
-        
+
         if norm_a == 0.0 or norm_b == 0.0:
             return 0.0
-        
+
         return max(0.0, min(1.0, dot_product / (norm_a * norm_b)))
 
     def store_query(
@@ -304,7 +305,7 @@ class UnifiedMemoryService:
         """Append record to project memory file."""
         if not self.project_id:
             return
-        
+
         memory_path = self._get_project_memory_path(self.project_id)
 
         try:
@@ -326,12 +327,12 @@ class UnifiedMemoryService:
             logger.error(f"Failed to append to global index: {e}", exc_info=True)
 
     def search_similar_queries(
-        self, 
-        prompt: str, 
-        limit: int = 5, 
+        self,
+        prompt: str,
+        limit: int = 5,
         project_scoped: bool = True,
         similarity_threshold: float = 0.7,
-        min_success_score: float = 0.8
+        min_success_score: float = 0.8,
     ) -> List[QuerySearchResult]:
         """
         Search for similar queries using semantic embeddings with lexical fallback.
@@ -382,13 +383,14 @@ class UnifiedMemoryService:
 
                         # Compute similarity using both semantic and lexical approaches
                         memory_embedding = self._embed_text(record.user_prompt)
-                        
+
                         semantic_similarity = (
                             self._cosine_similarity(query_embedding, memory_embedding)
-                            if query_embedding is not None and memory_embedding is not None
+                            if query_embedding is not None
+                            and memory_embedding is not None
                             else 0.0
                         )
-                        
+
                         lexical_similarity = self._lexical_similarity(
                             prompt, record.user_prompt
                         )
@@ -403,8 +405,7 @@ class UnifiedMemoryService:
                         if similarity >= similarity_threshold:
                             results.append(
                                 QuerySearchResult(
-                                    record=record,
-                                    similarity_score=similarity
+                                    record=record, similarity_score=similarity
                                 )
                             )
 
@@ -553,7 +554,9 @@ class UnifiedMemoryService:
                         f.write("\n")
 
         except Exception as exc:
-            logger.error(f"Failed to update cache file {file_path}: {exc}", exc_info=True)
+            logger.error(
+                f"Failed to update cache file {file_path}: {exc}", exc_info=True
+            )
             return False
 
         return updated

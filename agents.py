@@ -563,7 +563,7 @@ class AIAgent:
     def _get_current_model(self) -> str:
         """
         Get the current model name being used for this agent session.
-        
+
         Returns:
             The resolved model ID string
         """
@@ -875,7 +875,9 @@ class AIAgent:
         # Fast-path: when most query terms are already grounded in schema/semantic
         # vocabulary, skip clarification to avoid unnecessary follow-up questions.
         if self._can_infer_query_meaning(user_query, schema_metadata, semantic_layer):
-            logger.info("Clarification skipped: query meaning is inferable from context")
+            logger.info(
+                "Clarification skipped: query meaning is inferable from context"
+            )
             return None
 
         # Build semantic context
@@ -1207,9 +1209,7 @@ class AIAgent:
         cached_viz_code = self.visualization_code_cache.get(cache_key)
 
         if cached_viz_code:
-            logger.info(
-                f"VISUALIZATION CACHE HIT: Reusing code for columns: {columns}"
-            )
+            logger.info(f"VISUALIZATION CACHE HIT: Reusing code for columns: {columns}")
             try:
                 # Try executing cached code
                 chart_path = self._execute_visualization_code(cached_viz_code, df)
@@ -1262,9 +1262,7 @@ class AIAgent:
 
             # Store in cache
             self.visualization_code_cache[cache_key] = viz_code
-            logger.info(
-                f"Stored visualization code in cache (key: {cache_key[:8]}...)"
-            )
+            logger.info(f"Stored visualization code in cache (key: {cache_key[:8]}...)")
 
             # Execute visualization code
             chart_path = self._execute_visualization_code(viz_code, df)
@@ -1363,7 +1361,9 @@ class AIAgent:
                 "objective": plan.get("objective"),
                 "analysis_focus": plan.get("analysis_focus"),
             }
-            context_parts.append(f"Execution Plan: {json.dumps(plan_summary, ensure_ascii=True)}")
+            context_parts.append(
+                f"Execution Plan: {json.dumps(plan_summary, ensure_ascii=True)}"
+            )
 
         if code_output is not None:
             summary = self._summarize_query_result(code_output)
@@ -1428,7 +1428,9 @@ class AIAgent:
             stream=False,
         )
 
-        parsed = self._parse_analyst_json(raw_response, graph_generated, table_generated)
+        parsed = self._parse_analyst_json(
+            raw_response, graph_generated, table_generated
+        )
         if parsed is not None:
             return parsed
 
@@ -1441,8 +1443,16 @@ class AIAgent:
             return parsed
 
         logger.warning("Stage 1 JSON repair failed, using fallback analyst structure")
-        fallback_chart = "The chart communicates a comparison or trend in the returned data." if graph_generated else None
-        fallback_table = "The table presents grouped or ranked summary values from the returned data." if table_generated else None
+        fallback_chart = (
+            "The chart communicates a comparison or trend in the returned data."
+            if graph_generated
+            else None
+        )
+        fallback_table = (
+            "The table presents grouped or ranked summary values from the returned data."
+            if table_generated
+            else None
+        )
         return {
             "headline": "The result indicates a measurable pattern in the requested data.",
             "key_insights": [
@@ -1500,7 +1510,7 @@ class AIAgent:
             {
                 "role": "user",
                 "content": "Translate the analyst findings for the selected audience mode.",
-            }
+            },
         ]
 
         logger.info(f"Calling audience translation stage for mode: {audience_mode}")
@@ -1552,7 +1562,11 @@ class AIAgent:
 
             cleaned = re.sub(r"\s+", " ", raw).strip()
 
-            parts = [part.strip(" -\t") for part in re.split(r"\s+-\s+", cleaned) if part.strip(" -\t")]
+            parts = [
+                part.strip(" -\t")
+                for part in re.split(r"\s+-\s+", cleaned)
+                if part.strip(" -\t")
+            ]
             if len(parts) > 1:
                 return parts
 
@@ -1603,7 +1617,9 @@ class AIAgent:
             return None
 
         if "```" in text:
-            fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+            fence_match = re.search(
+                r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE
+            )
             if fence_match:
                 text = fence_match.group(1).strip()
 
@@ -1735,7 +1751,7 @@ class AIAgent:
             # This avoids unnecessary clarification/prompt expansion work on cache hits.
             if self.memory_service and status_callback:
                 status_callback("Checking memory cache...")
-            
+
             cache_hit = None
             query_requires_viz = self._query_requests_visualization(user_query)
             if self.memory_service:
@@ -1746,7 +1762,7 @@ class AIAgent:
                         project_scoped=True,
                         similarity_threshold=0.75,  # Lower threshold for candidates
                     )
-                    
+
                     # Check for high-confidence cache hit (successful queries only).
                     # If this query asks for a chart, prefer records that already have
                     # generated visualization code in memory.
@@ -1757,10 +1773,7 @@ class AIAgent:
                             and result.record.execution_success
                             and result.record.generated_sql
                         ):
-                            if (
-                                query_requires_viz
-                                and result.record.generated_viz_code
-                            ):
+                            if query_requires_viz and result.record.generated_viz_code:
                                 cache_hit = result
                                 break
                             if fallback_hit is None:
@@ -1775,7 +1788,7 @@ class AIAgent:
                             f"prompt='{cache_hit.record.user_prompt}', "
                             f"has_viz_code={'yes' if bool(cache_hit.record.generated_viz_code) else 'no'}"
                         )
-                    
+
                     if not cache_hit and similar_queries:
                         logger.info(
                             f"CACHE MISS: highest similarity={similar_queries[0].similarity_score:.3f} "
@@ -1783,7 +1796,7 @@ class AIAgent:
                         )
                     elif not cache_hit:
                         logger.info("CACHE MISS: no similar queries found")
-                    
+
                 except Exception as cache_err:
                     logger.warning(f"Cache lookup failed: {cache_err}")
 
@@ -1791,16 +1804,18 @@ class AIAgent:
             if cache_hit:
                 if status_callback:
                     status_callback("Using cached query...")
-                
+
                 try:
                     # Re-execute the cached SQL query
                     generated_sql = cache_hit.record.generated_sql
                     if not generated_sql:
-                        logger.warning("Cache hit has no SQL, falling back to normal flow")
+                        logger.warning(
+                            "Cache hit has no SQL, falling back to normal flow"
+                        )
                         raise ValueError("No SQL in cached record")
-                    
+
                     logger.info(f"Re-executing cached SQL: {generated_sql}")
-                    
+
                     query_result = self._execute_sql_query(
                         generated_sql, context, status_callback
                     )
@@ -1841,7 +1856,7 @@ class AIAgent:
                         raise RuntimeError(
                             f"Cached SQL remained invalid after correction: {query_result['error']}"
                         )
-                    
+
                     execution_success = True
                     execution_metadata = query_result.get("metadata", {})
                     execution_metadata["cache_hit"] = True
@@ -1862,7 +1877,7 @@ class AIAgent:
                             logger.warning(
                                 f"Failed to update cached SQL record: {cache_update_err}"
                             )
-                    
+
                     # Check if visualization is needed
                     chart_path = None
                     requires_viz = query_requires_viz
@@ -1883,15 +1898,17 @@ class AIAgent:
                             )
                         if status_callback:
                             status_callback("Generating visualization...")
-                        logger.info("Visualization generation required for cached query")
+                        logger.info(
+                            "Visualization generation required for cached query"
+                        )
                         chart_path, generated_viz_code = await self.visualization_agent(
                             query_result, None, user_query, stream=True
                         )
-                    
+
                     # Generate analysis and format response
                     if status_callback:
                         status_callback("Analyzing results...")
-                    
+
                     cached_plan = {
                         "task_type": "analysis",
                         "requires_visualization": bool(chart_path),
@@ -1903,7 +1920,7 @@ class AIAgent:
                         code_output=query_result,
                         stream_callback=stream_callback,
                     )
-                    
+
                     response = None
                     if mode == "cxo":
                         response = self._format_cxo_response(
@@ -1913,8 +1930,13 @@ class AIAgent:
                             generated_sql=generated_sql,
                         )
                     else:
-                        response = self._format_response(query_result, analysis, chart_path, generated_sql=generated_sql)
-                    
+                        response = self._format_response(
+                            query_result,
+                            analysis,
+                            chart_path,
+                            generated_sql=generated_sql,
+                        )
+
                     # Store cache hit as a new record
                     if self.memory_service:
                         try:
@@ -1933,9 +1955,9 @@ class AIAgent:
                             )
                         except Exception as mem_err:
                             logger.warning(f"Failed to store cache hit: {mem_err}")
-                    
+
                     return response
-                    
+
                 except Exception as cache_exec_err:
                     logger.warning(
                         f"Cache hit execution failed, falling back to normal flow: {cache_exec_err}"
@@ -2071,7 +2093,9 @@ class AIAgent:
                     generated_sql=generated_sql,
                 )
             else:
-                response = self._format_response(query_result, analysis, chart_path, generated_sql=generated_sql)
+                response = self._format_response(
+                    query_result, analysis, chart_path, generated_sql=generated_sql
+                )
 
             # Store in memory service if available
             if self.memory_service:
@@ -2553,7 +2577,11 @@ class AIAgent:
             return None
 
     def _format_response(
-        self, code_result: Any, analysis: str, chart_path: Optional[str] = None, generated_sql: Optional[str] = None
+        self,
+        code_result: Any,
+        analysis: str,
+        chart_path: Optional[str] = None,
+        generated_sql: Optional[str] = None,
     ) -> str:
         """
         Format the final response with code execution results, visualizations, and analysis.
@@ -2573,7 +2601,9 @@ class AIAgent:
         if ConfigManager.get_show_sql_in_responses() and generated_sql:
             response_parts.append("### Generated SQL:")
             response_parts.append("")
-            response_parts.append(f"```sql\n{self._clean_sql_output(generated_sql)}\n```")
+            response_parts.append(
+                f"```sql\n{self._clean_sql_output(generated_sql)}\n```"
+            )
 
         # Add visualization if available
         if chart_path:
@@ -2679,7 +2709,9 @@ class AIAgent:
         cleaned = sql.strip()
 
         # Strip common lead-in labels the model may add.
-        cleaned = re.sub(r"^\s*corrected\s+sql\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"^\s*corrected\s+sql\s*:\s*", "", cleaned, flags=re.IGNORECASE
+        )
         cleaned = re.sub(r"^\s*sql\s*:\s*", "", cleaned, flags=re.IGNORECASE)
 
         # If a fenced block exists anywhere, extract that block content.
