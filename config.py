@@ -75,6 +75,7 @@ class ConfigManager:
 
     CONFIG_FILE = "config.json"
     _logger = logging.getLogger(__name__)
+    _interaction_mode_override: Optional[str] = None
 
     @staticmethod
     def get_config_path() -> str:
@@ -332,6 +333,8 @@ class ConfigManager:
     @staticmethod
     def get_interaction_mode() -> str:
         """Return 'cxo' or 'analyst'. Default is 'analyst'."""
+        if ConfigManager._interaction_mode_override in ("cxo", "analyst"):
+            return ConfigManager._interaction_mode_override
         config = ConfigManager.load_config()
         return config.get("interaction_mode", "analyst")
 
@@ -341,10 +344,17 @@ class ConfigManager:
         normalized = mode.lower().strip()
         if normalized not in ("cxo", "analyst"):
             return False, "Invalid mode. Use 'cxo' or 'analyst'."
-        config = ConfigManager.load_config()
-        config["interaction_mode"] = normalized
+
+        # Keep mode changes available to the current process.
+        ConfigManager._interaction_mode_override = normalized
         ConfigManager._logger.info(f"Interaction mode set to: {normalized}")
-        return ConfigManager.save_config(config)
+
+        # TODO(testing): Re-enable persistence after testing by restoring
+        # config write + save below.
+        # config = ConfigManager.load_config()
+        # config["interaction_mode"] = normalized
+        # return ConfigManager.save_config(config)
+        return True, "Interaction mode set for current session only."
 
     @staticmethod
     def get_semantic_layer_path() -> Optional[str]:
@@ -383,8 +393,8 @@ class ConfigManager:
         if "show_sql_in_responses" in config:
             return bool(config.get("show_sql_in_responses"))
         # Backward compatibility with older configs.
-        return bool(config.get("show_sql_in_analyst_mode", True))
-
+        return bool(config.get("show_sql_in_analyst_mode", False))
+ 
     @staticmethod
     def set_show_sql_in_responses(enabled: bool) -> Tuple[bool, str]:
         """Enable or disable SQL code display in responses."""
