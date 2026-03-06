@@ -1253,8 +1253,6 @@ class AIAgent:
                     f"Cached visualization code failed: {e}, regenerating..."
                 )
 
-        # TODO: Add cached analysis if 1.00 similarity, skipping entire pipeline.
-
         # Cache miss or cached code failed - generate new code
         logger.info("VISUALIZATION CACHE MISS: Generating new visualization code")
 
