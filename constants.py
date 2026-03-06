@@ -18,7 +18,6 @@ LLM_TEMPERATURE_CODE = 0.4
 LLM_TEMPERATURE_ANALYSIS = 0.6
 
 # Note that these may not be available, so changing them may be necessary. Users should check the latest model availability from OpenAI and Anthropic.
-# TODO: Add user model selection to GUI
 LLM_MODELS = {
     "claude": "claude-3-5-sonnet-20241022",
     "openai": "gpt-4o-2024-08-06",
