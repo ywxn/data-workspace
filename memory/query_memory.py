@@ -180,6 +180,60 @@ class UnifiedMemoryService:
             logger.warning(f"Embedding failed, using lexical fallback: {exc}")
             return None
 
+    def _embed_texts(self, texts: List[str], batch_size: int = 32) -> Dict[str, List[float]]:
+        """Embed multiple texts using one model call when vectors are not cached."""
+        if not texts:
+            return {}
+
+        results: Dict[str, List[float]] = {}
+        pending_by_key: Dict[str, str] = {}
+
+        for text in texts:
+            if not text or not text.strip():
+                continue
+
+            cache_key = self._embedding_cache_key(text)
+            cached = self._embedding_cache.get(cache_key)
+            if cached is not None:
+                results[text] = cached
+            else:
+                pending_by_key.setdefault(cache_key, text)
+
+        if pending_by_key:
+            model = self._get_embedding_model()
+            if model is not None:
+                pending_texts = list(pending_by_key.values())
+                try:
+                    vectors = model.encode(
+                        pending_texts,
+                        batch_size=batch_size,
+                        normalize_embeddings=True,
+                        show_progress_bar=False,
+                    )
+                    for text, vector in zip(pending_texts, vectors):
+                        if np is not None and isinstance(vector, np.ndarray):
+                            vector_list: List[float] = vector.tolist()
+                        elif isinstance(vector, list):
+                            vector_list = vector
+                        else:
+                            vector_list = list(vector)
+
+                        self._embedding_cache[self._embedding_cache_key(text)] = vector_list
+                        results[text] = vector_list
+                except Exception as exc:
+                    logger.warning(f"Batch embedding failed, using fallback: {exc}")
+
+        # Fill any duplicate prompts from cache after a successful batch pass.
+        for text in texts:
+            if text in results:
+                continue
+            cache_key = self._embedding_cache_key(text)
+            cached = self._embedding_cache.get(cache_key)
+            if cached is not None:
+                results[text] = cached
+
+        return results
+
     def _normalize_text(self, text: str) -> str:
         """Normalize text for lexical matching."""
         if not text:
@@ -359,6 +413,7 @@ class UnifiedMemoryService:
         """Search for similar queries in a JSONL file using semantic + lexical similarity."""
         results = []
         query_embedding = self._embed_text(prompt)
+        records: List[QueryMemoryRecord] = []
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -369,40 +424,41 @@ class UnifiedMemoryService:
                     try:
                         data = json.loads(line)
                         record = QueryMemoryRecord.from_dict(data)
-
-                        # Compute similarity using both semantic and lexical approaches
-                        memory_embedding = self._embed_text(record.user_prompt)
-
-                        semantic_similarity = (
-                            self._cosine_similarity(query_embedding, memory_embedding)
-                            if query_embedding is not None
-                            and memory_embedding is not None
-                            else 0.0
-                        )
-
-                        lexical_similarity = self._lexical_similarity(
-                            prompt, record.user_prompt
-                        )
-
-                        # Combine semantic and lexical (favor semantic when available)
-                        similarity = (
-                            0.75 * semantic_similarity + 0.25 * lexical_similarity
-                            if semantic_similarity > 0.0
-                            else lexical_similarity
-                        )
-
-                        if similarity >= similarity_threshold:
-                            results.append(
-                                QuerySearchResult(
-                                    record=record, similarity_score=similarity
-                                )
-                            )
+                        records.append(record)
 
                     except Exception as e:
                         logger.warning(f"Failed to parse record: {e}")
                         continue
         except Exception as e:
             logger.error(f"Failed to search file {file_path}: {e}", exc_info=True)
+
+        record_embeddings = self._embed_texts(
+            [record.user_prompt for record in records], batch_size=32
+        )
+
+        for record in records:
+            # Compute similarity using both semantic and lexical approaches.
+            memory_embedding = record_embeddings.get(record.user_prompt)
+
+            semantic_similarity = (
+                self._cosine_similarity(query_embedding, memory_embedding)
+                if query_embedding is not None and memory_embedding is not None
+                else 0.0
+            )
+
+            lexical_similarity = self._lexical_similarity(prompt, record.user_prompt)
+
+            # Combine semantic and lexical (favor semantic when available).
+            similarity = (
+                0.75 * semantic_similarity + 0.25 * lexical_similarity
+                if semantic_similarity > 0.0
+                else lexical_similarity
+            )
+
+            if similarity >= similarity_threshold:
+                results.append(
+                    QuerySearchResult(record=record, similarity_score=similarity)
+                )
 
         # Sort by similarity descending and limit
         results.sort(key=lambda x: x.similarity_score, reverse=True)

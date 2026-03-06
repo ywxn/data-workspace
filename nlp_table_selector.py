@@ -471,6 +471,7 @@ class NLPTableSelector:
         if embedding_texts:
             embeddings = self.model.encode(
                 embedding_texts,
+                batch_size=32,
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
@@ -1061,7 +1062,10 @@ class NLPTableSelector:
         self.common_prompt_texts = texts
         self.common_prompt_tables = tables
         self.common_prompt_embeddings = self.model.encode(
-            texts, normalize_embeddings=True, show_progress_bar=False
+            texts,
+            batch_size=32,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
 
         logger.info(f"Built embeddings for {len(texts)} common prompts")

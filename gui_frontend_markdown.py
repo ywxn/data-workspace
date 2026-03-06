@@ -3120,6 +3120,10 @@ class DataWorkspaceGUI(QMainWindow):
         export_chat_action.triggered.connect(self.export_chat_dialog)
         file_menu.addAction(export_chat_action)
 
+        clear_query_cache_action = QAction("Clear Query Cache", self)
+        clear_query_cache_action.triggered.connect(self.clear_query_cache)
+        file_menu.addAction(clear_query_cache_action)
+
         file_menu.addSeparator()
 
         exit_action = QAction("Exit", self)
@@ -4956,6 +4960,51 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         else:
             logger.info("User cancelled workspace reset")
+
+    def clear_query_cache(self):
+        """Delete the persisted query-memory index file."""
+        cache_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "data",
+            "query_memory_index.jsonl",
+        )
+
+        reply = QMessageBox.warning(
+            self,
+            "Clear Query Cache",
+            "This will permanently delete the query cache index.\n\n"
+            "This action cannot be undone and will likely slow down analysis "
+            "until cache entries are rebuilt.\n\n"
+            "Do you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            logger.info("User cancelled query cache clear")
+            return
+
+        try:
+            if os.path.isfile(cache_file):
+                os.remove(cache_file)
+                logger.info(f"Query cache index deleted: {cache_file}")
+                QMessageBox.information(
+                    self,
+                    "Query Cache Cleared",
+                    "Query cache index cleared successfully.",
+                )
+            else:
+                logger.info(f"Query cache index not found: {cache_file}")
+                QMessageBox.information(
+                    self,
+                    "Nothing To Clear",
+                    "Query cache index file was not found.",
+                )
+        except Exception as e:
+            logger.error(f"Failed to clear query cache index: {e}", exc_info=True)
+            QMessageBox.critical(
+                self, "Error", f"Failed to clear query cache index: {e}"
+            )
 
     def toggle_prompt_expansion(self, checked: bool):
         """Toggle the prompt-expansion middleman agent on or off."""
