@@ -1,3 +1,7 @@
+/* markdown-sql-code-bg: #f6f8fa */
+/* markdown-sql-code-fg: #1f2328 */
+/* markdown-inline-code-bg: #eef2f7 */
+
 QMainWindow, QDialog, QWidget {
     background-color: #ffffff;
     color: #000000;

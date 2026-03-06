@@ -377,6 +377,38 @@ class ConfigManager:
         return ConfigManager.save_config(config)
 
     @staticmethod
+    def get_show_sql_in_responses() -> bool:
+        """Return whether responses should include generated SQL blocks."""
+        config = ConfigManager.load_config()
+        if "show_sql_in_responses" in config:
+            return bool(config.get("show_sql_in_responses"))
+        # Backward compatibility with older configs.
+        return bool(config.get("show_sql_in_analyst_mode", True))
+
+    @staticmethod
+    def set_show_sql_in_responses(enabled: bool) -> Tuple[bool, str]:
+        """Enable or disable SQL code display in responses."""
+        config = ConfigManager.load_config()
+        value = bool(enabled)
+        config["show_sql_in_responses"] = value
+        # Keep legacy key in sync for backward compatibility.
+        config["show_sql_in_analyst_mode"] = value
+        ConfigManager._logger.info(
+            f"Show SQL in responses {'enabled' if enabled else 'disabled'}"
+        )
+        return ConfigManager.save_config(config)
+
+    @staticmethod
+    def get_show_sql_in_analyst_mode() -> bool:
+        """Backward-compatible alias for get_show_sql_in_responses()."""
+        return ConfigManager.get_show_sql_in_responses()
+
+    @staticmethod
+    def set_show_sql_in_analyst_mode(enabled: bool) -> Tuple[bool, str]:
+        """Backward-compatible alias for set_show_sql_in_responses()."""
+        return ConfigManager.set_show_sql_in_responses(enabled)
+
+    @staticmethod
     def get_table_selection_method() -> str:
         """
         Get the preferred table selection method.

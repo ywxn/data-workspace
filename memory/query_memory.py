@@ -456,6 +456,108 @@ class UnifiedMemoryService:
         records.sort(key=lambda r: r.timestamp, reverse=True)
         return records[:limit]
 
+    def update_cached_sql(
+        self,
+        record_id: str,
+        generated_sql: str,
+        execution_success: bool = True,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """
+        Update SQL (and success/error state) for an existing cached record.
+
+        This enables write-through cache behavior after a corrected cached query
+        executes successfully.
+
+        Args:
+            record_id: Memory record ID to update
+            generated_sql: SQL to persist on the record
+            execution_success: Whether execution succeeded
+            error_message: Optional error message to persist
+
+        Returns:
+            True if any record was updated, False otherwise
+        """
+        if not record_id or not generated_sql:
+            return False
+
+        updated_any = False
+
+        if self.project_id:
+            memory_path = self._get_project_memory_path(self.project_id)
+            if memory_path.exists():
+                updated_any = (
+                    self._update_record_in_file(
+                        memory_path,
+                        record_id,
+                        generated_sql,
+                        execution_success,
+                        error_message,
+                    )
+                    or updated_any
+                )
+
+        if self.global_index_enabled and self.global_index_path.exists():
+            updated_any = (
+                self._update_record_in_file(
+                    self.global_index_path,
+                    record_id,
+                    generated_sql,
+                    execution_success,
+                    error_message,
+                )
+                or updated_any
+            )
+
+        if updated_any:
+            logger.info(f"Updated cached SQL for record: {record_id}")
+
+        return updated_any
+
+    def _update_record_in_file(
+        self,
+        file_path: Path,
+        record_id: str,
+        generated_sql: str,
+        execution_success: bool,
+        error_message: Optional[str],
+    ) -> bool:
+        """Update one record by record_id in a JSONL file."""
+        updated = False
+        rewritten_lines: List[str] = []
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.rstrip("\n")
+                    if not raw.strip():
+                        continue
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        rewritten_lines.append(raw)
+                        continue
+
+                    if data.get("record_id") == record_id:
+                        data["generated_sql"] = generated_sql
+                        data["execution_success"] = bool(execution_success)
+                        data["error_message"] = error_message
+                        updated = True
+
+                    rewritten_lines.append(json.dumps(data, ensure_ascii=False))
+
+            if updated:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    for rewritten in rewritten_lines:
+                        f.write(rewritten)
+                        f.write("\n")
+
+        except Exception as exc:
+            logger.error(f"Failed to update cache file {file_path}: {exc}", exc_info=True)
+            return False
+
+        return updated
+
     def _apply_retention_policy(self) -> None:
         """Apply configured retention policy to clean up old records."""
         if self.retention_policy == RetentionPolicy.KEEP_ALL:

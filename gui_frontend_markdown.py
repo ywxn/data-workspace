@@ -2247,6 +2247,7 @@ class DatabaseConnectionDialog(QDialog):
         form_layout.addRow("Database Type:", self.db_type_combo)
 
         # Table selection method
+        self.selection_method_row_label: Optional[QLabel] = None
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "Filter (slow)"])
 
@@ -2277,7 +2278,8 @@ class DatabaseConnectionDialog(QDialog):
         # In CxO / force_nlp mode, hide the table selection row entirely
         if self.force_nlp:
             self.selection_method_combo.setVisible(False)
-            self.selection_method_row_label.setVisible(False)
+            if self.selection_method_row_label is not None:
+                self.selection_method_row_label.setVisible(False)
 
         # Common fields
         self.host_input = QLineEdit()
@@ -2835,7 +2837,28 @@ class QueryWorker(QThread):
 
             # CxO mode: run NLP table selection first, then build context
             if self.data_context.get("cxo_mode"):
-                effective_context = self._build_cxo_context(effective_query)
+                cached_cxo_context = self.data_context.get("_cxo_selected_context")
+                cached_prompt = self.data_context.get("_cxo_selected_prompt")
+                base_query = (self.query or "").strip().lower()
+
+                if cached_cxo_context and cached_prompt == base_query:
+                    logger.info(
+                        "CxO mode: reusing cached table selection for identical query"
+                    )
+                    effective_context = cached_cxo_context
+                elif self.clarification_context and cached_cxo_context:
+                    logger.info(
+                        "CxO mode: reusing initial table selection for clarification follow-up"
+                    )
+                    effective_context = cached_cxo_context
+                else:
+                    # In CxO mode, table selection should always be based on the
+                    # initial user prompt, not clarification follow-up text.
+                    effective_context = self._build_cxo_context(self.query)
+                    if effective_context is not None:
+                        # Persist selected context for clarification round-trips.
+                        self.data_context["_cxo_selected_context"] = effective_context
+                        self.data_context["_cxo_selected_prompt"] = base_query
                 if effective_context is None:
                     self.error_signal.emit(
                         "Could not identify relevant tables for your question. "
@@ -2879,6 +2902,30 @@ class QueryWorker(QThread):
             logger.error(f"Query execution failed: {str(e)}", exc_info=True)
             self.error_signal.emit(f"Error: {str(e)}")
 
+    def _has_high_confidence_cache_hit(self, query: str) -> bool:
+        """Check whether query memory already has a reusable high-confidence SQL hit."""
+        if not self.agent.memory_service:
+            return False
+
+        try:
+            similar_queries = self.agent.memory_service.search_similar_queries(
+                prompt=query,
+                limit=3,
+                project_scoped=True,
+                similarity_threshold=0.75,
+            )
+            for result in similar_queries:
+                if (
+                    result.similarity_score >= 0.85
+                    and result.record.execution_success
+                    and result.record.generated_sql
+                ):
+                    return True
+        except Exception as cache_err:
+            logger.warning(f"CxO mode: cache pre-check failed: {cache_err}")
+
+        return False
+
     def _build_cxo_context(self, query: str) -> Optional[Dict[str, Any]]:
         """
         In CxO mode, connect to the database, run NLP table selection on the
@@ -2893,6 +2940,26 @@ class QueryWorker(QThread):
         db_type = self.data_context["db_type"]
         credentials = self.data_context["credentials"]
         semantic_layer = self.data_context.get("semantic_layer")
+
+        # If the query cache already has a high-confidence SQL hit, skip NLP table
+        # selection entirely and let execute_query reuse cached SQL directly.
+        has_cache_hit = self._has_high_confidence_cache_hit(query)
+        if has_cache_hit:
+            logger.info(
+                "CxO mode: cache hit detected, reusing context without NLP table selection"
+            )
+            cached_context = self.data_context.get("_cxo_selected_context")
+            if isinstance(cached_context, dict):
+                return cached_context
+
+            return {
+                "source_type": "database",
+                "db_type": db_type,
+                "credentials": credentials,
+                "tables": self.data_context.get("tables", []),
+                "table_info": self.data_context.get("table_info", {}),
+                "semantic_layer": semantic_layer,
+            }
 
         logger.info(f"CxO mode: connecting to {db_type} for NLP table selection...")
         connector = DatabaseConnector()
@@ -2966,6 +3033,7 @@ class QueryWorker(QThread):
                 "credentials": credentials,
                 "tables": selected_tables,
                 "table_info": table_info,
+                "semantic_layer": semantic_layer,
             }
 
             logger.info(f"CxO mode: built context with {len(selected_tables)} tables")
@@ -3076,6 +3144,18 @@ class DataWorkspaceGUI(QMainWindow):
         dec_font_action.setShortcut("Ctrl+-")
         dec_font_action.triggered.connect(lambda: self.adjust_font(-1))
         view_menu.addAction(dec_font_action)
+
+        view_menu.addSeparator()
+
+        self.show_sql_response_action = QAction("Show SQL In Responses", self)
+        self.show_sql_response_action.setCheckable(True)
+        self.show_sql_response_action.setChecked(
+            ConfigManager.get_show_sql_in_responses()
+        )
+        self.show_sql_response_action.triggered.connect(
+            self.toggle_show_sql_in_responses
+        )
+        view_menu.addAction(self.show_sql_response_action)
 
         # ===== Settings Menu =====
         settings_menu = menu_bar.addMenu("Settings")
@@ -3266,6 +3346,7 @@ class DataWorkspaceGUI(QMainWindow):
         # Clarification flow state
         self.pending_clarification_query: Optional[str] = None
         self.clarification_question: Optional[str] = None
+        self.last_submitted_query: Optional[str] = None
 
         # Processing animation state
         self.animation_timer = QTimer(self)
@@ -3414,18 +3495,14 @@ class DataWorkspaceGUI(QMainWindow):
                 history = self.backend.get_chat_history()
                 if history:
                     chat_history = self._format_chat_history(history)
-                    self.conversation_display.setHtml(markdown_to_html(chat_history))
+                    self._set_current_markdown(chat_history)
                 else:
-                    self.conversation_display.setHtml(
-                        markdown_to_html(
-                            "No chat history yet. Start typing to begin the conversation."
-                        )
+                    self._set_current_markdown(
+                        "No chat history yet. Start typing to begin the conversation."
                     )
             else:
                 logger.warning(f"Failed to load chat session: {self.chat_id}")
-                self.conversation_display.setHtml(
-                    markdown_to_html("Failed to load chat.")
-                )
+                self._set_current_markdown("Failed to load chat.")
 
         # Highlight the selected chat
         try:
@@ -3460,10 +3537,8 @@ class DataWorkspaceGUI(QMainWindow):
         if chat_id:
             self.chat_id = chat_id
             self.conversation_display.clear()
-            self.conversation_display.setHtml(
-                markdown_to_html(
-                    "New chat created. Start typing to begin the conversation."
-                )
+            self._set_current_markdown(
+                "New chat created. Start typing to begin the conversation."
             )
 
     def _format_chat_history(self, messages: List[Dict[str, str]]) -> str:
@@ -3592,6 +3667,8 @@ class DataWorkspaceGUI(QMainWindow):
             logger.info(f"Submitting query: {query[:100]}...")
             actual_query = query
             clarification_context = None
+
+        self.last_submitted_query = actual_query
 
         # Change button to Stop
         self.submit_button.setText("Stop")
@@ -3732,7 +3809,11 @@ class DataWorkspaceGUI(QMainWindow):
         logger.info(f"Clarification requested: {clarification_question}")
 
         # Store the clarification state
-        self.pending_clarification_query = self.query_input.toPlainText().strip()
+        self.pending_clarification_query = (
+            self.last_submitted_query
+            or self.pending_clarification_query
+            or self.query_input.toPlainText().strip()
+        )
         self.clarification_question = clarification_question
 
         # Display clarification question
@@ -4812,6 +4893,19 @@ class DataWorkspaceGUI(QMainWindow):
                 self, "Settings Error", f"Failed to save setting: {message}"
             )
 
+    def toggle_show_sql_in_responses(self, checked: bool):
+        """Toggle whether analyst and CxO responses include generated SQL blocks."""
+        success, message = ConfigManager.set_show_sql_in_responses(checked)
+        if success:
+            state = "enabled" if checked else "disabled"
+            logger.info(f"Show SQL in responses {state}")
+        else:
+            logger.error(f"Failed to toggle SQL visibility: {message}")
+            self.show_sql_response_action.setChecked(not checked)
+            QMessageBox.warning(
+                self, "Settings Error", f"Failed to save setting: {message}"
+            )
+
     def open_local_llm_settings(self):
         """Open a dialog to configure the local LLM server connection or host a model."""
         logger.info("User opened Local LLM settings dialog")
@@ -4885,6 +4979,7 @@ class DataWorkspaceGUI(QMainWindow):
                 config = ConfigManager.load_config()
                 config["theme"] = theme
                 ConfigManager.save_config(config)
+                self._refresh_conversation_after_theme_change()
                 logger.info(
                     f"Theme changed from '{old_theme}' to '{theme}' and saved to config"
                 )
@@ -4902,6 +4997,29 @@ class DataWorkspaceGUI(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to apply theme: {str(e)}")
         else:
             logger.warning(f"Invalid theme requested: {theme}")
+
+    def _refresh_conversation_after_theme_change(self) -> None:
+        """Re-render current conversation so markdown styling follows the active theme."""
+        if not self.conversation_display:
+            return
+
+        current_md = self.current_markdown
+        if current_md is None and self.chat_id:
+            try:
+                history = self.backend.get_chat_history(self.chat_id)
+                if history:
+                    current_md = self._format_chat_history(history)
+            except Exception as e:
+                logger.debug(
+                    f"Theme refresh fallback to chat history failed: {e}",
+                    exc_info=False,
+                )
+
+        if current_md is None:
+            current_md = self.conversation_display.toMarkdown()
+
+        self.current_markdown = current_md
+        self.conversation_display.setHtml(markdown_to_html(current_md))
 
     def _apply_theme(self, theme: str) -> None:
         """Apply the selected theme to the application"""
