@@ -44,9 +44,9 @@ def markdown_to_html(md: str) -> str:
     theme = config.get("theme", "system")
 
     dark_fallback = {
-        "code_bg": "#1f2937",
+        "code_bg": "#3a3a3a",
         "code_fg": "#f8fafc",
-        "inline_bg": "#334155",
+        "inline_bg": "#3a3a3a",
     }
     light_fallback = {
         "code_bg": "#f6f8fa",
