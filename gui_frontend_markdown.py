@@ -2363,8 +2363,14 @@ class DatabaseConnectionDialog(QDialog):
     def on_selection_method_changed(self, method_text):
         """Show/hide semantic layer controls based on selection method."""
         logger.debug(f"Table selection method changed to: {method_text}")
-        is_nlp = "nlp" in method_text.lower() or self.force_nlp
+        method = self._normalize_selection_method(method_text)
+        is_nlp = method == "nlp" or self.force_nlp
         self.semantic_layer_container.setVisible(is_nlp)
+
+    @staticmethod
+    def _normalize_selection_method(method_text: Optional[str]) -> str:
+        normalized = (method_text or "").lower()
+        return "nlp" if ("nlp" in normalized or "filter" in normalized) else "manual"
 
     def validate_and_accept(self):
         """Validate inputs before accepting"""
@@ -2386,8 +2392,8 @@ class DatabaseConnectionDialog(QDialog):
                 QMessageBox.warning(self, "Validation Error", "Host is required!")
                 return
 
-        method_text = self.selection_method_combo.currentText().lower()
-        method = "nlp" if "nlp" in method_text else "manual"
+        method_text = self.selection_method_combo.currentText()
+        method = self._normalize_selection_method(method_text)
         ConfigManager.set_table_selection_method(method)
         logger.info(f"Table selection method set to: {method}")
 
@@ -2413,8 +2419,8 @@ class DatabaseConnectionDialog(QDialog):
             if port:
                 credentials["port"] = int(port)
 
-        method_text = self.selection_method_combo.currentText().lower()
-        method = "nlp" if "nlp" in method_text else "manual"
+        method_text = self.selection_method_combo.currentText()
+        method = self._normalize_selection_method(method_text)
 
         return {
             "db_type": db_type,
@@ -2704,7 +2710,8 @@ def select_tables_with_method(
     semantic_layer: Optional[Dict[str, Any]] = None,
 ) -> Optional[List[str]]:
     """Select tables using manual list or NLP-based selection."""
-    method = (selection_method or "manual").lower()
+    method_text = (selection_method or "manual").lower()
+    method = "nlp" if ("nlp" in method_text or "filter" in method_text) else "manual"
 
     if method == "nlp":
         prompt_dialog = NLPPromptDialog(parent)
@@ -2737,6 +2744,7 @@ def select_tables_with_method(
                         )
                     )
                 finally:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
                     loop.close()
                 if expanded and expanded.strip():
                     logger.info(f"Expanded prompt: {expanded[:200]}")
@@ -2845,20 +2853,18 @@ class QueryWorker(QThread):
             # CxO mode: run NLP table selection first, then build context
             if self.data_context.get("cxo_mode"):
                 cached_cxo_context = self.data_context.get("_cxo_selected_context")
-                cached_prompt = self.data_context.get("_cxo_selected_prompt")
                 base_query = (self.query or "").strip().lower()
 
-                if cached_cxo_context and cached_prompt == base_query:
+                if self._has_usable_cxo_context(cached_cxo_context):
                     logger.info(
-                        "CxO mode: reusing cached table selection for identical query"
-                    )
-                    effective_context = cached_cxo_context
-                elif self.clarification_context and cached_cxo_context:
-                    logger.info(
-                        "CxO mode: reusing initial table selection for clarification follow-up"
+                        "CxO mode: reusing existing chat context without NLP table reselection"
                     )
                     effective_context = cached_cxo_context
                 else:
+                    if cached_cxo_context:
+                        logger.info(
+                            "CxO mode: cached chat context has no selected tables, rerunning NLP selection"
+                        )
                     # In CxO mode, table selection should always be based on the
                     # initial user prompt, not clarification follow-up text.
                     effective_context = self._build_cxo_context(self.query)
@@ -2911,6 +2917,9 @@ class QueryWorker(QThread):
                 )
                 self.result_signal.emit(result)
 
+            # Prevent "Task was destroyed but it is pending" warnings from
+            # async generators used by streaming clients.
+            loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
         except Exception as e:
             logger.error(f"Query execution failed: {str(e)}", exc_info=True)
@@ -2940,6 +2949,14 @@ class QueryWorker(QThread):
 
         return False
 
+    @staticmethod
+    def _has_usable_cxo_context(context: Optional[Dict[str, Any]]) -> bool:
+        """Return True when CxO context has selected tables ready for SQL planning."""
+        if not isinstance(context, dict):
+            return False
+        tables = context.get("tables")
+        return isinstance(tables, list) and len(tables) > 0
+
     def _build_cxo_context(self, query: str) -> Optional[Dict[str, Any]]:
         """
         In CxO mode, connect to the database, run NLP table selection on the
@@ -2955,25 +2972,21 @@ class QueryWorker(QThread):
         credentials = self.data_context["credentials"]
         semantic_layer = self.data_context.get("semantic_layer")
 
-        # If the query cache already has a high-confidence SQL hit, skip NLP table
-        # selection entirely and let execute_query reuse cached SQL directly.
+        # If query memory has a high-confidence SQL hit, first try to reuse an
+        # existing selected-table context; otherwise run NLP once to seed context
+        # for stable follow-up questions in the same chat.
         has_cache_hit = self._has_high_confidence_cache_hit(query)
         if has_cache_hit:
-            logger.info(
-                "CxO mode: cache hit detected, reusing context without NLP table selection"
-            )
+            logger.info("CxO mode: cache hit detected, attempting context reuse")
             cached_context = self.data_context.get("_cxo_selected_context")
-            if isinstance(cached_context, dict):
+            if self._has_usable_cxo_context(cached_context):
+                logger.info(
+                    "CxO mode: cache hit using existing selected-table context"
+                )
                 return cached_context
-
-            return {
-                "source_type": "database",
-                "db_type": db_type,
-                "credentials": credentials,
-                "tables": self.data_context.get("tables", []),
-                "table_info": self.data_context.get("table_info", {}),
-                "semantic_layer": semantic_layer,
-            }
+            logger.info(
+                "CxO mode: cache hit has no selected-table context; running NLP selection to seed follow-up context"
+            )
 
         logger.info(f"CxO mode: connecting to {db_type} for NLP table selection...")
         connector = DatabaseConnector()
@@ -3003,6 +3016,7 @@ class QueryWorker(QThread):
                             )
                         )
                     finally:
+                        exp_loop.run_until_complete(exp_loop.shutdown_asyncgens())
                         exp_loop.close()
                     if expanded and expanded.strip():
                         logger.info(f"CxO prompt expanded: {expanded[:200]}")
@@ -3377,6 +3391,52 @@ class DataWorkspaceGUI(QMainWindow):
         # Apply theme on startup
         self._apply_theme(self.current_theme)
 
+    @staticmethod
+    def _build_cxo_context_signature(context: Dict[str, Any]) -> str:
+        """Build a stable signature for the currently loaded CxO base context."""
+        safe_credentials = dict(context.get("credentials", {}) or {})
+        safe_credentials.pop("password", None)
+        signature_payload = {
+            "source_type": context.get("source_type"),
+            "db_type": context.get("db_type"),
+            "credentials": safe_credentials,
+            "all_tables": context.get("all_tables", []),
+        }
+        return json.dumps(signature_payload, sort_keys=True, default=str)
+
+    def _get_active_chat_query_context(self) -> Optional[Dict[str, Any]]:
+        """Resolve query context, using chat-scoped runtime state in CxO mode."""
+        base_context = self.backend.data_context or self.data_context
+        if not isinstance(base_context, dict):
+            return None
+
+        if not base_context.get("cxo_mode"):
+            return base_context
+
+        active_chat = self.backend.active_chat
+        if active_chat is None:
+            return base_context
+
+        signature = self._build_cxo_context_signature(base_context)
+        runtime_context = active_chat.runtime_context
+        if (
+            not isinstance(runtime_context, dict)
+            or runtime_context.get("_cxo_base_signature") != signature
+        ):
+            runtime_context = dict(base_context)
+            runtime_context.pop("_cxo_selected_context", None)
+            runtime_context.pop("_cxo_selected_prompt", None)
+            runtime_context["_cxo_base_signature"] = signature
+            active_chat.runtime_context = runtime_context
+
+        return runtime_context
+
+    def _sync_data_context_for_active_chat(self) -> None:
+        """Update GUI-level context pointer to match active chat state."""
+        resolved = self._get_active_chat_query_context()
+        if resolved is not None:
+            self.data_context = resolved
+
     def show_chat_context_menu(self, position):
         """Show context menu for chat item on right-click"""
         logger.debug("Chat context menu requested")
@@ -3506,6 +3566,7 @@ class DataWorkspaceGUI(QMainWindow):
             success, _ = self.backend.load_chat_session(self.chat_id)
             if success:
                 logger.info(f"Chat session loaded: {self.chat_id}")
+                self._sync_data_context_for_active_chat()
                 history = self.backend.get_chat_history()
                 if history:
                     chat_history = self._format_chat_history(history)
@@ -3550,6 +3611,7 @@ class DataWorkspaceGUI(QMainWindow):
         # Select the new chat
         if chat_id:
             self.chat_id = chat_id
+            self._sync_data_context_for_active_chat()
             self.conversation_display.clear()
             self._set_current_markdown(
                 "New chat created. Start typing to begin the conversation."
@@ -3663,12 +3725,14 @@ class DataWorkspaceGUI(QMainWindow):
             logger.debug("Empty query submitted, ignoring")
             return
 
-        if self.data_context is None:
+        query_context = self._get_active_chat_query_context()
+        if query_context is None:
             logger.warning("Query submitted but no data loaded")
             QMessageBox.warning(
                 self, "No Data", "No data loaded. Please restart and load data first."
             )
             return
+        self.data_context = query_context
 
         # Check if we're responding to a clarification
         is_clarification_response = self.pending_clarification_query is not None
@@ -3732,7 +3796,7 @@ class DataWorkspaceGUI(QMainWindow):
         logger.debug("Creating query worker for active SQL context")
         self.worker = QueryWorker(
             actual_query,
-            self.data_context,
+            query_context,
             clarification_context,
             project_id=self.project_id,  # Pass project_id for memory service
         )

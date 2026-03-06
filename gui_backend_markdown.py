@@ -25,6 +25,7 @@ class ChatSession:
     created_at: datetime
     messages: List[Dict[str, str]]
     data_source: Optional[Dict[str, Any]] = None
+    runtime_context: Optional[Dict[str, Any]] = None
 
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the session."""
