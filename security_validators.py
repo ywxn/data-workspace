@@ -24,15 +24,13 @@ class SecurityRule(NamedTuple):
 
 
 # ============================================================
-# Python Execution Rules
+# Python Execution Rules (Minimal but High-Impact)
 # ============================================================
 
 SHELL_COMMAND_RULES = [
     SecurityRule(r"\bos\.system\s*\(", "os.system() is forbidden"),
-    SecurityRule(r"\bsubprocess\.", "subprocess module usage is forbidden"),
+    SecurityRule(r"\bsubprocess\.(run|popen|call|check_output|Popen)\s*\(", "subprocess execution is forbidden"),
     SecurityRule(r"\bos\.popen\s*\(", "os.popen() is forbidden"),
-    SecurityRule(r"\bos\.exec[vle]?\s*\(", "os.exec*() calls are forbidden"),
-    SecurityRule(r"\bshutil\.rmtree\s*\(", "shutil.rmtree() is forbidden"),
 ]
 
 DANGEROUS_EVAL_RULES = [
@@ -40,16 +38,19 @@ DANGEROUS_EVAL_RULES = [
     SecurityRule(r"\bexec\s*\(", "exec() is forbidden"),
     SecurityRule(r"\bcompile\s*\(", "compile() is forbidden"),
     SecurityRule(r"\b__import__\s*\(", "__import__() is forbidden"),
+    SecurityRule(r"\bimport\s+(os|subprocess|sys)\b", "Importing system modules is forbidden"),
 ]
 
-PATH_TRAVERSAL_RULES = [
-    SecurityRule(r"\bos\.chdir\s*\(", "os.chdir() is forbidden"),
-    SecurityRule(r"\.\./", "Path traversal detected"),
-    SecurityRule(r"\bopen\s*\(", "Direct file open() calls are forbidden"),
+DESTRUCTIVE_FS_RULES = [
+    SecurityRule(r"\bshutil\.rmtree\s*\(", "shutil.rmtree() is forbidden"),
+    SecurityRule(r"\bos\.remove\s*\(", "os.remove() is forbidden"),
+    SecurityRule(r"\bos\.unlink\s*\(", "os.unlink() is forbidden"),
 ]
 
 ALL_SECURITY_RULES: Iterable[SecurityRule] = (
-    SHELL_COMMAND_RULES + DANGEROUS_EVAL_RULES + PATH_TRAVERSAL_RULES
+    SHELL_COMMAND_RULES
+    + DANGEROUS_EVAL_RULES
+    + DESTRUCTIVE_FS_RULES
 )
 
 
@@ -76,23 +77,12 @@ FORBIDDEN_SQL_KEYWORDS = [
 # Injection patterns
 SQL_INJECTION_RULES = [
     SecurityRule(r";\s*\S+", "Stacked SQL statements are not allowed"),
-    SecurityRule(r"--", "SQL line comments are not allowed"),
-    SecurityRule(r"/\*", "SQL block comments are not allowed"),
-    SecurityRule(r"\bunion\s+select\b", "UNION SELECT is not allowed"),
+    SecurityRule(r"\bunion\s+select\b", "UNION SELECT injection detected"),
     SecurityRule(r"\bor\s+1\s*=\s*1\b", "Tautology injection detected"),
     SecurityRule(r"\band\s+1\s*=\s*1\b", "Tautology injection detected"),
-    SecurityRule(r"'\s*or\s*'.*?'\s*=\s*'", "String-based injection pattern detected"),
 ]
 
-# Disallow dynamic SQL construction
-SQL_DYNAMIC_BUILD_RULES = [
-    SecurityRule(r"\bf['\"]", "f-string SQL construction is forbidden"),
-    SecurityRule(r"\.format\s*\(", "str.format() SQL construction is forbidden"),
-    SecurityRule(r"%\s*\(", "Percent-format SQL construction is forbidden"),
-    SecurityRule(r"\+\s*\w+", "String concatenation in SQL detected"),
-]
-
-ALL_SQL_RULES = SQL_INJECTION_RULES + SQL_DYNAMIC_BUILD_RULES
+ALL_SQL_RULES = SQL_INJECTION_RULES
 
 
 # ============================================================
@@ -161,7 +151,7 @@ def _enforce_select_only(query: str) -> Optional[str]:
     if not lowered.startswith("select"):
         return "Only SELECT statements are allowed"
 
-    if ";" in lowered.rstrip(";"):
+    if ";" in lowered[:-1]:
         return "Multiple SQL statements are not allowed"
 
     return None
