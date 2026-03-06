@@ -2884,9 +2884,7 @@ class QueryWorker(QThread):
             # Clarification follow-up should continue execution, not ask for
             # another ambiguity question for the same intent.
             effective_context = dict(effective_context)
-            effective_context["_skip_clarification"] = bool(
-                self.clarification_context
-            )
+            effective_context["_skip_clarification"] = bool(self.clarification_context)
 
             # Run async agent methods in a new event loop
             loop = asyncio.new_event_loop()
@@ -2980,9 +2978,7 @@ class QueryWorker(QThread):
             logger.info("CxO mode: cache hit detected, attempting context reuse")
             cached_context = self.data_context.get("_cxo_selected_context")
             if self._has_usable_cxo_context(cached_context):
-                logger.info(
-                    "CxO mode: cache hit using existing selected-table context"
-                )
+                logger.info("CxO mode: cache hit using existing selected-table context")
                 return cached_context
             logger.info(
                 "CxO mode: cache hit has no selected-table context; running NLP selection to seed follow-up context"

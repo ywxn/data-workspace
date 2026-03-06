@@ -394,7 +394,7 @@ class ConfigManager:
             return bool(config.get("show_sql_in_responses"))
         # Backward compatibility with older configs.
         return bool(config.get("show_sql_in_analyst_mode", False))
- 
+
     @staticmethod
     def set_show_sql_in_responses(enabled: bool) -> Tuple[bool, str]:
         """Enable or disable SQL code display in responses."""

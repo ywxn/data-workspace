@@ -180,7 +180,9 @@ class UnifiedMemoryService:
             logger.warning(f"Embedding failed, using lexical fallback: {exc}")
             return None
 
-    def _embed_texts(self, texts: List[str], batch_size: int = 32) -> Dict[str, List[float]]:
+    def _embed_texts(
+        self, texts: List[str], batch_size: int = 32
+    ) -> Dict[str, List[float]]:
         """Embed multiple texts using one model call when vectors are not cached."""
         if not texts:
             return {}
@@ -218,7 +220,9 @@ class UnifiedMemoryService:
                         else:
                             vector_list = list(vector)
 
-                        self._embedding_cache[self._embedding_cache_key(text)] = vector_list
+                        self._embedding_cache[self._embedding_cache_key(text)] = (
+                            vector_list
+                        )
                         results[text] = vector_list
                 except Exception as exc:
                     logger.warning(f"Batch embedding failed, using fallback: {exc}")

@@ -29,7 +29,10 @@ class SecurityRule(NamedTuple):
 
 SHELL_COMMAND_RULES = [
     SecurityRule(r"\bos\.system\s*\(", "os.system() is forbidden"),
-    SecurityRule(r"\bsubprocess\.(run|popen|call|check_output|Popen)\s*\(", "subprocess execution is forbidden"),
+    SecurityRule(
+        r"\bsubprocess\.(run|popen|call|check_output|Popen)\s*\(",
+        "subprocess execution is forbidden",
+    ),
     SecurityRule(r"\bos\.popen\s*\(", "os.popen() is forbidden"),
 ]
 
@@ -38,7 +41,9 @@ DANGEROUS_EVAL_RULES = [
     SecurityRule(r"\bexec\s*\(", "exec() is forbidden"),
     SecurityRule(r"\bcompile\s*\(", "compile() is forbidden"),
     SecurityRule(r"\b__import__\s*\(", "__import__() is forbidden"),
-    SecurityRule(r"\bimport\s+(os|subprocess|sys)\b", "Importing system modules is forbidden"),
+    SecurityRule(
+        r"\bimport\s+(os|subprocess|sys)\b", "Importing system modules is forbidden"
+    ),
 ]
 
 DESTRUCTIVE_FS_RULES = [
@@ -48,9 +53,7 @@ DESTRUCTIVE_FS_RULES = [
 ]
 
 ALL_SECURITY_RULES: Iterable[SecurityRule] = (
-    SHELL_COMMAND_RULES
-    + DANGEROUS_EVAL_RULES
-    + DESTRUCTIVE_FS_RULES
+    SHELL_COMMAND_RULES + DANGEROUS_EVAL_RULES + DESTRUCTIVE_FS_RULES
 )
 
 
