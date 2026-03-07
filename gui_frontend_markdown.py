@@ -3605,17 +3605,59 @@ class DataWorkspaceGUI(QMainWindow):
             return
 
         logger.info(f"New chat created: {chat_id}")
-        # Refresh chat list and select the new chat
+        # Ensure the new chat is both selected in UI and active in backend.
+        if chat_id:
+            self._activate_chat(chat_id)
+
+    def _activate_chat(self, chat_id: str) -> bool:
+        """Activate a chat in backend + UI and render its current history."""
+        if not chat_id:
+            return False
+
         self.refresh_chat_list()
 
-        # Select the new chat
-        if chat_id:
-            self.chat_id = chat_id
-            self._sync_data_context_for_active_chat()
-            self.conversation_display.clear()
+        self.chat_id = chat_id
+        success, _ = self.backend.load_chat_session(chat_id)
+        if not success:
+            logger.warning(f"Failed to activate chat session: {chat_id}")
+            return False
+
+        self._sync_data_context_for_active_chat()
+        history = self.backend.get_chat_history()
+        if history:
+            self._set_current_markdown(self._format_chat_history(history))
+        else:
             self._set_current_markdown(
                 "New chat created. Start typing to begin the conversation."
             )
+
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == chat_id:
+                self.chat_list.setCurrentRow(i)
+                break
+
+        return True
+
+    def _start_fresh_chat_for_active_project(self) -> None:
+        """Start a fresh chat when opening a project, avoiding reuse of historical Chat 1."""
+        if self.backend.active_project is None:
+            return
+
+        chats = self.backend.active_project.get_all_chats()
+
+        # For a brand-new project, reuse its single empty chat.
+        if len(chats) == 1 and not chats[0].messages:
+            self._activate_chat(chats[0].session_id)
+            return
+
+        chat_num = len(chats) + 1
+        success, msg, new_chat_id = self.backend.create_chat_session(f"Chat {chat_num}")
+        if not success or not new_chat_id:
+            logger.warning(f"Failed to create fresh chat on project open: {msg}")
+            return
+
+        self._activate_chat(new_chat_id)
 
     def _format_chat_history(self, messages: List[Dict[str, str]]) -> str:
         """Format chat messages as Markdown"""
@@ -4104,35 +4146,8 @@ class DataWorkspaceGUI(QMainWindow):
 
                     if self.project_id is not None:
                         self.backend.load_project(self.project_id)
-                        if self.backend.active_project:
-                            chats = self.backend.active_project.get_all_chats()
-                            if chats:
-                                self.chat_id = chats[0].session_id
-                                logger.debug(f"Loaded initial chat: {self.chat_id}")
-                                # Load the first chat session and display its history
-                                success, _ = self.backend.load_chat_session(
-                                    self.chat_id
-                                )
-                                if success:
-                                    history = self.backend.get_chat_history()
-                                    if history:
-                                        chat_history = self._format_chat_history(
-                                            history
-                                        )
-                                        self.conversation_display.setHtml(
-                                            markdown_to_html(chat_history)
-                                        )
-                                    else:
-                                        self.conversation_display.setHtml(
-                                            markdown_to_html(
-                                                "No chat history yet. Start typing to begin the conversation."
-                                            )
-                                        )
-
-                    self.refresh_project_list()
-                    # Select the first chat in the list
-                    if self.chat_list.count() > 0:
-                        self.chat_list.setCurrentRow(0)
+                        self.refresh_project_list()
+                        self._start_fresh_chat_for_active_project()
                     logger.info("Project creation successful, UI refreshed")
                     QMessageBox.information(
                         self, "New Project", "Project created successfully."
@@ -4159,36 +4174,12 @@ class DataWorkspaceGUI(QMainWindow):
 
                 if self.project_id is not None:
                     self.backend.load_project(self.project_id)
+                    self.refresh_project_list()
                     if self.backend.active_project:
                         logger.debug(
                             f"Loaded project: {self.backend.active_project.title}"
                         )
-                        chats = self.backend.active_project.get_all_chats()
-                        if chats:
-                            self.chat_id = chats[0].session_id
-                            logger.debug(
-                                f"Loaded {len(chats)} chat(s), active chat: {self.chat_id}"
-                            )
-                            # Load the first chat session and display its history
-                            success, _ = self.backend.load_chat_session(self.chat_id)
-                            if success:
-                                history = self.backend.get_chat_history()
-                                if history:
-                                    chat_history = self._format_chat_history(history)
-                                    self.conversation_display.setHtml(
-                                        markdown_to_html(chat_history)
-                                    )
-                                else:
-                                    self.conversation_display.setHtml(
-                                        markdown_to_html(
-                                            "No chat history yet. Start typing to begin the conversation."
-                                        )
-                                    )
-
-                self.refresh_project_list()
-                # Select the first chat in the list
-                if self.chat_list.count() > 0:
-                    self.chat_list.setCurrentRow(0)
+                    self._start_fresh_chat_for_active_project()
                 logger.info("Project load successful, UI refreshed")
             else:
                 logger.info("User cancelled project load")
@@ -5348,26 +5339,14 @@ def _load_project_and_chats(window: DataWorkspaceGUI) -> None:
     """Load the project and display chat history."""
     if window.project_id is not None:
         window.backend.load_project(window.project_id)
+        window.refresh_project_list()
         if window.backend.active_project:
             logger.debug(f"Active project: {window.backend.active_project.title}")
             chats = window.backend.active_project.get_all_chats()
-            if chats:
-                window.chat_id = chats[0].session_id
-                success, _ = window.backend.load_chat_session(window.chat_id)
-                logger.info(
-                    f"Loaded {len(chats)} chat(s), active chat: {window.chat_id}"
-                )
-                if success:
-                    history = window.backend.get_chat_history()
-                    if history:
-                        chat_history = window._format_chat_history(history)
-                        window.conversation_display.setHtml(
-                            markdown_to_html(chat_history)
-                        )
-
-    window.refresh_project_list()
-    if window.chat_list.count() > 0:
-        window.chat_list.setCurrentRow(0)
+            logger.info(f"Loaded {len(chats)} existing chat(s) from project")
+            window._start_fresh_chat_for_active_project()
+    else:
+        window.refresh_project_list()
 
 
 def _display_loaded_project_data(window: DataWorkspaceGUI) -> None:
