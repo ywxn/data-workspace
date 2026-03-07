@@ -2234,6 +2234,7 @@ class DatabaseConnectionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Database Connection")
         self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumWidth(500)
         self.windowIcon = QIcon("icon.ico")
         self.setWindowIcon(self.windowIcon)

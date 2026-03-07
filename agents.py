@@ -101,6 +101,10 @@ PLANNING RULES
 - Visualization is required only if it meaningfully improves interpretation
 - SQL is required if computation, grouping, filtering, statistics, or joins are needed
 - Summary-only tasks require no query
+- Prefer business-readable identifiers in outputs:
+    - For master/entity tables, prefer `Name` over `Id` when `Name` exists
+    - For transactional tables, prefer `Document No` over `Id` when `Document No` exists
+    - Use `Id` only when no better display identifier is available or when the user explicitly asks for IDs
 
 OUTPUT SCHEMA (STRICT JSON ONLY)
 {
@@ -138,6 +142,10 @@ SQL CONTRACT
 - Avoid SELECT *
 - Include ORDER BY for ranked or time-series results
 - Limit results when it improves performance, unless full output is required
+- Prefer business-readable display columns in SELECT outputs when available:
+    - For master/entity rows, select `Name` instead of `Id`
+    - For transactional rows, select `Document No` instead of `Id`
+    - Keep `Id` only if explicitly requested or if required for joins/internal logic
 
 SECURITY RULES (MANDATORY)
 - FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
@@ -375,6 +383,10 @@ CORRECTION RULES
 - Fully qualify columns when joins are involved
 - Preserve the original intent of the query
 - Output ONLY a single SELECT query
+- Maintain business-readable outputs when available:
+    - For master/entity rows, prefer `Name` over `Id` in result columns
+    - For transactional rows, prefer `Document No` over `Id` in result columns
+    - Keep `Id` only if explicitly requested or necessary for query correctness
 
 SECURITY RULES (MANDATORY)
 - FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
