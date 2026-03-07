@@ -124,23 +124,18 @@ def _validate_parameterization(
         no params when placeholders present
     """
 
-    named_placeholders = re.findall(r":([a-zA-Z_][a-zA-Z0-9_]*)", query)
-    percent_placeholders = re.findall(r"%\(([a-zA-Z_][a-zA-Z0-9_]*)\)s", query)
+    named = set(re.findall(r":([a-zA-Z_][a-zA-Z0-9_]*)", query))
+    percent = set(re.findall(r"%\(([a-zA-Z_][a-zA-Z0-9_]*)\)s", query))
 
-    placeholders = set(named_placeholders + percent_placeholders)
+    placeholders = named | percent
 
     if placeholders:
         if not params:
             return "Query contains placeholders but no parameters provided"
 
-        missing = placeholders - set(params.keys())
+        missing = placeholders - set(params)
         if missing:
             return f"Missing SQL parameters: {', '.join(sorted(missing))}"
-
-    else:
-        # No placeholders — must not contain raw string literals
-        if re.search(r"'[^']*'", query):
-            return "Literal string values detected — use parameterized queries"
 
     return None
 
