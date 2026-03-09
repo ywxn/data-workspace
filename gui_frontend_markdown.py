@@ -2257,6 +2257,8 @@ class DatabaseConnectionDialog(QDialog):
         self.selection_method_row_label: Optional[QLabel] = None
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "Semantic Filter (slow)"])
+        # Should default to manual if in analyst mode
+        self.selection_method_combo.setCurrentIndex(0)
 
         data_already_loaded = False
         if hasattr(self.parent(), "backend") and self.parent().backend:
@@ -2269,10 +2271,6 @@ class DatabaseConnectionDialog(QDialog):
         if self.force_nlp:
             self.selection_method_combo.setCurrentIndex(1)
             self.selection_method_combo.setEnabled(False)
-        else:
-            method_pref = ConfigManager.get_table_selection_method()
-            if method_pref == "nlp":
-                self.selection_method_combo.setCurrentIndex(1)
         self.selection_method_combo.currentTextChanged.connect(
             self.on_selection_method_changed
         )
@@ -2394,8 +2392,12 @@ class DatabaseConnectionDialog(QDialog):
 
         method_text = self.selection_method_combo.currentText()
         method = self._normalize_selection_method(method_text)
-        ConfigManager.set_table_selection_method(method)
-        logger.info(f"Table selection method set to: {method}")
+
+        # Keep analyst default behavior stable: force_nlp is a CxO-only runtime
+        # constraint and should not overwrite the user's global preference.
+        if not self.force_nlp:
+            ConfigManager.set_table_selection_method(method)
+            logger.info(f"Table selection method set to: {method}")
 
         self.accept()
 
