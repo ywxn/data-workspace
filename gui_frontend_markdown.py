@@ -2256,7 +2256,7 @@ class DatabaseConnectionDialog(QDialog):
         # Table selection method
         self.selection_method_row_label: Optional[QLabel] = None
         self.selection_method_combo = QComboBox()
-        self.selection_method_combo.addItems(["Manual", "Filter (slow)"])
+        self.selection_method_combo.addItems(["Manual", "Semantic Filter (slow)"])
 
         data_already_loaded = False
         if hasattr(self.parent(), "backend") and self.parent().backend:
@@ -2370,7 +2370,7 @@ class DatabaseConnectionDialog(QDialog):
     @staticmethod
     def _normalize_selection_method(method_text: Optional[str]) -> str:
         normalized = (method_text or "").lower()
-        return "nlp" if ("nlp" in normalized or "filter" in normalized) else "manual"
+        return "nlp" if ("nlp" in normalized or "semantic filter" in normalized) else "manual"
 
     def validate_and_accept(self):
         """Validate inputs before accepting"""
