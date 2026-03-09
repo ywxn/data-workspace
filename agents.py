@@ -7,6 +7,7 @@ queries into manageable tasks, generates SQL, creates visualizations, and provid
 
 import json
 import os
+import random
 import re
 import tempfile
 from string import Template
@@ -638,26 +639,88 @@ class AIAgent:
         Raises:
             RuntimeError: If API call fails
         """
-        try:
-            if self.api_provider == "claude":
-                response = self._call_claude(messages, max_tokens, temperature)
-                if stream_callback:
-                    stream_callback(response)
-                return response
-            elif self.api_provider == "local":
-                response = await self._call_local(messages, max_tokens, temperature)
-                if stream_callback:
-                    stream_callback(response)
-                return response
-            else:  # openai
-                if stream:
-                    return await self._call_openai_stream(
-                        messages, max_tokens, temperature, stream_callback
-                    )
-                return await self._call_openai(messages, max_tokens, temperature)
-        except Exception as e:
-            logger.error(f"LLM call failed: {str(e)}")
-            raise RuntimeError(f"Failed to call {self.api_provider}: {str(e)}")
+        import asyncio
+
+        max_rate_limit_retries = 3
+
+        for retry_index in range(max_rate_limit_retries + 1):
+            try:
+                if self.api_provider == "claude":
+                    response = self._call_claude(messages, max_tokens, temperature)
+                    if stream_callback:
+                        stream_callback(response)
+                    return response
+                elif self.api_provider == "local":
+                    response = await self._call_local(messages, max_tokens, temperature)
+                    if stream_callback:
+                        stream_callback(response)
+                    return response
+                else:  # openai
+                    if stream:
+                        return await self._call_openai_stream(
+                            messages, max_tokens, temperature, stream_callback
+                        )
+                    return await self._call_openai(messages, max_tokens, temperature)
+            except Exception as e:
+                should_retry = self._is_rate_limit_error(e)
+                last_attempt = retry_index >= max_rate_limit_retries
+
+                if not should_retry or last_attempt:
+                    logger.error(f"LLM call failed: {str(e)}")
+                    raise RuntimeError(f"Failed to call {self.api_provider}: {str(e)}")
+
+                delay_seconds = self._get_rate_limit_backoff_seconds(e, retry_index)
+                logger.warning(
+                    "Rate limit encountered from %s; retrying in %.2fs "
+                    "(attempt %d/%d)",
+                    self.api_provider,
+                    delay_seconds,
+                    retry_index + 1,
+                    max_rate_limit_retries,
+                )
+                await asyncio.sleep(delay_seconds)
+
+        raise RuntimeError(
+            f"Failed to call {self.api_provider}: exceeded retry attempts"
+        )
+
+    @staticmethod
+    def _is_rate_limit_error(error: Exception) -> bool:
+        """Return True when an exception indicates provider/API rate limiting."""
+        status_code = getattr(error, "status_code", None)
+        if status_code == 429:
+            return True
+
+        response = getattr(error, "response", None)
+        if response is not None and getattr(response, "status_code", None) == 429:
+            return True
+
+        error_name = type(error).__name__.lower()
+        error_text = str(error).lower()
+        return "ratelimit" in error_name or "rate limit" in error_text
+
+    @staticmethod
+    def _get_rate_limit_backoff_seconds(error: Exception, retry_index: int) -> float:
+        """Compute retry delay honoring Retry-After when available."""
+        retry_after = None
+
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers:
+            retry_after_raw = headers.get("retry-after") or headers.get("Retry-After")
+            if retry_after_raw is not None:
+                try:
+                    retry_after = float(str(retry_after_raw).strip())
+                except (TypeError, ValueError):
+                    retry_after = None
+
+        if retry_after is not None:
+            return max(0.5, min(retry_after, 60.0))
+
+        # Exponential backoff with small jitter to reduce synchronized retries.
+        base_delay = min(2**retry_index, 30)
+        jitter = random.uniform(0.0, 0.5)
+        return float(base_delay) + jitter
 
     def _call_claude(
         self, messages: List[Dict[str, str]], max_tokens: int, temperature: float
@@ -2623,6 +2686,7 @@ class AIAgent:
             parts.append(f"```sql\n{self._clean_sql_output(generated_sql)}\n```")
             parts.append("")
         if chart_path:
+            parts.append("")
             parts.append(f"![Chart]({chart_path})")
             parts.append("")
         preview = self._format_cxo_table_preview(query_result)
