@@ -2258,6 +2258,7 @@ class DatabaseConnectionDialog(QDialog):
         self.selection_method_combo = QComboBox()
         self.selection_method_combo.addItems(["Manual", "Semantic Filter (slow)"])
         # Should default to manual if in analyst mode
+        # TODO: Add global variable to deal with this while testing
         self.selection_method_combo.setCurrentIndex(0)
 
         data_already_loaded = False
