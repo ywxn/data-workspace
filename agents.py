@@ -1184,9 +1184,9 @@ class AIAgent:
         """
         normalized = dict(plan or {})
         task_type = str(normalized.get("task_type", "")).strip().lower()
-        expected_result_type = str(
-            normalized.get("expected_result_type", "")
-        ).strip().lower()
+        expected_result_type = (
+            str(normalized.get("expected_result_type", "")).strip().lower()
+        )
 
         requires_viz = bool(normalized.get("requires_visualization", False))
         requires_sql = normalized.get("requires_sql")
@@ -2711,17 +2711,18 @@ class AIAgent:
         if not columns or not rows:
             return None
 
-        # TODO: Modify logic. Users expect to see tables.
-        if len(rows) > 10:
-            return None
-        if len(columns) < 1 or len(columns) > 6:
-            return None
+        # Limit preview size instead of rejecting
+        preview_rows = rows[:10]
 
         try:
-            if rows and isinstance(rows[0], dict):
-                preview_rows = rows[:10]
-                return tabulate(preview_rows, headers="keys", tablefmt="github")
-            return tabulate(rows[:10], headers=columns, tablefmt="github")
+            # Normalize rows into dict format
+            if isinstance(preview_rows[0], dict):
+                headers = "keys"
+            else:
+                headers = columns if columns else ()
+
+            return tabulate(preview_rows, headers=headers, tablefmt="github")
+
         except Exception:
             return None
 
