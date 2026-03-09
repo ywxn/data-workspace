@@ -2702,28 +2702,24 @@ class AIAgent:
     @staticmethod
     def _format_cxo_table_preview(result: Optional[Dict[str, Any]]) -> Optional[str]:
         """Render a compact table preview for ranked/top-N style CxO outputs."""
-        if not isinstance(result, dict) or "error" in result:
+        MAX_COLUMNS = 5
+        MAX_ROWS = 15
+
+        # TODO: Define helper function that drops id columns if name/label columns exist
+        if not isinstance(result, dict) or result.get("error"):
             return None
 
-        columns = result.get("columns") or []
-        rows = result.get("rows") or []
+        columns = (result.get("columns") or [])[:MAX_COLUMNS]
+        rows = (result.get("rows") or [])[:MAX_ROWS]
 
         if not columns or not rows:
             return None
 
-        # Limit preview size instead of rejecting
-        preview_rows = rows[:10]
-
         try:
-            # Normalize rows into dict format
-            if isinstance(preview_rows[0], dict):
-                headers = "keys"
-            else:
-                headers = columns if columns else ()
+            headers = "keys" if isinstance(rows[0], dict) else columns
+            return tabulate(rows, headers=headers, tablefmt="github")
 
-            return tabulate(preview_rows, headers=headers, tablefmt="github")
-
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
     def _format_response(
