@@ -1108,6 +1108,50 @@ class AIAgent:
             },
         )
 
+    def _normalize_execution_plan(
+        self, plan: Dict[str, Any], user_query: str
+    ) -> Dict[str, Any]:
+        """
+        Reconcile planner flags so execution decisions are internally consistent.
+
+        The planner prompt emits both `expected_result_type` and
+        `requires_visualization`, but execution historically only used
+        `requires_visualization`. This normalization ensures chart-intent from
+        either field is respected before downstream orchestration.
+        """
+        normalized = dict(plan or {})
+        task_type = str(normalized.get("task_type", "")).strip().lower()
+        expected_result_type = str(
+            normalized.get("expected_result_type", "")
+        ).strip().lower()
+
+        requires_viz = bool(normalized.get("requires_visualization", False))
+        requires_sql = normalized.get("requires_sql")
+
+        query_requests_viz = self._query_requests_visualization(user_query)
+
+        # Any explicit chart-like signal should force visualization.
+        if (
+            query_requests_viz
+            or task_type == "visualization"
+            or expected_result_type == "chart"
+        ):
+            requires_viz = True
+
+        # Visualization generally requires tabular data from SQL first.
+        if requires_viz and requires_sql is False:
+            requires_sql = True
+
+        normalized["requires_visualization"] = requires_viz
+        normalized["requires_sql"] = requires_sql
+
+        # If visualization is now required but result type was not specified,
+        # default to chart so metadata reflects execution intent.
+        if requires_viz and expected_result_type in {"", "unknown"}:
+            normalized["expected_result_type"] = "chart"
+
+        return normalized
+
     async def sql_generation_agent(
         self,
         plan: Dict[str, Any],
@@ -2030,15 +2074,8 @@ class AIAgent:
 
             # Step 1: Plan the task
             plan = await self.planner_agent(user_query, context, stream=True)
+            plan = self._normalize_execution_plan(plan, user_query)
             logger.info(f"Generated plan: {plan}")
-
-            if (
-                self._query_requests_visualization(user_query)
-                or plan.get("task_type") == "visualization"
-            ):
-                plan["requires_visualization"] = True
-                if plan.get("requires_sql") is False:
-                    plan["requires_sql"] = True
 
             query_result = None
             chart_path = None
@@ -2610,6 +2647,7 @@ class AIAgent:
         if not columns or not rows:
             return None
 
+        # TODO: Modify logic. Users expect to see tables.
         if len(rows) > 10:
             return None
         if len(columns) < 1 or len(columns) > 6:
