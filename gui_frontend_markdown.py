@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QScrollArea,
     QDialog,
     QFileDialog,
     QLineEdit,
@@ -3318,10 +3317,7 @@ class DataWorkspaceGUI(QMainWindow):
         self.conversation_display.setPlaceholderText(
             "Select a chat or start a new conversation..."
         )
-        conversation_scroll = QScrollArea()
-        conversation_scroll.setWidgetResizable(True)
-        conversation_scroll.setWidget(self.conversation_display)
-        content_layout.addWidget(conversation_scroll, 1)
+        content_layout.addWidget(self.conversation_display, 1)
 
         # Input area at bottom
         input_section = QWidget()
@@ -3382,6 +3378,10 @@ class DataWorkspaceGUI(QMainWindow):
         self.animation_timer.timeout.connect(self._update_processing_animation)
         self.animation_frame = 0
         self.animation_frames = [".", "..", "...", ".."]  # Pulsing dots
+        self.processing_refresh_timer = QTimer(self)
+        self.processing_refresh_timer.setSingleShot(True)
+        self.processing_refresh_timer.setInterval(120)
+        self.processing_refresh_timer.timeout.connect(self._flush_processing_refresh)
 
         # Load saved theme preference or use system theme
         config = ConfigManager.load_config()
@@ -3681,8 +3681,16 @@ class DataWorkspaceGUI(QMainWindow):
         return self.current_markdown
 
     def _set_current_markdown(self, md: str) -> None:
+        scroll_bar = self.conversation_display.verticalScrollBar()
+        was_near_bottom = True
+        if scroll_bar:
+            was_near_bottom = (scroll_bar.maximum() - scroll_bar.value()) <= 24
+
         self.current_markdown = md
         self.conversation_display.setHtml(markdown_to_html(md))
+
+        if scroll_bar and was_near_bottom:
+            scroll_bar.setValue(scroll_bar.maximum())
 
     def _build_processing_block(self) -> str:
         # Animated dots for processing indicator
@@ -3701,8 +3709,24 @@ class DataWorkspaceGUI(QMainWindow):
         self.animation_frame = (self.animation_frame + 1) % len(self.animation_frames)
         # Only update if we have a processing block active
         if self.current_processing_block is not None:
-            new_block = self._build_processing_block()
-            self._set_processing_block(new_block)
+            # While stream text is arriving, avoid extra animation repaints.
+            if self.current_partial_response:
+                return
+            self._schedule_processing_refresh()
+
+    def _schedule_processing_refresh(self) -> None:
+        """Coalesce fast status/stream updates to reduce repaint flicker."""
+        if self.current_processing_block is None:
+            return
+        if not self.processing_refresh_timer.isActive():
+            self.processing_refresh_timer.start()
+
+    def _flush_processing_refresh(self) -> None:
+        """Apply the latest processing block state in a single repaint."""
+        if self.current_processing_block is None:
+            return
+        new_block = self._build_processing_block()
+        self._set_processing_block(new_block)
 
     def _set_processing_block(self, new_block: str) -> None:
         current_md = self._get_current_markdown()
@@ -3718,10 +3742,6 @@ class DataWorkspaceGUI(QMainWindow):
         self._set_current_markdown(current_md)
         self.current_processing_block = new_block
 
-        scroll_bar = self.conversation_display.verticalScrollBar()
-        if scroll_bar:
-            scroll_bar.setValue(scroll_bar.maximum())
-
     def _reset_processing_state(self) -> None:
         self.current_processing_status = ""
         self.current_partial_response = ""
@@ -3729,6 +3749,8 @@ class DataWorkspaceGUI(QMainWindow):
         # Stop animation timer
         if self.animation_timer.isActive():
             self.animation_timer.stop()
+        if self.processing_refresh_timer.isActive():
+            self.processing_refresh_timer.stop()
         self.animation_frame = 0
 
     def _replace_processing_block(self, replacement: str) -> None:
@@ -3743,16 +3765,14 @@ class DataWorkspaceGUI(QMainWindow):
     def update_status(self, status: str) -> None:
         """Update progress status text while a query runs."""
         self.current_processing_status = status
-        new_block = self._build_processing_block()
-        self._set_processing_block(new_block)
+        self._schedule_processing_refresh()
 
     def update_stream(self, chunk: str) -> None:
         """Render streaming analysis output as it arrives."""
         if not chunk:
             return
         self.current_partial_response += chunk
-        new_block = self._build_processing_block()
-        self._set_processing_block(new_block)
+        self._schedule_processing_refresh()
 
     def submit_query(self):
         """Handle query submission or stop running query"""
