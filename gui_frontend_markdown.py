@@ -5280,7 +5280,7 @@ class DataWorkspaceGUI(QMainWindow):
         logger.info("User opened About dialog")
         about_text = (
             "<h2>Data Workspace</h2>"
-            "<p>Version 1.0.0</p>"
+            "<p>Version 0.3.146</p>"
             "<p>A powerful AI-driven workspace for analyzing data across multiple sources with natural language queries.</p>"
             "<p><b>Key Features:</b></p>"
             "<ul>"
