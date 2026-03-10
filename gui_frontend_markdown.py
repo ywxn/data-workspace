@@ -2440,7 +2440,9 @@ class DatabaseConnectionDialog(QDialog):
         """Pre-populate all dialog fields from a previous connection config."""
         db_type = (config.get("db_type") or "sqlite").lower()
         logger.debug(f"Restoring db config: {config}")
-        logger.debug(f"DB type combo items: {[self.db_type_combo.itemText(i) for i in range(self.db_type_combo.count())]}")
+        logger.debug(
+            f"DB type combo items: {[self.db_type_combo.itemText(i) for i in range(self.db_type_combo.count())]}"
+        )
 
         idx = self.db_type_combo.findText(db_type, Qt.MatchFlag.MatchFixedString)
         if idx >= 0:
@@ -4292,9 +4294,7 @@ class DataWorkspaceGUI(QMainWindow):
                         success, message = connector.connect(db_type, credentials)
 
                         if success:
-                            logger.info(
-                                f"Successfully connected to {db_type} database"
-                            )
+                            logger.info(f"Successfully connected to {db_type} database")
                             tables = connector.get_tables()
 
                             if not tables:
@@ -4429,9 +4429,7 @@ class DataWorkspaceGUI(QMainWindow):
                                         logger.warning(
                                             f"Failed to load data from database: {status}"
                                         )
-                                        QMessageBox.warning(
-                                            self, "Load Failed", status
-                                        )
+                                        QMessageBox.warning(self, "Load Failed", status)
                                         continue
                         else:
                             logger.warning(f"Database connection failed: {message}")
@@ -4466,9 +4464,7 @@ class DataWorkspaceGUI(QMainWindow):
                                     "source_type": "multi_database",
                                     "connections": safe_configs,
                                 }
-                            aliases = list(
-                                data_context.get("connections", {}).keys()
-                            )
+                            aliases = list(data_context.get("connections", {}).keys())
                             table_count = len(data_context.get("tables", []))
                             welcome_msg = (
                                 f"## Multi-Database Connected\n\n"
@@ -4494,9 +4490,7 @@ class DataWorkspaceGUI(QMainWindow):
                     elif source_type == "file":
                         # File load flow
                         file_paths = source_config.get("file_paths", [])
-                        logger.debug(
-                            f"Loading {len(file_paths)} file(s): {file_paths}"
-                        )
+                        logger.debug(f"Loading {len(file_paths)} file(s): {file_paths}")
                         if file_paths:
                             data_context, welcome_msg = (
                                 self.backend.load_file_data_with_ui(file_paths)
@@ -4516,22 +4510,15 @@ class DataWorkspaceGUI(QMainWindow):
                                 )
                                 return
                             else:
-                                logger.warning(
-                                    f"Failed to load files: {welcome_msg}"
-                                )
-                                QMessageBox.warning(
-                                    self, "Load Failed", welcome_msg
-                                )
+                                logger.warning(f"Failed to load files: {welcome_msg}")
+                                QMessageBox.warning(self, "Load Failed", welcome_msg)
                                 continue
                 except Exception as e:
-                    logger.error(
-                        f"Error loading data source: {str(e)}", exc_info=True
-                    )
+                    logger.error(f"Error loading data source: {str(e)}", exc_info=True)
                     QMessageBox.critical(
                         self, "Error", f"Failed to load data: {str(e)}"
                     )
                     continue
-
 
     def connect_additional_data_source(self):
         """Connect a data source, prompting to overwrite or merge when data exists."""
