@@ -2436,6 +2436,37 @@ class DatabaseConnectionDialog(QDialog):
             "semantic_layer": self.semantic_layer,
         }
 
+    def populate_from_config(self, config: dict) -> None:
+        """Pre-populate all dialog fields from a previous connection config."""
+        db_type = (config.get("db_type") or "sqlite").lower()
+        logger.debug(f"Restoring db config: {config}")
+        logger.debug(f"DB type combo items: {[self.db_type_combo.itemText(i) for i in range(self.db_type_combo.count())]}")
+
+        idx = self.db_type_combo.findText(db_type, Qt.MatchFlag.MatchFixedString)
+        if idx >= 0:
+            self.db_type_combo.setCurrentIndex(idx)
+        else:
+            logger.warning(f"Unknown db_type '{db_type}', defaulting to sqlite")
+
+        # Force UI refresh regardless of whether the index changed
+        self.on_db_type_changed(db_type)
+
+        creds = config.get("credentials", {})
+        self.database_input.setText(creds.get("database", ""))
+        if db_type != "sqlite":
+            self.host_input.setText(creds.get("host", ""))
+            self.user_input.setText(creds.get("user", ""))
+            self.password_input.setText(creds.get("password", ""))
+            port = creds.get("port")
+            if port:
+                self.port_input.setText(str(port))
+
+        method = config.get("table_selection_method", "manual")
+        method_text = "Semantic Filter (slow)" if method == "nlp" else "Manual"
+        m_idx = self.selection_method_combo.findText(method_text)
+        if m_idx >= 0:
+            self.selection_method_combo.setCurrentIndex(m_idx)
+
     def import_semantic_layer(self) -> None:
         """Load semantic layer mapping from JSON file."""
         logger.debug("Attempting to import semantic layer")
@@ -3515,11 +3546,8 @@ class DataWorkspaceGUI(QMainWindow):
                         )
                         self.chat_id = new_chat_id
                         self.backend.load_chat_session(new_chat_id)
-                        self.conversation_display.clear()
-                        self.conversation_display.setHtml(
-                            markdown_to_html(
-                                "Chat cleared. Start typing to begin a new conversation."
-                            )
+                        self._set_current_markdown(
+                            "Chat cleared. Start typing to begin a new conversation."
                         )
                 else:
                     logger.error(f"Failed to create replacement chat: {msg}")
@@ -3697,7 +3725,7 @@ class DataWorkspaceGUI(QMainWindow):
         self.conversation_display.setHtml(markdown_to_html(md))
 
         if scroll_bar and was_near_bottom:
-            scroll_bar.setValue(scroll_bar.maximum())
+            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
 
     def _build_processing_block(self) -> str:
         # Animated dots for processing indicator
@@ -3846,7 +3874,7 @@ class DataWorkspaceGUI(QMainWindow):
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
         if scroll_bar:
-            scroll_bar.setValue(scroll_bar.maximum())
+            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
 
         self.query_input.clear()
 
@@ -3924,7 +3952,7 @@ class DataWorkspaceGUI(QMainWindow):
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
         if scroll_bar:
-            scroll_bar.setValue(scroll_bar.maximum())
+            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
 
         # Add to chat history
         self.add_message_to_chat("assistant", result)
@@ -3992,7 +4020,7 @@ class DataWorkspaceGUI(QMainWindow):
         # Scroll to bottom
         scroll_bar = self.conversation_display.verticalScrollBar()
         if scroll_bar:
-            scroll_bar.setValue(scroll_bar.maximum())
+            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
 
         self.query_input.setFocus()
 
@@ -4000,6 +4028,7 @@ class DataWorkspaceGUI(QMainWindow):
         """Clear conversation"""
         logger.debug(f"Clearing chat fields for chat_id: {self.chat_id}")
         self.conversation_display.clear()
+        self.current_markdown = None
         self.query_input.clear()
         self.backend.clear_session()
         logger.info("Chat fields cleared successfully")
@@ -4219,213 +4248,105 @@ class DataWorkspaceGUI(QMainWindow):
         """Open dialog to connect to a data source"""
         logger.info("User initiated data source connection")
 
+        retry_config = None  # Pre-filled config to restore on connection failure
+
         # Loop until data is successfully loaded or user cancels
         while True:
-            source_dialog = DataSourceDialog(self)
-            if source_dialog.exec() == QDialog.DialogCode.Accepted:
+            if retry_config:
+                # Retry after a failed connection: re-open the DB dialog pre-populated
+                is_cxo = ConfigManager.get_interaction_mode() == "cxo"
+                db_dialog = DatabaseConnectionDialog(
+                    self,
+                    force_nlp=is_cxo,
+                    semantic_layer=retry_config.get("semantic_layer"),
+                )
+                logger.info("Applying retry DB config to dialog")
+                db_dialog.populate_from_config(retry_config)
+                retry_config = None
+                if db_dialog.exec() != QDialog.DialogCode.Accepted:
+                    logger.info("User cancelled connection retry")
+                    return
+                source_type = "database"
+                source_config = db_dialog.get_config()
+            else:
+                source_dialog = DataSourceDialog(self)
+                if source_dialog.exec() != QDialog.DialogCode.Accepted:
+                    logger.info("User cancelled data source connection")
+                    return
                 source_type = source_dialog.data_source_type
                 source_config = source_dialog.data_source_config
-                logger.info(f"Data source type selected: {source_type}")
 
-                if source_type and source_config:
-                    try:
-                        if source_type == "database":
-                            # Database connection flow
-                            db_type = source_config.get("db_type")
-                            credentials = source_config.get("credentials", {})
-                            selection_method = source_config.get(
-                                "table_selection_method",
-                                ConfigManager.get_table_selection_method(),
+            if source_type and source_config:
+                try:
+                    if source_type == "database":
+                        # Database connection flow
+                        db_type = source_config.get("db_type")
+                        credentials = source_config.get("credentials", {})
+                        selection_method = source_config.get(
+                            "table_selection_method",
+                            ConfigManager.get_table_selection_method(),
+                        )
+                        semantic_layer = source_config.get("semantic_layer")
+                        logger.debug(f"Attempting to connect to {db_type} database")
+                        connector = DatabaseConnector()
+                        success, message = connector.connect(db_type, credentials)
+
+                        if success:
+                            logger.info(
+                                f"Successfully connected to {db_type} database"
                             )
-                            semantic_layer = source_config.get("semantic_layer")
-                            logger.debug(f"Attempting to connect to {db_type} database")
-                            connector = DatabaseConnector()
-                            success, message = connector.connect(db_type, credentials)
+                            tables = connector.get_tables()
 
-                            if success:
-                                logger.info(
-                                    f"Successfully connected to {db_type} database"
+                            if not tables:
+                                connector.close()
+                                QMessageBox.warning(
+                                    self,
+                                    "No Tables Found",
+                                    "The database does not contain any tables.",
                                 )
-                                tables = connector.get_tables()
-
-                                if not tables:
-                                    connector.close()
-                                    QMessageBox.warning(
-                                        self,
-                                        "No Tables Found",
-                                        "The database does not contain any tables.",
-                                    )
-                                    continue
-
-                                is_cxo = ConfigManager.get_interaction_mode() == "cxo"
-
-                                if is_cxo and tables:
-                                    # CxO mode: skip table selection, defer to query time
-                                    connector.close()
-                                    logger.info(
-                                        f"CxO mode: skipping table selection. {len(tables)} tables available."
-                                    )
-                                    cxo_context = {
-                                        "source_type": "database",
-                                        "cxo_mode": True,
-                                        "db_type": db_type,
-                                        "credentials": credentials,
-                                        "all_tables": tables,
-                                        "tables": [],
-                                        "table_info": {},
-                                        "semantic_layer": semantic_layer,
-                                    }
-                                    self.backend.data_context = cxo_context
-                                    self.data_context = cxo_context
-                                    if self.backend.active_project:
-                                        creds_to_store = credentials.copy()
-                                        if "password" in creds_to_store:
-                                            creds_to_store["password"] = ""
-                                        self.backend.active_project.data_source = {
-                                            "db_type": db_type,
-                                            "credentials": creds_to_store,
-                                            "table_selection_method": "nlp",
-                                            "cxo_mode": True,
-                                        }
-                                        # Store semantic layer on project, not in data_source
-                                        if semantic_layer:
-                                            self.backend.active_project.semantic_layer = (
-                                                semantic_layer
-                                            )
-                                    table_count = len(tables)
-                                    welcome_msg = (
-                                        f"## Connected to {db_type} database\n\n"
-                                        f"**{table_count}** tables available. "
-                                        f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
-                                        f"Simply type your question below to get started."
-                                    )
-                                    self.conversation_display.setHtml(
-                                        markdown_to_html(welcome_msg)
-                                    )
-                                    QMessageBox.information(
-                                        self,
-                                        "Data Loaded",
-                                        "Database connected in CxO mode.",
-                                    )
-                                    return
-
-                                elif tables:
-                                    selected_tables = select_tables_with_method(
-                                        self,
-                                        connector,
-                                        tables,
-                                        selection_method,
-                                        semantic_layer,
-                                    )
-                                    connector.close()
-
-                                    if selected_tables is None:
-                                        logger.info(
-                                            "User cancelled table selection, returning to data source selection"
-                                        )
-                                        continue
-
-                                    if selected_tables:
-                                        # Use load_data from processing module
-                                        data_source_config = {
-                                            "db_type": db_type,
-                                            "credentials": credentials,
-                                            "table": (
-                                                selected_tables[0]
-                                                if len(selected_tables) == 1
-                                                else selected_tables
-                                            ),
-                                        }
-                                        data_context, status = load_data(
-                                            "database", data_source_config
-                                        )
-                                        if data_context is not None:
-                                            self.backend.data_context = data_context
-                                            self.data_context = data_context
-                                            logger.info(
-                                                f"Successfully loaded data from tables: {selected_tables}"
-                                            )
-                                            welcome_msg = self.backend.format_database_welcome_message(
-                                                db_type,
-                                                selected_tables,
-                                                data_context,
-                                                status,
-                                            )
-                                            self.conversation_display.setHtml(
-                                                markdown_to_html(welcome_msg)
-                                            )
-                                            # Store data source in project
-                                            if self.backend.active_project:
-                                                creds_to_store = credentials.copy()
-                                                if "password" in creds_to_store:
-                                                    creds_to_store["password"] = ""
-                                                self.backend.active_project.data_source = {
-                                                    "db_type": db_type,
-                                                    "credentials": creds_to_store,
-                                                    "table": selected_tables,
-                                                    "table_selection_method": selection_method,
-                                                }
-                                                # Store semantic layer on project, not in data_source
-                                                if semantic_layer:
-                                                    self.backend.active_project.semantic_layer = (
-                                                        semantic_layer
-                                                    )
-                                            QMessageBox.information(
-                                                self,
-                                                "Data Loaded",
-                                                "Database data loaded successfully.",
-                                            )
-                                            return
-                                        else:
-                                            logger.warning(
-                                                f"Failed to load data from database: {status}"
-                                            )
-                                            QMessageBox.warning(
-                                                self, "Load Failed", status
-                                            )
-                                            continue
-                            else:
-                                logger.warning(f"Database connection failed: {message}")
-                                QMessageBox.warning(self, "Connection Failed", message)
                                 continue
 
-                        elif source_type == "multi_database":
-                            # Multi-database connection flow
-                            configs = source_config.get("connections", [])
-                            logger.info(
-                                f"Loading multi-database with {len(configs)} connections"
-                            )
-                            from processing import load_multi_database
+                            is_cxo = ConfigManager.get_interaction_mode() == "cxo"
 
-                            data_context, status = load_multi_database(configs)
-                            if data_context is not None:
-                                self.backend.data_context = data_context
-                                self.data_context = data_context
-                                logger.info(f"Multi-database loaded: {status}")
-                                # Persist configs (passwords stripped)
-                                ConfigManager.save_multi_db_config(configs)
-                                if self.backend.active_project:
-                                    safe_configs = []
-                                    for cfg in configs:
-                                        safe = dict(cfg)
-                                        c = safe.get("credentials", {}).copy()
-                                        c.pop("password", None)
-                                        safe["credentials"] = c
-                                        safe_configs.append(safe)
-                                    self.backend.active_project.data_source = {
-                                        "source_type": "multi_database",
-                                        "connections": safe_configs,
-                                    }
-                                aliases = list(
-                                    data_context.get("connections", {}).keys()
+                            if is_cxo and tables:
+                                # CxO mode: skip table selection, defer to query time
+                                connector.close()
+                                logger.info(
+                                    f"CxO mode: skipping table selection. {len(tables)} tables available."
                                 )
-                                table_count = len(data_context.get("tables", []))
+                                cxo_context = {
+                                    "source_type": "database",
+                                    "cxo_mode": True,
+                                    "db_type": db_type,
+                                    "credentials": credentials,
+                                    "all_tables": tables,
+                                    "tables": [],
+                                    "table_info": {},
+                                    "semantic_layer": semantic_layer,
+                                }
+                                self.backend.data_context = cxo_context
+                                self.data_context = cxo_context
+                                if self.backend.active_project:
+                                    creds_to_store = credentials.copy()
+                                    if "password" in creds_to_store:
+                                        creds_to_store["password"] = ""
+                                    self.backend.active_project.data_source = {
+                                        "db_type": db_type,
+                                        "credentials": creds_to_store,
+                                        "table_selection_method": "nlp",
+                                        "cxo_mode": True,
+                                    }
+                                    # Store semantic layer on project, not in data_source
+                                    if semantic_layer:
+                                        self.backend.active_project.semantic_layer = (
+                                            semantic_layer
+                                        )
+                                table_count = len(tables)
                                 welcome_msg = (
-                                    f"## Multi-Database Connected\n\n"
-                                    f"**{table_count}** tables loaded across "
-                                    f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
-                                    f"Tables are prefixed with their database alias "
-                                    f"(e.g. `alias__table`). Ask your question below."
+                                    f"## Connected to {db_type} database\n\n"
+                                    f"**{table_count}** tables available. "
+                                    f"In CxO mode, relevant tables are automatically selected based on your questions.\n\n"
+                                    f"Simply type your question below to get started."
                                 )
                                 self.conversation_display.setHtml(
                                     markdown_to_html(welcome_msg)
@@ -4433,57 +4354,184 @@ class DataWorkspaceGUI(QMainWindow):
                                 QMessageBox.information(
                                     self,
                                     "Data Loaded",
-                                    f"Multi-database loaded: {table_count} tables.",
+                                    "Database connected in CxO mode.",
+                                )
+                                return
+
+                            elif tables:
+                                selected_tables = select_tables_with_method(
+                                    self,
+                                    connector,
+                                    tables,
+                                    selection_method,
+                                    semantic_layer,
+                                )
+                                connector.close()
+
+                                if selected_tables is None:
+                                    logger.info(
+                                        "User cancelled table selection, returning to data source selection"
+                                    )
+                                    continue
+
+                                if selected_tables:
+                                    # Use load_data from processing module
+                                    data_source_config = {
+                                        "db_type": db_type,
+                                        "credentials": credentials,
+                                        "table": (
+                                            selected_tables[0]
+                                            if len(selected_tables) == 1
+                                            else selected_tables
+                                        ),
+                                    }
+                                    data_context, status = load_data(
+                                        "database", data_source_config
+                                    )
+                                    if data_context is not None:
+                                        self.backend.data_context = data_context
+                                        self.data_context = data_context
+                                        logger.info(
+                                            f"Successfully loaded data from tables: {selected_tables}"
+                                        )
+                                        welcome_msg = self.backend.format_database_welcome_message(
+                                            db_type,
+                                            selected_tables,
+                                            data_context,
+                                            status,
+                                        )
+                                        self.conversation_display.setHtml(
+                                            markdown_to_html(welcome_msg)
+                                        )
+                                        # Store data source in project
+                                        if self.backend.active_project:
+                                            creds_to_store = credentials.copy()
+                                            if "password" in creds_to_store:
+                                                creds_to_store["password"] = ""
+                                            self.backend.active_project.data_source = {
+                                                "db_type": db_type,
+                                                "credentials": creds_to_store,
+                                                "table": selected_tables,
+                                                "table_selection_method": selection_method,
+                                            }
+                                            # Store semantic layer on project, not in data_source
+                                            if semantic_layer:
+                                                self.backend.active_project.semantic_layer = (
+                                                    semantic_layer
+                                                )
+                                        QMessageBox.information(
+                                            self,
+                                            "Data Loaded",
+                                            "Database data loaded successfully.",
+                                        )
+                                        return
+                                    else:
+                                        logger.warning(
+                                            f"Failed to load data from database: {status}"
+                                        )
+                                        QMessageBox.warning(
+                                            self, "Load Failed", status
+                                        )
+                                        continue
+                        else:
+                            logger.warning(f"Database connection failed: {message}")
+                            QMessageBox.warning(self, "Connection Failed", message)
+                            retry_config = source_config
+                            continue
+
+                    elif source_type == "multi_database":
+                        # Multi-database connection flow
+                        configs = source_config.get("connections", [])
+                        logger.info(
+                            f"Loading multi-database with {len(configs)} connections"
+                        )
+                        from processing import load_multi_database
+
+                        data_context, status = load_multi_database(configs)
+                        if data_context is not None:
+                            self.backend.data_context = data_context
+                            self.data_context = data_context
+                            logger.info(f"Multi-database loaded: {status}")
+                            # Persist configs (passwords stripped)
+                            ConfigManager.save_multi_db_config(configs)
+                            if self.backend.active_project:
+                                safe_configs = []
+                                for cfg in configs:
+                                    safe = dict(cfg)
+                                    c = safe.get("credentials", {}).copy()
+                                    c.pop("password", None)
+                                    safe["credentials"] = c
+                                    safe_configs.append(safe)
+                                self.backend.active_project.data_source = {
+                                    "source_type": "multi_database",
+                                    "connections": safe_configs,
+                                }
+                            aliases = list(
+                                data_context.get("connections", {}).keys()
+                            )
+                            table_count = len(data_context.get("tables", []))
+                            welcome_msg = (
+                                f"## Multi-Database Connected\n\n"
+                                f"**{table_count}** tables loaded across "
+                                f"**{len(aliases)}** databases: {', '.join(aliases)}\n\n"
+                                f"Tables are prefixed with their database alias "
+                                f"(e.g. `alias__table`). Ask your question below."
+                            )
+                            self.conversation_display.setHtml(
+                                markdown_to_html(welcome_msg)
+                            )
+                            QMessageBox.information(
+                                self,
+                                "Data Loaded",
+                                f"Multi-database loaded: {table_count} tables.",
+                            )
+                            return
+                        else:
+                            logger.warning(f"Multi-database load failed: {status}")
+                            QMessageBox.warning(self, "Load Failed", status)
+                            continue
+
+                    elif source_type == "file":
+                        # File load flow
+                        file_paths = source_config.get("file_paths", [])
+                        logger.debug(
+                            f"Loading {len(file_paths)} file(s): {file_paths}"
+                        )
+                        if file_paths:
+                            data_context, welcome_msg = (
+                                self.backend.load_file_data_with_ui(file_paths)
+                            )
+                            if data_context is not None:
+                                self.data_context = data_context
+                                logger.info(
+                                    f"Successfully loaded {len(file_paths)} file(s)"
+                                )
+                                self.conversation_display.setHtml(
+                                    markdown_to_html(welcome_msg)
+                                )
+                                QMessageBox.information(
+                                    self,
+                                    "Data Loaded",
+                                    "Files loaded successfully.",
                                 )
                                 return
                             else:
-                                logger.warning(f"Multi-database load failed: {status}")
-                                QMessageBox.warning(self, "Load Failed", status)
-                                continue
-
-                        elif source_type == "file":
-                            # File load flow
-                            file_paths = source_config.get("file_paths", [])
-                            logger.debug(
-                                f"Loading {len(file_paths)} file(s): {file_paths}"
-                            )
-                            if file_paths:
-                                data_context, welcome_msg = (
-                                    self.backend.load_file_data_with_ui(file_paths)
+                                logger.warning(
+                                    f"Failed to load files: {welcome_msg}"
                                 )
-                                if data_context is not None:
-                                    self.data_context = data_context
-                                    logger.info(
-                                        f"Successfully loaded {len(file_paths)} file(s)"
-                                    )
-                                    self.conversation_display.setHtml(
-                                        markdown_to_html(welcome_msg)
-                                    )
-                                    QMessageBox.information(
-                                        self,
-                                        "Data Loaded",
-                                        "Files loaded successfully.",
-                                    )
-                                    return
-                                else:
-                                    logger.warning(
-                                        f"Failed to load files: {welcome_msg}"
-                                    )
-                                    QMessageBox.warning(
-                                        self, "Load Failed", welcome_msg
-                                    )
-                                    continue
-                    except Exception as e:
-                        logger.error(
-                            f"Error loading data source: {str(e)}", exc_info=True
-                        )
-                        QMessageBox.critical(
-                            self, "Error", f"Failed to load data: {str(e)}"
-                        )
-                        continue
-            else:
-                logger.info("User cancelled data source connection")
-                return
+                                QMessageBox.warning(
+                                    self, "Load Failed", welcome_msg
+                                )
+                                continue
+                except Exception as e:
+                    logger.error(
+                        f"Error loading data source: {str(e)}", exc_info=True
+                    )
+                    QMessageBox.critical(
+                        self, "Error", f"Failed to load data: {str(e)}"
+                    )
+                    continue
+
 
     def connect_additional_data_source(self):
         """Connect a data source, prompting to overwrite or merge when data exists."""
@@ -4929,6 +4977,7 @@ class DataWorkspaceGUI(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 self.conversation_display.clear()
+                self.current_markdown = None
                 self.backend.clear_session()
                 logger.info(
                     f"Conversation cleared successfully (chat_id: {self.chat_id})"
@@ -5518,6 +5567,8 @@ def _load_database_data(
             db_dialog = DatabaseConnectionDialog(
                 force_nlp=is_cxo, semantic_layer=retry_semantic_layer
             )
+            logger.info("Applying retry DB config to dialog")
+            db_dialog.populate_from_config(source_config)
             if db_dialog.exec() != QDialog.DialogCode.Accepted:
                 connector.close()
                 return False
