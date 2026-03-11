@@ -1,0 +1,6 @@
+{
+  "windows_url": "https://www.python.org/ftp/python/3.12.2/python-3.12.2-embed-amd64.zip",
+  "windows_sha256": "144ee3fa0c4171f98ec554ac01bb44ee1e895d154609f143b1d20b52c3fe383e",
+  "linux_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20240224/cpython-3.12.2+20240224-x86_64_v4-unknown-linux-gnu-install_only.tar.gz",
+  "linux_sha256": "32ec4268b4d16a428deb642ddd875ae6e738b85558bfbdc4628018ff2e5b9e95"
+}
