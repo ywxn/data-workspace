@@ -3145,6 +3145,13 @@ class DataWorkspaceGUI(QMainWindow):
         connect_additional_action.triggered.connect(self.connect_additional_data_source)
         file_menu.addAction(connect_additional_action)
 
+        change_tables_action = QAction("Change Selected Tables", self)
+        change_tables_action.setToolTip(
+            "Pick different tables from the connected database and start a new chat."
+        )
+        change_tables_action.triggered.connect(self.change_selected_tables)
+        file_menu.addAction(change_tables_action)
+
         file_menu.addSeparator()
 
         export_results_action = QAction("Export Results", self)
@@ -3720,14 +3727,25 @@ class DataWorkspaceGUI(QMainWindow):
     def _set_current_markdown(self, md: str) -> None:
         scroll_bar = self.conversation_display.verticalScrollBar()
         was_near_bottom = True
+        saved_ratio: Optional[float] = None
         if scroll_bar:
-            was_near_bottom = (scroll_bar.maximum() - scroll_bar.value()) <= 24
+            old_max = scroll_bar.maximum()
+            old_value = scroll_bar.value()
+            was_near_bottom = (old_max - old_value) <= 24
+            if not was_near_bottom and old_max > 0:
+                saved_ratio = old_value / old_max
 
         self.current_markdown = md
         self.conversation_display.setHtml(markdown_to_html(md))
 
-        if scroll_bar and was_near_bottom:
-            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
+        if scroll_bar:
+            if was_near_bottom:
+                QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
+            elif saved_ratio is not None:
+                QTimer.singleShot(
+                    0,
+                    lambda: scroll_bar.setValue(int(scroll_bar.maximum() * saved_ratio)),
+                )
 
     def _build_processing_block(self) -> str:
         # Animated dots for processing indicator
@@ -4245,6 +4263,92 @@ class DataWorkspaceGUI(QMainWindow):
         except Exception as e:
             logger.error(f"Error loading project: {str(e)}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Failed to load project: {str(e)}")
+
+    def change_selected_tables(self):
+        """Re-pick tables from the currently connected database without re-entering credentials."""
+        dc = self.backend.data_context or self.data_context
+        if not dc or dc.get("source_type") != "database":
+            QMessageBox.warning(
+                self,
+                "No Database Connected",
+                "Change Selected Tables is only available when a database is connected.\n\n"
+                "Please connect a database first via File > Connect Data Source.",
+            )
+            return
+
+        db_type = dc.get("db_type")
+        credentials = dc.get("credentials", {})
+        if not db_type or not credentials:
+            QMessageBox.warning(
+                self,
+                "No Connection Info",
+                "Connection information is missing. Please reconnect via File > Connect Data Source.",
+            )
+            return
+
+        connector = DatabaseConnector()
+        success, message = connector.connect(db_type, credentials)
+        if not success:
+            QMessageBox.critical(
+                self,
+                "Connection Failed",
+                f"Could not reconnect to the database: {message}\n\n"
+                "Please reconnect via File > Connect Data Source.",
+            )
+            return
+
+        try:
+            all_tables = connector.get_tables()
+            if not all_tables:
+                QMessageBox.warning(
+                    self, "No Tables", "The database contains no tables."
+                )
+                return
+
+            current_tables = dc.get("tables") or []
+            semantic_layer = None
+            if self.backend.active_project:
+                semantic_layer = self.backend.active_project.semantic_layer
+
+            table_dialog = TableSelectionDialog(
+                all_tables, self, preselected=current_tables
+            )
+            if table_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            selected_tables = table_dialog.get_selected_tables()
+            if not selected_tables:
+                return
+
+            source_config = {
+                "db_type": db_type,
+                "credentials": credentials,
+                "table": selected_tables,
+            }
+            data_context, status = load_data("database", source_config)
+            if data_context is None:
+                QMessageBox.warning(
+                    self, "Load Failed", f"Failed to load selected tables: {status}"
+                )
+                return
+
+            self.backend.data_context = data_context
+            self.data_context = data_context
+
+            if self.backend.active_project:
+                creds_to_store = credentials.copy()
+                creds_to_store.pop("password", None)
+                self.backend.active_project.data_source = {
+                    "db_type": db_type,
+                    "credentials": creds_to_store,
+                    "table": selected_tables,
+                }
+
+            logger.info(f"Table selection changed to: {selected_tables}")
+            self.create_new_chat()
+
+        finally:
+            connector.close()
 
     def connect_data_source(self):
         """Open dialog to connect to a data source"""
@@ -5099,33 +5203,113 @@ class DataWorkspaceGUI(QMainWindow):
 
     def set_interaction_mode(self, mode: str):
         """Set the interaction mode (cxo or analyst) and persist it."""
-        # If switching to analyst mode while in CxO mode with no tables loaded,
-        # offer to reload the project so the user can select tables.
+        # If switching to analyst mode while in CxO mode, attempt to go straight
+        # to table selection using the in-memory credentials (no re-login needed).
         if (
             mode == "analyst"
             and self.data_context
             and self.data_context.get("cxo_mode")
         ):
-            reply = QMessageBox.question(
-                self,
-                "Analyst Mode Requires Tables",
-                "Analyst mode requires loaded tables, but no tables are currently selected.\n\n"
-                "Would you like to switch to Analyst mode and reconnect to select tables?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                # Revert the menu toggle back to CxO
-                self.cxo_mode_action.setChecked(True)
-                return
+            dc = self.backend.data_context or self.data_context
+            db_type = dc.get("db_type") if dc else None
+            credentials = dc.get("credentials", {}) if dc else {}
+            all_tables = dc.get("all_tables", []) if dc else []
 
-            # Persist analyst mode
-            ConfigManager.set_interaction_mode("analyst")
-            self.analyst_mode_action.setChecked(True)
-            logger.info(
-                "Switched to Analyst mode, re-opening data source connection for table selection"
-            )
-            self.connect_data_source()
-            return
+            if db_type and credentials and all_tables:
+                # Silently reconnect using in-memory credentials and show table picker
+                connector = DatabaseConnector()
+                success, message = connector.connect(db_type, credentials)
+                if success:
+                    try:
+                        semantic_layer = None
+                        if self.backend.active_project:
+                            semantic_layer = self.backend.active_project.semantic_layer
+
+                        table_dialog = TableSelectionDialog(all_tables, self)
+                        if table_dialog.exec() != QDialog.DialogCode.Accepted:
+                            self.cxo_mode_action.setChecked(True)
+                            return
+
+                        selected_tables = table_dialog.get_selected_tables()
+                        if not selected_tables:
+                            self.cxo_mode_action.setChecked(True)
+                            return
+
+                        source_config = {
+                            "db_type": db_type,
+                            "credentials": credentials,
+                            "table": selected_tables,
+                        }
+                        data_context, status = load_data("database", source_config)
+                        if data_context is None:
+                            QMessageBox.warning(
+                                self,
+                                "Load Failed",
+                                f"Failed to load selected tables: {status}",
+                            )
+                            self.cxo_mode_action.setChecked(True)
+                            return
+
+                        ConfigManager.set_interaction_mode("analyst")
+                        self.analyst_mode_action.setChecked(True)
+                        self.backend.data_context = data_context
+                        self.data_context = data_context
+
+                        if self.backend.active_project:
+                            creds_to_store = credentials.copy()
+                            creds_to_store.pop("password", None)
+                            self.backend.active_project.data_source = {
+                                "db_type": db_type,
+                                "credentials": creds_to_store,
+                                "table": selected_tables,
+                            }
+
+                        logger.info(
+                            f"Switched to Analyst mode with tables: {selected_tables}"
+                        )
+                        self.create_new_chat()
+                        return
+                    finally:
+                        connector.close()
+                else:
+                    connector.close()
+                    # Credentials may have expired; fall back to full reconnect dialog
+                    logger.warning(
+                        f"Silent reconnect failed ({message}), prompting for reconnect"
+                    )
+                    reply = QMessageBox.question(
+                        self,
+                        "Reconnection Required",
+                        f"Could not reconnect automatically: {message}\n\n"
+                        "Would you like to reconnect and select tables manually?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    )
+                    if reply != QMessageBox.StandardButton.Yes:
+                        self.cxo_mode_action.setChecked(True)
+                        return
+                    ConfigManager.set_interaction_mode("analyst")
+                    self.analyst_mode_action.setChecked(True)
+                    self.connect_data_source()
+                    return
+            else:
+                # No DB context available - fall back to full reconnect
+                reply = QMessageBox.question(
+                    self,
+                    "Analyst Mode Requires Tables",
+                    "Analyst mode requires loaded tables, but no tables are currently selected.\n\n"
+                    "Would you like to switch to Analyst mode and reconnect to select tables?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.cxo_mode_action.setChecked(True)
+                    return
+                ConfigManager.set_interaction_mode("analyst")
+                self.analyst_mode_action.setChecked(True)
+                logger.info(
+                    "Switched to Analyst mode, re-opening data source connection for table selection"
+                )
+                self.connect_data_source()
+                return
 
         success, message = ConfigManager.set_interaction_mode(mode)
         if success:
