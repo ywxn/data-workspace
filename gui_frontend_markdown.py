@@ -2587,9 +2587,9 @@ class TableSelectionDialog(QDialog):
         preselected_set = set(preselected or [])
         for table_name in table_names:
             item = QListWidgetItem(table_name)
+            self.table_list.addItem(item)
             if table_name in preselected_set:
                 item.setSelected(True)
-            self.table_list.addItem(item)
         layout.addWidget(self.table_list)
 
         layout.addSpacing(10)
