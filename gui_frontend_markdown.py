@@ -5823,6 +5823,7 @@ def _load_database_data(
             if semantic_layer:
                 window.backend.active_project.semantic_layer = semantic_layer
 
+        window._autosave_project()
         table_count = len(tables)
         welcome_msg = (
             f"## Connected to {db_type} database\n\n"
@@ -5875,6 +5876,7 @@ def _load_database_data(
             if semantic_layer:
                 window.backend.active_project.semantic_layer = semantic_layer
 
+        window._autosave_project()
         welcome_msg = window.backend.format_database_welcome_message(
             db_type, selected_tables, data_context, status
         )
@@ -5935,6 +5937,7 @@ def _load_multi_database_data(
         f"(e.g. `alias__table`). Ask your question below."
     )
     window.conversation_display.setHtml(markdown_to_html(welcome_msg))
+    window._autosave_project()
     return True
 
 
