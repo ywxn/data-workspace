@@ -2244,6 +2244,7 @@ class DatabaseConnectionDialog(QDialog):
 
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
+        self.form_layout = form_layout
 
         # Database type selection
         self.db_type_combo = QComboBox()
@@ -2298,7 +2299,16 @@ class DatabaseConnectionDialog(QDialog):
 
         self.database_input = QLineEdit()
         self.database_input.setPlaceholderText("Database name or file path")
-        form_layout.addRow("Database:", self.database_input)
+        self.sqlite_browse_button = QPushButton("Browse...")
+        self.sqlite_browse_button.setFixedWidth(80)
+        self.sqlite_browse_button.clicked.connect(self._browse_sqlite_file)
+        self.sqlite_browse_button.setVisible(False)
+        db_row_widget = QWidget()
+        db_row_layout = QHBoxLayout(db_row_widget)
+        db_row_layout.setContentsMargins(0, 0, 0, 0)
+        db_row_layout.addWidget(self.database_input)
+        db_row_layout.addWidget(self.sqlite_browse_button)
+        form_layout.addRow("Database:", db_row_widget)
 
         self.user_input = QLineEdit()
         self.user_input.setPlaceholderText("Username")
@@ -2347,17 +2357,30 @@ class DatabaseConnectionDialog(QDialog):
         logger.debug(f"Database type changed to: {db_type}")
         is_sqlite = db_type == "sqlite"
 
-        # Hide host/port/user/password for SQLite
-        self.host_input.setVisible(not is_sqlite)
-        self.port_input.setVisible(not is_sqlite)
-        self.user_input.setVisible(not is_sqlite)
-        self.password_input.setVisible(not is_sqlite)
+        # Hide host/port/user/password rows (label + field) for SQLite
+        self.form_layout.setRowVisible(self.host_input, not is_sqlite)
+        self.form_layout.setRowVisible(self.port_input, not is_sqlite)
+        self.form_layout.setRowVisible(self.user_input, not is_sqlite)
+        self.form_layout.setRowVisible(self.password_input, not is_sqlite)
 
-        # Update placeholder for database field
+        # Update placeholder and browse button for database field
         if is_sqlite:
-            self.database_input.setPlaceholderText("Path to .db or .sqlite file")
+            self.database_input.setPlaceholderText("Path to .db, .sqlite, or .sql file")
+            self.sqlite_browse_button.setVisible(True)
         else:
             self.database_input.setPlaceholderText("Database name")
+            self.sqlite_browse_button.setVisible(False)
+
+    def _browse_sqlite_file(self):
+        """Open a file picker for SQLite .db/.sqlite/.sql files."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select SQLite Database",
+            self.database_input.text() or "",
+            "SQLite / SQL Files (*.db *.sqlite *.sql);;All Files (*)",
+        )
+        if path:
+            self.database_input.setText(path)
 
     def on_selection_method_changed(self, method_text):
         """Show/hide semantic layer controls based on selection method."""
