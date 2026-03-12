@@ -687,6 +687,7 @@ def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
 
     db_type = config.get("db_type")
     credentials = config.get("credentials", {})
+    semantic_layer = config.get("semantic_layer")
 
     logger.info(f"Connecting to {db_type} database...")
     connector = DatabaseConnector()
@@ -713,6 +714,7 @@ def _load_from_database(config: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
             "tables": tables,
             "table_info": table_info,
             "skipped_columns": skipped_cols_by_table,
+            "semantic_layer": semantic_layer,
         }
 
         return context, "Schema loaded successfully"
@@ -781,6 +783,7 @@ def load_multi_database(
                 "tables": tables,
                 "table_info": table_info,
                 "skipped_columns": skipped_cols_by_table,
+                "semantic_layer": config.get("semantic_layer"),
             }
 
             for table in tables:

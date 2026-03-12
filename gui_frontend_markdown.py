@@ -2322,6 +2322,13 @@ class DatabaseConnectionDialog(QDialog):
         # Semantic layer import
         self.semantic_layer_label = QLabel("No semantic layer loaded")
         self.semantic_layer_button = QPushButton("Import Semantic Layer (JSON)")
+        # Tooltip
+        self.semantic_layer_button.setToolTip(
+            "Optionally import a semantic layer mapping from a JSON file.\n"
+            "This can help the system understand domain-specific terminology\n"
+            "and relationships in your database for better automatic table\n"
+            "selection and query generation."
+        )
         self.semantic_layer_button.clicked.connect(self.import_semantic_layer)
         self.semantic_layer_container = QWidget()
         semantic_layout = QVBoxLayout(self.semantic_layer_container)
@@ -2383,11 +2390,9 @@ class DatabaseConnectionDialog(QDialog):
             self.database_input.setText(path)
 
     def on_selection_method_changed(self, method_text):
-        """Show/hide semantic layer controls based on selection method."""
+        """Keep semantic layer controls available for all database workflows."""
         logger.debug(f"Table selection method changed to: {method_text}")
-        method = self._normalize_selection_method(method_text)
-        is_nlp = method == "nlp" or self.force_nlp
-        self.semantic_layer_container.setVisible(is_nlp)
+        self.semantic_layer_container.setVisible(True)
 
     @staticmethod
     def _normalize_selection_method(method_text: Optional[str]) -> str:
@@ -2491,6 +2496,11 @@ class DatabaseConnectionDialog(QDialog):
         m_idx = self.selection_method_combo.findText(method_text)
         if m_idx >= 0:
             self.selection_method_combo.setCurrentIndex(m_idx)
+
+        semantic_layer = config.get("semantic_layer")
+        if semantic_layer:
+            self.semantic_layer = semantic_layer
+            self.semantic_layer_label.setText("Semantic layer restored from config")
 
     def import_semantic_layer(self) -> None:
         """Load semantic layer mapping from JSON file."""
