@@ -4059,6 +4059,17 @@ class DataWorkspaceGUI(QMainWindow):
         self.backend.clear_session()
         logger.info("Chat fields cleared successfully")
 
+    def _autosave_project(self):
+        """Silently save the active project without showing dialogs."""
+        if self.project_id is None:
+            return
+        if self.project_id in self.backend.projects:
+            success, msg = self.backend.save_project_to_disk(self.project_id)
+            if success:
+                logger.info(f"Project auto-saved: {msg}")
+            else:
+                logger.warning(f"Project auto-save failed: {msg}")
+
     def save_project(self):
         """Save current project with all chats"""
         logger.info(f"Attempting to save project: {self.project_id}")
@@ -4350,6 +4361,7 @@ class DataWorkspaceGUI(QMainWindow):
                     "table": selected_tables,
                 }
 
+            self._autosave_project()
             logger.info(f"Table selection changed to: {selected_tables}")
             self.create_new_chat()
 
@@ -4461,6 +4473,7 @@ class DataWorkspaceGUI(QMainWindow):
                                 self.conversation_display.setHtml(
                                     markdown_to_html(welcome_msg)
                                 )
+                                self._autosave_project()
                                 QMessageBox.information(
                                     self,
                                     "Data Loaded",
@@ -4529,6 +4542,7 @@ class DataWorkspaceGUI(QMainWindow):
                                                 self.backend.active_project.semantic_layer = (
                                                     semantic_layer
                                                 )
+                                        self._autosave_project()
                                         QMessageBox.information(
                                             self,
                                             "Data Loaded",
@@ -4586,6 +4600,7 @@ class DataWorkspaceGUI(QMainWindow):
                             self.conversation_display.setHtml(
                                 markdown_to_html(welcome_msg)
                             )
+                            self._autosave_project()
                             QMessageBox.information(
                                 self,
                                 "Data Loaded",
