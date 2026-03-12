@@ -2640,6 +2640,12 @@ class ProjectLoadDialog(QDialog):
         self.file_list = QListWidget()
         self.file_list.setSpacing(4)
 
+        def _get_created_at(file_name: str) -> str:
+            data = self._load_project_data(file_name)
+            return (data or {}).get("created_at") or ""
+
+        files = sorted(files, key=_get_created_at, reverse=True)
+
         for f in files:
             project_data = self._load_project_data(f)
             if project_data:
