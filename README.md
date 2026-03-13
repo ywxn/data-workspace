@@ -135,6 +135,7 @@ Semantic layer details: [semantic_layer_documentation.md](semantic_layer_documen
 | **Settings** | Interaction Mode > CxO / Analyst | N/A | Switch interaction mode |
 | **Settings** | Prompt Expansion (NLP) | N/A | Toggle prompt expansion before NLP selection |
 | **Settings** | Local LLM Settings | N/A | Configure local endpoint and self-host controls |
+| **Settings** | Memory Retention Settings | N/A | Configure query memory retention policies |
 | **Help** | Documentation | N/A | Open online documentation |
 | **Help** | About | N/A | Show app info and version |
 
