@@ -85,3 +85,6 @@ pip-wheel-metadata/
 plan-*.prompt.md
 
 reports/
+
+# portable python runtime
+python/
