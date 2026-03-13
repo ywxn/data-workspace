@@ -5,13 +5,13 @@
 #include <curl/curl.h>
 
 #ifdef _WIN32
-#  include <windows.h>          /* Sleep() */
+#  include <windows.h>
 #  define SLEEP_SEC(s)  Sleep((DWORD)((s) * 1000))
-#  define PYTHON_RUNTIME  "python/python.exe"
-#  define VENV_PYTHON     "venv\\Scripts\\python.exe"
+#  define PYTHON_RUNTIME ".\\python\\bin\\python.exe"
+#  define VENV_PYTHON    "venv\\Scripts\\python.exe"
 #  define EXTRACT_CMD \
-       "powershell -Command \"Expand-Archive -Force runtime.zip -DestinationPath python\""
-#  define RUNTIME_ARCHIVE "runtime.zip"
+       "powershell -Command \"tar -xf runtime.tar.gz -C .\""
+#  define RUNTIME_ARCHIVE "runtime.tar.gz"
 #else
 #  include <unistd.h>           /* sleep() */
 #  define SLEEP_SEC(s)  sleep(s)
