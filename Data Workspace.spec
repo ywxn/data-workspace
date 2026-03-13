@@ -10,7 +10,7 @@ DIST_DIR = os.path.join(BASE_DIR, "dist")
 BUILD_DIR = os.path.join(BASE_DIR, "build")
 
 # --- Absolute paths to resources ---
-ICON_FILE = os.path.join(BASE_DIR, "icon.svg")
+ICON_FILE = os.path.join(BASE_DIR, "icon.ico")
 CSS_DIR = os.path.join(BASE_DIR, "css")
 
 # --- Collect additional data files ---
@@ -79,6 +79,7 @@ exe = EXE(
     exclude_binaries=True,
     name="Data Workspace",
     console=True,
+	icon="icon.ico",
 )
 
 # --- COLLECT ---
