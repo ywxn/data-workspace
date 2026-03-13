@@ -49,7 +49,6 @@ testing.py
 *.cmd
 *.exe
 *.dll
-*.spec
 
 # graphs
 graph/

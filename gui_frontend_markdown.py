@@ -2322,7 +2322,6 @@ class DatabaseConnectionDialog(QDialog):
         # Semantic layer import
         self.semantic_layer_label = QLabel("No semantic layer loaded")
         self.semantic_layer_button = QPushButton("Import Semantic Layer (JSON)")
-        # Tooltip
         self.semantic_layer_button.setToolTip(
             "Optionally import a semantic layer mapping from a JSON file.\n"
             "This can help the system understand domain-specific terminology\n"
