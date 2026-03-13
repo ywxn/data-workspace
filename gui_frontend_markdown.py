@@ -424,6 +424,120 @@ class ModelSettingsDialog(QDialog):
         self.accept()
 
 
+class MemoryRetentionDialog(QDialog):
+    """Dialog to configure memory retention policy for query history."""
+
+    _POLICY_LABEL_TO_VALUE = {
+        "Keep all queries": "keep_all",
+        "Keep latest N queries": "rolling_n",
+        "Keep queries from last N days": "ttl_days",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Memory Retention Policy")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.setWindowIcon(QIcon("icon.ico"))
+
+        retention = ConfigManager.get_memory_retention_policy()
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("Configure Query Memory Retention")
+        title.setFont(QFont("Roboto", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        instructions = QLabel(
+            "Choose how long query memory is kept. This affects new retention checks "
+            "for project memory entries."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        layout.addSpacing(12)
+
+        form_layout = QFormLayout()
+
+        self.policy_combo = QComboBox()
+        self.policy_combo.addItems(list(self._POLICY_LABEL_TO_VALUE.keys()))
+        policy_value = retention.get("policy", "keep_all")
+        policy_label = next(
+            (
+                label
+                for label, value in self._POLICY_LABEL_TO_VALUE.items()
+                if value == policy_value
+            ),
+            "Keep all queries",
+        )
+        self.policy_combo.setCurrentText(policy_label)
+        self.policy_combo.currentTextChanged.connect(self._update_input_state)
+        form_layout.addRow("Policy:", self.policy_combo)
+
+        self.rolling_n_spin = QSpinBox()
+        self.rolling_n_spin.setRange(1, 1000000)
+        self.rolling_n_spin.setValue(int(retention.get("rolling_n", 100)))
+        self.rolling_n_spin.setToolTip("Maximum number of query records to keep.")
+        form_layout.addRow("Rolling N:", self.rolling_n_spin)
+
+        self.ttl_days_spin = QSpinBox()
+        self.ttl_days_spin.setRange(1, 36500)
+        self.ttl_days_spin.setValue(int(retention.get("ttl_days", 90)))
+        self.ttl_days_spin.setToolTip(
+            "Delete query records older than this many days."
+        )
+        form_layout.addRow("TTL Days:", self.ttl_days_spin)
+
+        layout.addLayout(form_layout)
+        self._update_input_state(self.policy_combo.currentText())
+
+        layout.addSpacing(10)
+
+        help_text = QLabel(
+            "Tip: Use 'Keep latest N queries' for bounded memory size, or "
+            "'Keep queries from last N days' for time-based cleanup."
+        )
+        help_text.setStyleSheet("color: gray; font-size: 9pt;")
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self._save_settings)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _update_input_state(self, label: str) -> None:
+        """Enable only the input relevant to the selected policy."""
+        policy = self._POLICY_LABEL_TO_VALUE.get(label, "keep_all")
+        self.rolling_n_spin.setEnabled(policy == "rolling_n")
+        self.ttl_days_spin.setEnabled(policy == "ttl_days")
+
+    def _save_settings(self) -> None:
+        """Persist retention policy to config."""
+        policy_label = self.policy_combo.currentText()
+        policy = self._POLICY_LABEL_TO_VALUE.get(policy_label, "keep_all")
+
+        success, message = ConfigManager.set_memory_retention_policy(
+            policy=policy,
+            rolling_n=self.rolling_n_spin.value(),
+            ttl_days=self.ttl_days_spin.value(),
+        )
+
+        if not success:
+            QMessageBox.warning(self, "Settings Error", f"Failed to save setting: {message}")
+            return
+
+        logger.info(
+            "Memory retention policy updated: "
+            f"policy={policy}, rolling_n={self.rolling_n_spin.value()}, ttl_days={self.ttl_days_spin.value()}"
+        )
+        QMessageBox.information(self, "Success", "Memory retention policy saved.")
+        self.accept()
+
+
 class AIHostConfigDialog(QDialog):
     """Dialog to configure AI host settings.
 
@@ -3285,6 +3399,12 @@ class DataWorkspaceGUI(QMainWindow):
         model_settings_action.triggered.connect(self.change_model_settings)
         settings_menu.addAction(model_settings_action)
 
+        memory_retention_action = QAction("Memory Retention Policy", self)
+        memory_retention_action.triggered.connect(
+            self.change_memory_retention_settings
+        )
+        settings_menu.addAction(memory_retention_action)
+
         settings_menu.addSeparator()
 
         # Interaction Mode submenu
@@ -5107,6 +5227,25 @@ class DataWorkspaceGUI(QMainWindow):
             logger.error(f"Error changing model settings: {str(e)}", exc_info=True)
             QMessageBox.critical(
                 self, "Error", f"Failed to update model settings: {str(e)}"
+            )
+
+    def change_memory_retention_settings(self):
+        """Open memory retention policy settings dialog."""
+        logger.info("User opened memory retention settings dialog")
+        try:
+            retention_dialog = MemoryRetentionDialog(self)
+            if retention_dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("Memory retention settings updated successfully")
+            else:
+                logger.info("User cancelled memory retention settings change")
+        except Exception as e:
+            logger.error(
+                f"Error changing memory retention settings: {str(e)}", exc_info=True
+            )
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to update memory retention settings: {str(e)}",
             )
 
     def clear_conversation(self):
