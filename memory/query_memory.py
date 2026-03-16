@@ -7,7 +7,6 @@ Includes semantic search using sentence-transformers for intelligent query match
 """
 
 import json
-import os
 import hashlib
 import math
 from datetime import datetime, timedelta
@@ -105,8 +104,10 @@ class UnifiedMemoryService:
         self.ttl_days = ttl_days
         self.global_index_enabled = global_index_enabled
 
-        # Storage paths
-        self.data_dir = Path("data")
+        # Storage paths are anchored to repository root (one level above this module)
+        # so cache behavior is stable regardless of process working directory.
+        self.base_dir = Path(__file__).resolve().parent.parent
+        self.data_dir = self.base_dir / "data"
         self.data_dir.mkdir(exist_ok=True)
 
         self.global_index_path = self.data_dir / "query_memory_index.jsonl"
@@ -123,7 +124,7 @@ class UnifiedMemoryService:
 
     def _get_project_memory_path(self, project_id: str) -> Path:
         """Get the memory file path for a specific project."""
-        projects_dir = Path("projects")
+        projects_dir = self.base_dir / "projects"
         projects_dir.mkdir(exist_ok=True)
         return projects_dir / f"{project_id}_memory.jsonl"
 

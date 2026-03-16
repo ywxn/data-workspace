@@ -5309,17 +5309,23 @@ class DataWorkspaceGUI(QMainWindow):
             logger.info("User cancelled workspace reset")
 
     def clear_query_cache(self):
-        """Delete the persisted query-memory index file."""
+        """Delete persisted query memory for global index and active project."""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
         cache_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "data",
             "query_memory_index.jsonl",
         )
+        project_cache_file = (
+            os.path.join(base_dir, "projects", f"{self.project_id}_memory.jsonl")
+            if self.project_id
+            else None
+        )
 
         reply = QMessageBox.warning(
             self,
             "Clear Query Cache",
-            "This will permanently delete the query cache index.\n\n"
+            "This will permanently delete query cache records.\n\n"
             "This action cannot be undone and will likely slow down analysis "
             "until cache entries are rebuilt.\n\n"
             "Do you want to continue?",
@@ -5332,25 +5338,38 @@ class DataWorkspaceGUI(QMainWindow):
             return
 
         try:
+            deleted_targets = []
+
             if os.path.isfile(cache_file):
                 os.remove(cache_file)
                 logger.info(f"Query cache index deleted: {cache_file}")
+                deleted_targets.append("global index")
+            else:
+                logger.info(f"Query cache index not found: {cache_file}")
+
+            if project_cache_file and os.path.isfile(project_cache_file):
+                os.remove(project_cache_file)
+                logger.info(f"Project query cache deleted: {project_cache_file}")
+                deleted_targets.append(f"project cache ({self.project_id})")
+            elif project_cache_file:
+                logger.info(f"Project query cache not found: {project_cache_file}")
+
+            if deleted_targets:
                 QMessageBox.information(
                     self,
                     "Query Cache Cleared",
-                    "Query cache index cleared successfully.",
+                    "Deleted: " + ", ".join(deleted_targets) + ".",
                 )
             else:
-                logger.info(f"Query cache index not found: {cache_file}")
                 QMessageBox.information(
                     self,
                     "Nothing To Clear",
-                    "Query cache index file was not found.",
+                    "No query cache files were found for the global index or active project.",
                 )
         except Exception as e:
-            logger.error(f"Failed to clear query cache index: {e}", exc_info=True)
+            logger.error(f"Failed to clear query cache: {e}", exc_info=True)
             QMessageBox.critical(
-                self, "Error", f"Failed to clear query cache index: {e}"
+                self, "Error", f"Failed to clear query cache: {e}"
             )
 
     def toggle_prompt_expansion(self, checked: bool):
