@@ -221,10 +221,9 @@ class APIKeyDialog(QDialog):
 
         layout.addSpacing(10)
 
-        # Set as default checkbox — only visible on first-time setup
+        # Set as default checkbox
         self.set_default_checkbox = QCheckBox("Set as default provider")
         self.set_default_checkbox.setChecked(True)
-        self.set_default_checkbox.setVisible(first_time_setup)
         layout.addWidget(self.set_default_checkbox)
 
         layout.addSpacing(5)
@@ -280,7 +279,7 @@ class APIKeyDialog(QDialog):
         logger.info(f"API key save attempt for {provider}: {success}")
 
         if success:
-            if self._first_time_setup and self.set_default_checkbox.isChecked():
+            if self.set_default_checkbox.isChecked():
                 ConfigManager.set_default_api(provider.lower())
             logger.info(f"{provider} API key configured successfully")
             QMessageBox.information(
