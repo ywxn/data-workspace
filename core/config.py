@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import sys
 import re
+from urllib import request, error
 
 from core.constants import (
     LOCAL_LLM_DEFAULT_URL,
@@ -214,6 +215,106 @@ class ConfigManager:
         return True, ""
 
     @staticmethod
+    def _verify_api_key_with_provider(
+        provider: str, api_key: str, timeout_seconds: float = 8.0
+    ) -> Tuple[bool, str]:
+        """
+        Verify an API key against the provider endpoint.
+
+        Returns:
+            Tuple of (is_valid, message)
+        """
+        p = provider.lower()
+
+        if p == "openai":
+            url = "https://api.openai.com/v1/models"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+            }
+        elif p == "claude":
+            url = "https://api.anthropic.com/v1/models"
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            }
+        else:
+            return False, f"Provider '{provider}' does not support live key verification."
+
+        req = request.Request(url, method="GET", headers=headers)
+
+        try:
+            with request.urlopen(req, timeout=timeout_seconds) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+
+            if status == 200:
+                return True, "API key verified successfully."
+
+            return False, (
+                f"Could not verify API key for {provider}: "
+                f"provider returned status {status}."
+            )
+        except error.HTTPError as exc:
+            status = exc.code
+
+            if status in (401, 403):
+                return False, (
+                    f"Authentication failed for {provider}. "
+                    "Please check that the API key is correct."
+                )
+
+            # 429 usually indicates a valid key that is rate limited or lacks quota.
+            if status == 429:
+                return True, (
+                    f"API key for {provider} appears valid, but the account is rate limited "
+                    "or out of quota (HTTP 429)."
+                )
+
+            return False, (
+                f"Could not verify API key for {provider}: "
+                f"provider returned HTTP {status}."
+            )
+        except error.URLError:
+            return False, (
+                "Unable to reach the provider to verify API key. "
+                "Check your internet connection and try again."
+            )
+        except TimeoutError:
+            return False, "API key verification timed out. Please try again."
+        except Exception as exc:
+            return False, f"Unexpected error while verifying API key: {exc}"
+
+    @staticmethod
+    def verify_api_key(
+        provider: str, api_key: Optional[str] = None, timeout_seconds: float = 8.0
+    ) -> Tuple[bool, str]:
+        """
+        Verify API key format and validity with the provider.
+
+        If api_key is not provided, uses the currently configured key.
+
+        Args:
+            provider: API provider name ('openai' or 'claude')
+            api_key: Optional key to verify
+            timeout_seconds: Network timeout for verification request
+
+        Returns:
+            Tuple of (is_valid, message)
+        """
+        p = provider.lower()
+        key_to_check = (api_key or ConfigManager.get_api_key(p) or "").strip()
+
+        if not key_to_check:
+            return False, f"No API key configured for {provider}."
+
+        ok, msg = ConfigManager._validate_api_key_format(p, key_to_check)
+        if not ok:
+            return False, msg
+
+        return ConfigManager._verify_api_key_with_provider(
+            p, key_to_check, timeout_seconds=timeout_seconds
+        )
+
+    @staticmethod
     def set_api_key(provider: str, api_key: str) -> Tuple[bool, str]:
         """
         Set API key for a specific provider.
@@ -229,6 +330,13 @@ class ConfigManager:
         ok, msg = ConfigManager._validate_api_key_format(provider, api_key)
         if not ok:
             ConfigManager._logger.warning(f"API key format validation failed: {msg}")
+            return False, msg
+
+        # Validate with provider before persisting so format-only false positives
+        # are rejected.
+        ok, msg = ConfigManager.verify_api_key(provider, api_key)
+        if not ok:
+            ConfigManager._logger.warning(f"API key provider validation failed: {msg}")
             return False, msg
 
         p = provider.lower()
@@ -254,7 +362,7 @@ class ConfigManager:
 
         ConfigManager._logger.info(f"API key set for provider: {provider}")
         success = True
-        msg = "API key saved."
+        msg = "API key saved and verified."
 
         # If the agents module is already loaded, update its in-memory API key
         if success:

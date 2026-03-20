@@ -216,6 +216,20 @@ class AIHostConfigDialog(QDialog):
                 )
                 return
 
+            # Verify key validity with the provider so stale/invalid keys are caught.
+            is_valid, validation_msg = ConfigManager.verify_api_key(
+                provider_key, existing_key
+            )
+            if not is_valid:
+                QMessageBox.warning(
+                    self,
+                    "Invalid API Key",
+                    f"The stored API key for {provider} could not be verified.\n\n"
+                    f"Reason: {validation_msg}\n\n"
+                    "Please update your API key in Settings -> API Key Settings.",
+                )
+                return
+
             if self.set_default_checkbox.isChecked():
                 ConfigManager.set_default_api(provider_key)
             logger.info(f"AI host switched to cloud provider: {provider}")
