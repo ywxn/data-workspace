@@ -238,7 +238,10 @@ class ConfigManager:
                 "anthropic-version": "2023-06-01",
             }
         else:
-            return False, f"Provider '{provider}' does not support live key verification."
+            return (
+                False,
+                f"Provider '{provider}' does not support live key verification.",
+            )
 
         req = request.Request(url, method="GET", headers=headers)
 
