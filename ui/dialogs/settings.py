@@ -1,13 +1,24 @@
 """Settings dialogs for API keys, model configuration, and memory retention."""
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QDialogButtonBox,
-    QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QSpinBox,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QCheckBox,
+    QSpinBox,
     QMessageBox,
 )
 from core.config import ConfigManager
 from core.logger import get_logger
+
 logger = get_logger(__name__)
 
 
@@ -55,7 +66,6 @@ class APIKeyDialog(QDialog):
             idx = self.provider_combo.findText(preselect)
             if idx >= 0:
                 self.provider_combo.setCurrentIndex(idx)
-
 
         self.provider_combo.currentTextChanged.connect(self._load_existing_key)
         form_layout.addRow("Provider:", self.provider_combo)
@@ -336,9 +346,7 @@ class MemoryRetentionDialog(QDialog):
         self.ttl_days_spin = QSpinBox()
         self.ttl_days_spin.setRange(1, 36500)
         self.ttl_days_spin.setValue(int(retention.get("ttl_days", 90)))
-        self.ttl_days_spin.setToolTip(
-            "Delete query records older than this many days."
-        )
+        self.ttl_days_spin.setToolTip("Delete query records older than this many days.")
         form_layout.addRow("TTL Days:", self.ttl_days_spin)
 
         layout.addLayout(form_layout)
@@ -379,7 +387,9 @@ class MemoryRetentionDialog(QDialog):
         )
 
         if not success:
-            QMessageBox.warning(self, "Settings Error", f"Failed to save setting: {message}")
+            QMessageBox.warning(
+                self, "Settings Error", f"Failed to save setting: {message}"
+            )
             return
 
         logger.info(

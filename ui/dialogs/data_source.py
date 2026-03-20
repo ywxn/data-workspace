@@ -1,4 +1,5 @@
 """Data source connection and table selection dialogs."""
+
 import os
 import json
 import random
@@ -6,9 +7,22 @@ from typing import Optional, Dict, Any, List
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QDialogButtonBox,
-    QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QSpinBox,
-    QMessageBox, QListWidget, QListWidgetItem, QFileDialog, QGroupBox,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QCheckBox,
+    QSpinBox,
+    QMessageBox,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QGroupBox,
     QWidget,
 )
 from core.config import ConfigManager
@@ -17,6 +31,7 @@ from core.logger import get_logger
 from db.connector import DatabaseConnector
 from db.nlp import NLPTableSelector
 from agents import AIAgent
+
 logger = get_logger(__name__)
 
 

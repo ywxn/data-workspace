@@ -1,8 +1,9 @@
 """Interaction mode selection dialog."""
+
 from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel)
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 
 
 class InteractionModeDialog(QDialog):

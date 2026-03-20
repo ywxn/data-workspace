@@ -66,7 +66,7 @@ def resolve_qualified_table(
     for pfx in prefixes:
         separator = f"{pfx}__"
         if table_name.startswith(separator):
-            return pfx, table_name[len(separator):]
+            return pfx, table_name[len(separator) :]
 
     return None, table_name
 
@@ -74,6 +74,7 @@ def resolve_qualified_table(
 # ------------------------------------------------------------------
 # Semantic map building
 # ------------------------------------------------------------------
+
 
 def build_semantic_maps(
     semantic_layer: Any,
@@ -176,9 +177,7 @@ def _build_semantic_maps_rich(
         dim_desc = dim.get("description", "")
         if source_table and dim_desc:
             existing = table_map.get(source_table, "")
-            table_map[source_table] = (
-                f"{existing} {dim_desc}" if existing else dim_desc
-            )
+            table_map[source_table] = f"{existing} {dim_desc}" if existing else dim_desc
 
     # Term glossary -> enrich table descriptions
     for term, mapping in semantic_layer.get("term_glossary", {}).items():
@@ -193,6 +192,7 @@ def _build_semantic_maps_rich(
 # ------------------------------------------------------------------
 # Semantic layer enrichment
 # ------------------------------------------------------------------
+
 
 def enrich_from_semantic_layer(
     semantic_layer: Any,
@@ -268,6 +268,7 @@ def enrich_from_semantic_layer(
 # ------------------------------------------------------------------
 # Common-prompt shortcut (embedding-based)
 # ------------------------------------------------------------------
+
 
 class CommonPromptMatcher:
     """Pre-computed embedding matcher for common/frequent prompts."""
@@ -349,9 +350,7 @@ class CommonPromptMatcher:
         if best_score < similarity_threshold:
             return None
 
-        matched_tables = [
-            t for t in self.tables[best_idx] if t in table_metadata
-        ]
+        matched_tables = [t for t in self.tables[best_idx] if t in table_metadata]
         if not matched_tables:
             return None
 
@@ -377,6 +376,7 @@ class CommonPromptMatcher:
 # ------------------------------------------------------------------
 # Query-pattern shortcut (deterministic)
 # ------------------------------------------------------------------
+
 
 def match_query_patterns(
     prompt: str,

@@ -1,4 +1,5 @@
 """Main application window."""
+
 import sys
 import asyncio
 import webbrowser
@@ -10,14 +11,28 @@ from typing import Optional, Dict, Any, List
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QAction, QActionGroup, QIcon, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QPushButton, QLabel, QListWidget, QListWidgetItem,
-    QFileDialog, QMessageBox, QMenu, QComboBox, QDialog,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTextEdit,
+    QPushButton,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QMessageBox,
+    QMenu,
+    QComboBox,
+    QDialog,
 )
 from core.config import ConfigManager
 from core.constants import (
-    NLP_PLACEHOLDER_TEXT, PLACEHOLDER_PROJECT_NAMES,
-    PLACEHOLDER_PROJECT_DESCRIPTIONS, DARK_THEME_STYLESHEET,
+    NLP_PLACEHOLDER_TEXT,
+    PLACEHOLDER_PROJECT_NAMES,
+    PLACEHOLDER_PROJECT_DESCRIPTIONS,
+    DARK_THEME_STYLESHEET,
     LIGHT_THEME_STYLESHEET,
 )
 from core.markdown import markdown_to_html
@@ -33,11 +48,15 @@ from ui.dialogs.interaction import InteractionModeDialog
 from ui.dialogs.settings import APIKeyDialog, ModelSettingsDialog, MemoryRetentionDialog
 from ui.dialogs.llm_host import AIHostConfigDialog, LocalLLMSettingsDialog
 from ui.dialogs.data_source import (
-    DataSourceDialog, DatabaseConnectionDialog,
-    MultiDatabaseConnectionDialog, TableSelectionDialog,
-    NLPPromptDialog, select_tables_with_method,
+    DataSourceDialog,
+    DatabaseConnectionDialog,
+    MultiDatabaseConnectionDialog,
+    TableSelectionDialog,
+    NLPPromptDialog,
+    select_tables_with_method,
 )
 from ui.dialogs.project import CreateProjectDialog, ProjectLoadDialog
+
 logger = get_logger(__name__)
 
 
@@ -179,9 +198,7 @@ class DataWorkspaceGUI(QMainWindow):
         settings_menu.addAction(model_settings_action)
 
         memory_retention_action = QAction("Memory Retention Policy", self)
-        memory_retention_action.triggered.connect(
-            self.change_memory_retention_settings
-        )
+        memory_retention_action.triggered.connect(self.change_memory_retention_settings)
         settings_menu.addAction(memory_retention_action)
 
         settings_menu.addSeparator()
@@ -681,7 +698,9 @@ class DataWorkspaceGUI(QMainWindow):
             elif saved_ratio is not None:
                 QTimer.singleShot(
                     0,
-                    lambda: scroll_bar.setValue(int(scroll_bar.maximum() * saved_ratio)),
+                    lambda: scroll_bar.setValue(
+                        int(scroll_bar.maximum() * saved_ratio)
+                    ),
                 )
 
     def _build_processing_block(self) -> str:
@@ -2147,9 +2166,7 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         except Exception as e:
             logger.error(f"Failed to clear query cache: {e}", exc_info=True)
-            QMessageBox.critical(
-                self, "Error", f"Failed to clear query cache: {e}"
-            )
+            QMessageBox.critical(self, "Error", f"Failed to clear query cache: {e}")
 
     def toggle_prompt_expansion(self, checked: bool):
         """Toggle the prompt-expansion middleman agent on or off."""

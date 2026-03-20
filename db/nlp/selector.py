@@ -104,7 +104,9 @@ class NLPTableSelector:
         """Build or rebuild schema structure from database."""
         # Enrich synonyms/comments from semantic layer before building
         sl.enrich_from_semantic_layer(
-            self.semantic_layer, self.table_synonyms, self.column_comments,
+            self.semantic_layer,
+            self.table_synonyms,
+            self.column_comments,
         )
 
         # Build semantic description maps
@@ -166,8 +168,11 @@ class NLPTableSelector:
 
     def _is_peripheral(self, table: str) -> bool:
         return tf.is_structurally_peripheral(
-            table, self.semantic_layer, self._is_rich(),
-            self.schema.canonical_score, self.schema.fk_graph,
+            table,
+            self.semantic_layer,
+            self._is_rich(),
+            self.schema.canonical_score,
+            self.schema.fk_graph,
             self.schema.structural_links,
         )
 
@@ -176,18 +181,20 @@ class NLPTableSelector:
 
     def _centrality(self, table: str) -> float:
         return tf.structural_centrality(
-            table, self.schema.fk_graph, self.schema.structural_links,
+            table,
+            self.schema.fk_graph,
+            self.schema.structural_links,
             self.schema.canonical_score,
         )
 
     def _is_dimension(self, table: str) -> bool:
-        return tf.is_dimension_table(
-            table, self.semantic_layer, self._is_rich()
-        )
+        return tf.is_dimension_table(table, self.semantic_layer, self._is_rich())
 
     def _expand_entities(self, tables: List[str]) -> Set[str]:
         return tf.expand_entity_pairs(
-            tables, self.semantic_layer, self._is_rich(),
+            tables,
+            self.semantic_layer,
+            self._is_rich(),
             self.schema.table_metadata,
         )
 
@@ -292,9 +299,14 @@ class NLPTableSelector:
 
         # --- Step 0b: Query-pattern shortcut ---
         pattern_result = sl.match_query_patterns(
-            prompt, self.semantic_layer, self.normalizer,
-            self.schema.table_metadata, self.schema.fk_graph,
-            self._expand_entities, self._expand_hdr_dtl, self._is_dimension,
+            prompt,
+            self.semantic_layer,
+            self.normalizer,
+            self.schema.table_metadata,
+            self.schema.fk_graph,
+            self._expand_entities,
+            self._expand_hdr_dtl,
+            self._is_dimension,
         )
         if pattern_result is not None:
             logger.info(
@@ -306,18 +318,22 @@ class NLPTableSelector:
         # --- Step 1: Embed query ---
         normalized_prompt = self.normalizer.normalize_text(prompt)
         prompt_embedding = self.model.encode(
-            normalized_prompt, normalize_embeddings=True,
+            normalized_prompt,
+            normalize_embeddings=True,
         )
 
         # --- Step 2: Top columns ---
         top_columns = scoring.retrieve_top_columns(
-            prompt_embedding, self.schema.column_embeddings,
-            self.schema.column_index, top_k * 5,
+            prompt_embedding,
+            self.schema.column_embeddings,
+            self.schema.column_index,
+            top_k * 5,
         )
 
         # --- Step 3: Table scores ---
         table_scores = scoring.aggregate_to_tables(
-            top_columns, self.schema.canonical_score,
+            top_columns,
+            self.schema.canonical_score,
         )
 
         tokens = set(normalized_prompt.split())
@@ -325,7 +341,8 @@ class NLPTableSelector:
         # Lexical-only shortcut for very short prompts
         if len(tokens) <= 2:
             lexical_tables = scoring.lexical_table_matches(
-                tokens, self.schema.table_metadata,
+                tokens,
+                self.schema.table_metadata,
             )
             if len(lexical_tables) > 1:
                 return TableSelectionResult(
@@ -337,12 +354,18 @@ class NLPTableSelector:
 
         # --- Step 4: Boost scores ---
         table_scores = scoring.apply_lexical_boost(
-            table_scores, tokens, self.schema.table_metadata,
-            self.semantic_layer, self._is_rich(),
+            table_scores,
+            tokens,
+            self.schema.table_metadata,
+            self.semantic_layer,
+            self._is_rich(),
         )
         table_scores = scoring.apply_glossary_boost(
-            table_scores, tokens, self.semantic_layer,
-            self._is_rich(), self.schema.table_metadata,
+            table_scores,
+            tokens,
+            self.semantic_layer,
+            self._is_rich(),
+            self.schema.table_metadata,
         )
 
         confidences = scoring.normalize_scores(table_scores)
@@ -381,13 +404,17 @@ class NLPTableSelector:
         # Filter peripheral anchors, prefer canonical
         anchors = [t for t in anchors if not self._is_peripheral(t)]
         anchors = tf.prefer_canonical_variants(
-            anchors, confidences, self._canonical_weight, self._is_peripheral,
+            anchors,
+            confidences,
+            self._canonical_weight,
+            self._is_peripheral,
         )
 
         # Minimum confidence (except synonym-forced)
         min_anchor_conf = 0.15
         anchors = [
-            t for t in anchors
+            t
+            for t in anchors
             if confidences.get(t, 0.0) >= min_anchor_conf or t in synonym_forced
         ]
 
@@ -423,8 +450,10 @@ class NLPTableSelector:
         selected_tables = [t for t in selected_tables if not self._is_peripheral(t)]
         selected_tables = tf.filter_secondary_tables(selected_tables, confidences)
         selected_tables = tf.prefer_canonical_variants(
-            selected_tables, confidences,
-            self._canonical_weight, self._is_peripheral,
+            selected_tables,
+            confidences,
+            self._canonical_weight,
+            self._is_peripheral,
         )
 
         # Cap results
@@ -450,17 +479,19 @@ class NLPTableSelector:
             ]
             if non_peripheral:
                 selected_tables = sorted(
-                    non_peripheral, key=lambda t: confidences[t], reverse=True,
+                    non_peripheral,
+                    key=lambda t: confidences[t],
+                    reverse=True,
                 )[:3]
 
         # Ambiguity check
         top_candidates = []
         if selected_tables:
-            top_selected_score = max(
-                confidences.get(t, 0.0) for t in selected_tables
-            )
+            top_selected_score = max(confidences.get(t, 0.0) for t in selected_tables)
             sorted_by_conf = sorted(
-                confidences.items(), key=lambda x: x[1], reverse=True,
+                confidences.items(),
+                key=lambda x: x[1],
+                reverse=True,
             )
             for table_name, score in sorted_by_conf:
                 if table_name not in selected_tables:

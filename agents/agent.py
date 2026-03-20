@@ -42,7 +42,10 @@ from core.constants import (
 )
 from agents.llm_client import LLMClient
 from agents.pipeline import AgentPipelineMixin
-from agents.schema_utils import build_schema_metadata, build_semantic_layer_prompt_context
+from agents.schema_utils import (
+    build_schema_metadata,
+    build_semantic_layer_prompt_context,
+)
 from agents import formatters as _fmt
 
 logger = get_logger(__name__)

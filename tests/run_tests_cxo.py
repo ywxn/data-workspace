@@ -11,6 +11,7 @@ import json
 import logging
 import sys
 import time
+
 sys.path.append(str(Path(__file__).parent.parent))  # to import from parent dir
 
 from agents import AIAgent
@@ -22,6 +23,7 @@ logger = get_logger(__name__)
 
 
 # ---------- Metrics ----------
+
 
 def calc_metrics(predicted: List[str], expected: List[str]) -> Dict[str, Any]:
     p = {t.lower() for t in predicted}
@@ -47,6 +49,7 @@ def calc_metrics(predicted: List[str], expected: List[str]) -> Dict[str, Any]:
 
 
 # ---------- Runner ----------
+
 
 class NLPTestRunner:
     def __init__(self, db_config: Dict[str, Any], semantic_layer_path: str):
@@ -131,33 +134,41 @@ class NLPTestRunner:
                     r = self.selector.select_tables(effective_prompt, top_k=5)
                     metrics = calc_metrics(r.tables, expected)
 
-                    self.results.append({
-                        "category": category,
-                        "idx": i,
-                        "prompt": prompt,
-                        "expanded_prompt": effective_prompt if effective_prompt != prompt else None,
-                        "expected": expected,
-                        "predicted": r.tables,
-                        "conf": r.confidences,
-                        "status": r.status,
-                        "metrics": metrics,
-                        "error": None,
-                    })
+                    self.results.append(
+                        {
+                            "category": category,
+                            "idx": i,
+                            "prompt": prompt,
+                            "expanded_prompt": (
+                                effective_prompt if effective_prompt != prompt else None
+                            ),
+                            "expected": expected,
+                            "predicted": r.tables,
+                            "conf": r.confidences,
+                            "status": r.status,
+                            "metrics": metrics,
+                            "error": None,
+                        }
+                    )
 
                 except Exception as e:
                     logger.exception("Test failed")
-                    self.results.append({
-                        "category": category,
-                        "idx": i,
-                        "prompt": prompt,
-                        "expanded_prompt": effective_prompt if effective_prompt != prompt else None,
-                        "expected": expected,
-                        "predicted": [],
-                        "conf": {},
-                        "status": "error",
-                        "metrics": {},
-                        "error": str(e),
-                    })
+                    self.results.append(
+                        {
+                            "category": category,
+                            "idx": i,
+                            "prompt": prompt,
+                            "expanded_prompt": (
+                                effective_prompt if effective_prompt != prompt else None
+                            ),
+                            "expected": expected,
+                            "predicted": [],
+                            "conf": {},
+                            "status": "error",
+                            "metrics": {},
+                            "error": str(e),
+                        }
+                    )
 
     # ---------- Report ----------
 
@@ -205,10 +216,10 @@ class NLPTestRunner:
                 m = r["metrics"]
                 match = "✓" if m.get("match") else "✗"
 
-                pred = ", ".join(
-                    f"{t} ({r['conf'].get(t,0):.3f})"
-                    for t in r["predicted"]
-                ) or "(none)"
+                pred = (
+                    ", ".join(f"{t} ({r['conf'].get(t,0):.3f})" for t in r["predicted"])
+                    or "(none)"
+                )
 
                 md += [
                     f"### {match} {r['idx']}. {r['prompt']}",
@@ -230,8 +241,8 @@ class NLPTestRunner:
         self.connector.close()
 
 
-
 # ---------- Example usage ----------
+
 
 def main():
     db_config = {
@@ -247,35 +258,137 @@ def main():
 
     test_suite = {
         "Procurement & Purchase": [
-            {"prompt": "Pending Requisitions Awaiting Approval", "expected_tables": ["requisition"]},
-            {"prompt": "Requisition vs Purchase Order Conversion Rate", "expected_tables": ["requisition", "requisition_dtl", "purchase_order_dtl"]},
-            {"prompt": "Top 10 Items Frequently Requested", "expected_tables": ["requisition", "requisition_dtl", "mst_item"]},
-            {"prompt": "Vendor-wise Purchase Value", "expected_tables": ["mst_supplier", "purchase_order", "purchase_order_dtl"]},
-            {"prompt": "Pending Purchase Orders Not Yet Inwarded", "expected_tables": ["purchase_order", "purchase_order_dtl"]},
-            {"prompt": "Average Purchase Lead Time from Requisition to Inward", "expected_tables": ["requisition", "purchase_order", "inward_dtl"]},
+            {
+                "prompt": "Pending Requisitions Awaiting Approval",
+                "expected_tables": ["requisition"],
+            },
+            {
+                "prompt": "Requisition vs Purchase Order Conversion Rate",
+                "expected_tables": [
+                    "requisition",
+                    "requisition_dtl",
+                    "purchase_order_dtl",
+                ],
+            },
+            {
+                "prompt": "Top 10 Items Frequently Requested",
+                "expected_tables": ["requisition", "requisition_dtl", "mst_item"],
+            },
+            {
+                "prompt": "Vendor-wise Purchase Value",
+                "expected_tables": [
+                    "mst_supplier",
+                    "purchase_order",
+                    "purchase_order_dtl",
+                ],
+            },
+            {
+                "prompt": "Pending Purchase Orders Not Yet Inwarded",
+                "expected_tables": ["purchase_order", "purchase_order_dtl"],
+            },
+            {
+                "prompt": "Average Purchase Lead Time from Requisition to Inward",
+                "expected_tables": ["requisition", "purchase_order", "inward_dtl"],
+            },
         ],
         "Inventory & Stock": [
-            {"prompt": "Project-wise Current Stock Summary", "expected_tables": ["project", "stock"]},
-            {"prompt": "Location-wise Stock Value", "expected_tables": ["mst_godown", "stock"]},
-            {"prompt": "Slow-Moving and Non-Moving Inventory", "expected_tables": ["mst_item", "stock"]},
-            {"prompt": "Items Below Reorder Level", "expected_tables": ["mst_item", "stock"]},
-            {"prompt": "Available Stock Comparison", "expected_tables": ["mst_item", "stock"]},
-            {"prompt": "Negative Stock Occurrence Report", "expected_tables": ["mst_item", "stock"]},
+            {
+                "prompt": "Project-wise Current Stock Summary",
+                "expected_tables": ["project", "stock"],
+            },
+            {
+                "prompt": "Location-wise Stock Value",
+                "expected_tables": ["mst_godown", "stock"],
+            },
+            {
+                "prompt": "Slow-Moving and Non-Moving Inventory",
+                "expected_tables": ["mst_item", "stock"],
+            },
+            {
+                "prompt": "Items Below Reorder Level",
+                "expected_tables": ["mst_item", "stock"],
+            },
+            {
+                "prompt": "Available Stock Comparison",
+                "expected_tables": ["mst_item", "stock"],
+            },
+            {
+                "prompt": "Negative Stock Occurrence Report",
+                "expected_tables": ["mst_item", "stock"],
+            },
         ],
         "Material Movement": [
-            {"prompt": "Inward vs Outward Quantity Trend Monthly", "expected_tables": ["inward_hdr", "inward_dtl", "mst_item", "outward_hdr", "outward_dtl"]},
-            {"prompt": "Inter-Project Stock Transfer Summary", "expected_tables": ["stock", "project"]},
-            {"prompt": "Top 10 Most Issued Items", "expected_tables": ["mst_item", "outward_hdr", "outward_dtl"]},
-            {"prompt": "Stock Adjustment and Manual Correction Log", "expected_tables": ["stock", "mst_item"]},
+            {
+                "prompt": "Inward vs Outward Quantity Trend Monthly",
+                "expected_tables": [
+                    "inward_hdr",
+                    "inward_dtl",
+                    "mst_item",
+                    "outward_hdr",
+                    "outward_dtl",
+                ],
+            },
+            {
+                "prompt": "Inter-Project Stock Transfer Summary",
+                "expected_tables": ["stock", "project"],
+            },
+            {
+                "prompt": "Top 10 Most Issued Items",
+                "expected_tables": ["mst_item", "outward_hdr", "outward_dtl"],
+            },
+            {
+                "prompt": "Stock Adjustment and Manual Correction Log",
+                "expected_tables": ["stock", "mst_item"],
+            },
         ],
         "Cost & Budget": [
-            {"prompt": "Project-wise Material Consumption Cost", "expected_tables": ["project", "mst_item", "outward_hdr", "outward_dtl"]},
-            {"prompt": "Budget vs Actual Procurement Cost", "expected_tables": ["project", "mst_item", "outward_hdr", "outward_dtl"]},
-            {"prompt": "Purchase Price Variance by Item", "expected_tables": ["mst_supplier", "mst_item", "purchase_order", "purchase_order_dtl"]},
-            {"prompt": "High-Value Purchase Transactions Above Threshold", "expected_tables": ["mst_supplier", "purchase_order", "purchase_order_dtl"]},
+            {
+                "prompt": "Project-wise Material Consumption Cost",
+                "expected_tables": [
+                    "project",
+                    "mst_item",
+                    "outward_hdr",
+                    "outward_dtl",
+                ],
+            },
+            {
+                "prompt": "Budget vs Actual Procurement Cost",
+                "expected_tables": [
+                    "project",
+                    "mst_item",
+                    "outward_hdr",
+                    "outward_dtl",
+                ],
+            },
+            {
+                "prompt": "Purchase Price Variance by Item",
+                "expected_tables": [
+                    "mst_supplier",
+                    "mst_item",
+                    "purchase_order",
+                    "purchase_order_dtl",
+                ],
+            },
+            {
+                "prompt": "High-Value Purchase Transactions Above Threshold",
+                "expected_tables": [
+                    "mst_supplier",
+                    "purchase_order",
+                    "purchase_order_dtl",
+                ],
+            },
         ],
         "Performance & Exception Reports": [
-            {"prompt": "Delayed Inward Report (PO vs GRN Delay)", "expected_tables": ["purchase_order", "purchase_order_dtl", "inward_hdr", "inward_dtl", "mst_item"]},
+            {
+                "prompt": "Delayed Inward Report (PO vs GRN Delay)",
+                "expected_tables": [
+                    "purchase_order",
+                    "purchase_order_dtl",
+                    "inward_hdr",
+                    "inward_dtl",
+                    "mst_item",
+                ],
+            },
         ],
     }
 
@@ -288,7 +401,7 @@ def main():
         print(f"Running {sum(len(t) for t in test_suite.values())} tests...")
         runner.run(test_suite)
         runner.write_markdown(output)
-        
+
         matches = sum(1 for r in runner.results if r["metrics"].get("match"))
         print(f"✓ Complete. {matches}/{len(runner.results)} exact matches → {output}")
     except Exception as e:

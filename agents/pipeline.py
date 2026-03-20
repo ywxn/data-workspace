@@ -1,4 +1,5 @@
 """Agent pipeline mixin — async agent step methods for the AI Data Workspace."""
+
 from __future__ import annotations
 
 import json
@@ -29,10 +30,14 @@ from agents.prompts import (
     VISUALIZATION_SYSTEM_PROMPT_TEMPLATE,
     SQL_CORRECTION_SYSTEM_PROMPT_TEMPLATE,
 )
-from agents.schema_utils import build_schema_metadata, build_semantic_layer_prompt_context
+from agents.schema_utils import (
+    build_schema_metadata,
+    build_semantic_layer_prompt_context,
+)
 from agents import formatters as _fmt
 
 if TYPE_CHECKING:
+
     class _AgentHostBase:
         """Structural type describing attributes the mixin expects from its host class (AIAgent).
 
@@ -54,15 +59,21 @@ if TYPE_CHECKING:
         @staticmethod
         def _build_schema_metadata(context: Dict[str, Any]) -> Dict[str, Any]: ...
         @staticmethod
-        def _build_semantic_layer_prompt_context(semantic_layer: Optional[Dict[str, Any]] = ...) -> str: ...
+        def _build_semantic_layer_prompt_context(
+            semantic_layer: Optional[Dict[str, Any]] = ...,
+        ) -> str: ...
         @staticmethod
         def _clean_sql_output(sql: str) -> str: ...
         @staticmethod
         def _clean_python_output(code: str) -> str: ...
         @staticmethod
-        def _parse_json_response(raw: str, response_type: str = ..., fallback: Any = ...) -> Any: ...
+        def _parse_json_response(
+            raw: str, response_type: str = ..., fallback: Any = ...
+        ) -> Any: ...
         @staticmethod
-        def _normalize_sql_rows(rows: Any, columns: List[str]) -> List[Dict[str, Any]]: ...
+        def _normalize_sql_rows(
+            rows: Any, columns: List[str]
+        ) -> List[Dict[str, Any]]: ...
         @staticmethod
         def _sanitize_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame: ...
         @staticmethod
@@ -71,8 +82,13 @@ if TYPE_CHECKING:
         def _summarize_query_result(result: Dict[str, Any]) -> Dict[str, Any]: ...
         @staticmethod
         def _query_requests_visualization(user_query: str) -> bool: ...
-        def _generate_visualization_cache_key(self, columns: List[str], column_types: Optional[Dict[str, str]] = ...) -> str: ...
-        def _execute_visualization_code(self, viz_code: str, df: pd.DataFrame) -> Optional[str]: ...
+        def _generate_visualization_cache_key(
+            self, columns: List[str], column_types: Optional[Dict[str, str]] = ...
+        ) -> str: ...
+        def _execute_visualization_code(
+            self, viz_code: str, df: pd.DataFrame
+        ) -> Optional[str]: ...
+
 else:
     _AgentHostBase = object
 
@@ -1075,4 +1091,3 @@ class AgentPipelineMixin(_AgentHostBase):
             "table_interpretation": table_interpretation,
             "limitations": limitations,
         }
-

@@ -70,8 +70,11 @@ class SchemaBuilder:
         # Build table metadata and documents
         for table_name in tables:
             self._build_table_metadata(
-                table_name, table_synonyms, column_comments,
-                semantic_table_map, semantic_column_map,
+                table_name,
+                table_synonyms,
+                column_comments,
+                semantic_table_map,
+                semantic_column_map,
             )
 
         self._build_fk_graph()
@@ -233,9 +236,7 @@ class SchemaBuilder:
                 except Exception:
                     continue
 
-            logger.info(
-                f"Built FK graph with {len(self.fk_graph)} table relationships"
-            )
+            logger.info(f"Built FK graph with {len(self.fk_graph)} table relationships")
 
             # If FK graph is sparse, infer from naming patterns
             if len(self.fk_graph) < len(tables) * 0.3:

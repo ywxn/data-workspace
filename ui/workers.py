@@ -1,4 +1,5 @@
 """Background worker threads for query execution."""
+
 import asyncio
 from typing import Optional, Dict, Any, List
 from PySide6.QtCore import Signal, QThread
@@ -8,6 +9,7 @@ from agents import AIAgent
 from db.connector import DatabaseConnector
 from db.nlp import NLPTableSelector
 from db.processing import load_data
+
 logger = get_logger(__name__)
 
 
@@ -278,4 +280,3 @@ class QueryWorker(QThread):
             return None
         finally:
             connector.close()
-

@@ -15,19 +15,48 @@ logger = logging.getLogger(__name__)
 
 # Name substrings that indicate a peripheral/non-core table
 _PERIPHERAL_PATTERNS = [
-    "bkp_", "_bkp", "_backup", "backup_",
-    "_log", "log_", "_audit", "audit_",
-    "temp_", "_temp", "_tmp", "tmp_",
-    "_old", "old_", "_archive", "archive_",
-    "_copy", "copy_", "_test", "test_",
+    "bkp_",
+    "_bkp",
+    "_backup",
+    "backup_",
+    "_log",
+    "log_",
+    "_audit",
+    "audit_",
+    "temp_",
+    "_temp",
+    "_tmp",
+    "tmp_",
+    "_old",
+    "old_",
+    "_archive",
+    "archive_",
+    "_copy",
+    "copy_",
+    "_test",
+    "test_",
 ]
 
 # Prefixes/suffixes stripped when computing a table's base name
 _VARIANT_PREFIXES = [
-    "bkp_", "temp_", "tmp_", "old_", "backup_", "archive_", "copy_", "test_",
+    "bkp_",
+    "temp_",
+    "tmp_",
+    "old_",
+    "backup_",
+    "archive_",
+    "copy_",
+    "test_",
 ]
 _VARIANT_SUFFIXES = [
-    "_bkp", "_backup", "_temp", "_tmp", "_old", "_archive", "_copy", "_test",
+    "_bkp",
+    "_backup",
+    "_temp",
+    "_tmp",
+    "_old",
+    "_archive",
+    "_copy",
+    "_test",
 ]
 
 
@@ -141,7 +170,7 @@ def prefer_canonical_variants(
         name = table.lower()
         for prefix in _VARIANT_PREFIXES:
             if name.startswith(prefix):
-                name = name[len(prefix):]
+                name = name[len(prefix) :]
         name = re.sub(r"^bkp\d{6,8}_", "", name)
         for suffix in _VARIANT_SUFFIXES:
             if name.endswith(suffix):

@@ -22,18 +22,21 @@ def json_safe_value(v: Any) -> Any:
         return v
     try:
         import decimal
+
         if isinstance(v, decimal.Decimal):
             return float(v)
     except Exception:
         pass
     try:
         import datetime
+
         if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
             return v.isoformat()
     except Exception:
         pass
     try:
         import uuid
+
         if isinstance(v, uuid.UUID):
             return str(v)
     except Exception:
@@ -45,6 +48,7 @@ def json_safe_value(v: Any) -> Any:
             return str(v)
     try:
         import numpy as np
+
         if isinstance(v, np.generic):
             return v.item()
     except Exception:
@@ -52,9 +56,7 @@ def json_safe_value(v: Any) -> Any:
     return str(v)
 
 
-def normalize_sql_rows(
-    rows: List[Any], columns: List[str]
-) -> List[Dict[str, Any]]:
+def normalize_sql_rows(rows: List[Any], columns: List[str]) -> List[Dict[str, Any]]:
     """Normalize SQLAlchemy rows / tuples / dicts into JSON-safe dict rows."""
     normalized: List[Dict[str, Any]] = []
     for r in rows:
@@ -84,9 +86,7 @@ def sanitize_dataframe_for_json(df):
         elif isinstance(val, bytes):
             df[col] = df[col].apply(
                 lambda v: (
-                    v.decode("utf-8", errors="replace")
-                    if isinstance(v, bytes)
-                    else v
+                    v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
                 )
             )
         elif hasattr(val, "item"):
@@ -102,9 +102,7 @@ def sanitize_dataframe_for_json(df):
 def clean_sql_output(sql: str) -> str:
     """Remove markdown formatting from generated SQL output."""
     cleaned = sql.strip()
-    cleaned = re.sub(
-        r"^\s*corrected\s+sql\s*:\s*", "", cleaned, flags=re.IGNORECASE
-    )
+    cleaned = re.sub(r"^\s*corrected\s+sql\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^\s*sql\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     if "```" in cleaned:
         fence_match = re.search(
@@ -270,9 +268,7 @@ def format_response(
     if ConfigManager.get_show_sql_in_responses() and generated_sql:
         response_parts.append("### Generated SQL:")
         response_parts.append("")
-        response_parts.append(
-            f"```sql\n{clean_sql_output(generated_sql)}\n```"
-        )
+        response_parts.append(f"```sql\n{clean_sql_output(generated_sql)}\n```")
     if chart_path:
         response_parts.append("")
         response_parts.append("### Visualization:")
@@ -351,9 +347,20 @@ def query_requests_visualization(user_query: str) -> bool:
     """Heuristic to force visualization when the user explicitly asks for it."""
     query = user_query.lower()
     keywords = [
-        "graph", "chart", "plot", "visualize", "visualisation",
-        "visualization", "trend", "over time", "distribution",
-        "compare", "correlation", "relationship", "histogram", "scatter",
+        "graph",
+        "chart",
+        "plot",
+        "visualize",
+        "visualisation",
+        "visualization",
+        "trend",
+        "over time",
+        "distribution",
+        "compare",
+        "correlation",
+        "relationship",
+        "histogram",
+        "scatter",
     ]
     return any(keyword in query for keyword in keywords)
 

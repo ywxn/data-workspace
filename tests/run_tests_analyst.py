@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Tuple, Optional
 import os
 import sys
+
 sys.path.append(str(Path(__file__).parent.parent))  # to import from parent dir
 
 from db.connector import DatabaseConnector
@@ -57,11 +58,11 @@ class TestRunner:
         self.db_config = db_config
         self.agent = AIAgent()
         self.results: List[Dict[str, Any]] = []
-        self.output_file = output_file or f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        self.output_file = (
+            output_file or f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        )
 
-    async def run_test_suite(
-        self, test_suite: Dict[str, List[Dict[str, Any]]]
-    ) -> None:
+    async def run_test_suite(self, test_suite: Dict[str, List[Dict[str, Any]]]) -> None:
         """
         Run all tests in the test suite.
         Writes results incrementally to markdown file after each test.
@@ -72,7 +73,7 @@ class TestRunner:
         """
         logger.info("Starting test suite execution")
         logger.info(f"Output file: {self.output_file}")
-        
+
         # Initialize the markdown file with header
         self._initialize_markdown_report(test_suite)
 
@@ -83,9 +84,7 @@ class TestRunner:
                 prompt = test_case.get("prompt", "")
                 tables = test_case.get("tables", [])
 
-                logger.info(
-                    f"Running test {idx}/{len(tests)} in {category}: {prompt}"
-                )
+                logger.info(f"Running test {idx}/{len(tests)} in {category}: {prompt}")
 
                 try:
                     # Load data from specified tables
@@ -136,7 +135,7 @@ class TestRunner:
 
                 self.results.append(result)
                 logger.info(f"Completed test {idx} in {category}")
-                
+
                 # Write results to markdown file immediately after each test
                 self.generate_markdown_report(self.output_file)
                 print(f"  [{len(self.results)} completed] {prompt[:60]}...")
@@ -171,7 +170,9 @@ class TestRunner:
             logger.error(error_msg, exc_info=True)
             return None, error_msg
 
-    def _initialize_markdown_report(self, test_suite: Dict[str, List[Dict[str, Any]]]) -> None:
+    def _initialize_markdown_report(
+        self, test_suite: Dict[str, List[Dict[str, Any]]]
+    ) -> None:
         """
         Initialize the markdown report file with header information.
 
@@ -180,7 +181,7 @@ class TestRunner:
         """
         total_tests = sum(len(tests) for tests in test_suite.values())
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         initial_content = [
             "# AI Data Analysis Test Report",
             "",
@@ -195,9 +196,11 @@ class TestRunner:
             "---",
             "",
         ]
-        
+
         try:
-            Path(self.output_file).write_text("\n".join(initial_content), encoding="utf-8")
+            Path(self.output_file).write_text(
+                "\n".join(initial_content), encoding="utf-8"
+            )
             print(f"\n📝 Report file initialized: {self.output_file}")
             print(f"   Updates will be written after each test completes.\n")
         except Exception as e:
@@ -213,10 +216,10 @@ class TestRunner:
         logger.info(f"Generating markdown report: {output_path}")
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         completed = len(self.results)
-        successful = sum(1 for r in self.results if r['status'] == 'success')
-        failed = sum(1 for r in self.results if r['status'] == 'error')
+        successful = sum(1 for r in self.results if r["status"] == "success")
+        failed = sum(1 for r in self.results if r["status"] == "error")
 
         # Build markdown content
         md_lines = [
@@ -252,12 +255,17 @@ class TestRunner:
                 md_lines.append(f"### {test_num}. {prompt}")
                 md_lines.append("")
                 md_lines.append(f"**Tables:** {', '.join(tables)}")
-                md_lines.append(f"**Status:** {'✓ Success' if status == 'success' else '✗ Error'}")
+                md_lines.append(
+                    f"**Status:** {'✓ Success' if status == 'success' else '✗ Error'}"
+                )
 
                 if status == "success":
                     if "row_counts" in test:
                         counts = ", ".join(
-                            [f"{table}: {count:,} rows" for table, count in test["row_counts"].items()]
+                            [
+                                f"{table}: {count:,} rows"
+                                for table, count in test["row_counts"].items()
+                            ]
                         )
                         md_lines.append(f"**Row Counts:** {counts}")
                     if "load_message" in test:
@@ -364,7 +372,13 @@ async def main():
         "C. Material Movement Tracking": [
             {
                 "prompt": "Inward vs Outward Quantity Trend (Monthly)",
-                "tables": ["inward_hdr", "inward_dtl", "mst_item", "outward_hdr", "outward_dtl"],
+                "tables": [
+                    "inward_hdr",
+                    "inward_dtl",
+                    "mst_item",
+                    "outward_hdr",
+                    "outward_dtl",
+                ],
             },
             {
                 "prompt": "Inter-Project Stock Transfer Summary",
@@ -390,7 +404,12 @@ async def main():
             },
             {
                 "prompt": "Purchase Price Variance (Item-wise)",
-                "tables": ["mst_supplier", "mst_item", "purchase_order", "purchase_order_dtl"],
+                "tables": [
+                    "mst_supplier",
+                    "mst_item",
+                    "purchase_order",
+                    "purchase_order_dtl",
+                ],
             },
             {
                 "prompt": "High-Value Purchase Transactions (Above Threshold)",
@@ -400,11 +419,29 @@ async def main():
         "E. User & Approval Monitoring": [
             {
                 "prompt": "Pending Approvals by Approver (Attendance, Expense, Loan, Purchase Order)",
-                "tables": ["mst_employee", "employee_attendance_project", "employee_expense_book", "employee_expense_book_dtl", "loan_advance_hdr", "loan_advance_dtl", "mst_supplier", "purchase_order"],
+                "tables": [
+                    "mst_employee",
+                    "employee_attendance_project",
+                    "employee_expense_book",
+                    "employee_expense_book_dtl",
+                    "loan_advance_hdr",
+                    "loan_advance_dtl",
+                    "mst_supplier",
+                    "purchase_order",
+                ],
             },
             {
                 "prompt": "Average Approval Turnaround Time (created date to approved date)",
-                "tables": ["mst_employee", "employee_attendance_project", "employee_expense_book", "employee_expense_book_dtl", "loan_advance_hdr", "loan_advance_dtl", "mst_supplier", "purchase_order"],
+                "tables": [
+                    "mst_employee",
+                    "employee_attendance_project",
+                    "employee_expense_book",
+                    "employee_expense_book_dtl",
+                    "loan_advance_hdr",
+                    "loan_advance_dtl",
+                    "mst_supplier",
+                    "purchase_order",
+                ],
             },
             {
                 "prompt": "User-wise Requisition Creation Count",
@@ -412,13 +449,26 @@ async def main():
             },
             {
                 "prompt": "Unauthorized / Rejected Transactions Report",
-                "tables": ["mst_employee", "employee_attendance_project", "employee_expense_book", "employee_expense_book_dtl", "loan_advance_hdr", "loan_advance_dtl"],
+                "tables": [
+                    "mst_employee",
+                    "employee_attendance_project",
+                    "employee_expense_book",
+                    "employee_expense_book_dtl",
+                    "loan_advance_hdr",
+                    "loan_advance_dtl",
+                ],
             },
         ],
         "F. Performance & Exception Reports": [
             {
                 "prompt": "Delayed Inward Report (PO vs GRN Delay)",
-                "tables": ["purchase_order", "purchase_order_dtl", "inward_hdr", "inward_dtl", "mst_item"],
+                "tables": [
+                    "purchase_order",
+                    "purchase_order_dtl",
+                    "inward_hdr",
+                    "inward_dtl",
+                    "mst_item",
+                ],
             },
         ],
     }
@@ -436,7 +486,9 @@ async def main():
 
     try:
         print("Starting test execution...")
-        print("(You can stop at any time with Ctrl+C - results are saved after each test)\n")
+        print(
+            "(You can stop at any time with Ctrl+C - results are saved after each test)\n"
+        )
         await runner.run_test_suite(test_suite)
 
         print(f"\n✓ All tests completed!")

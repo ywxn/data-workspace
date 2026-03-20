@@ -1,12 +1,23 @@
 """LLM host configuration dialogs (local, self-hosted, cloud)."""
+
 import os
 from typing import Optional
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QDialogButtonBox,
-    QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox,
-    QMessageBox, QTabWidget, QGroupBox, QWidget,
+    QDialog,
+    QVBoxLayout,
+    QFormLayout,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QCheckBox,
+    QMessageBox,
+    QTabWidget,
+    QGroupBox,
+    QWidget,
 )
 from core.config import ConfigManager
 from core.logger import get_logger

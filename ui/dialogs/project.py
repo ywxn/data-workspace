@@ -1,4 +1,5 @@
 """Project management dialogs (create, load)."""
+
 import os
 import json
 import random
@@ -7,9 +8,20 @@ from typing import Optional, Dict, Any, List
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QDialogButtonBox,
-    QLabel, QLineEdit, QComboBox, QPushButton, QMessageBox, QListWidget,
-    QListWidgetItem, QTextEdit, QWidget,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QMessageBox,
+    QListWidget,
+    QListWidgetItem,
+    QTextEdit,
+    QWidget,
 )
 from core.config import ConfigManager
 from core.constants import PLACEHOLDER_PROJECT_NAMES, PLACEHOLDER_PROJECT_DESCRIPTIONS

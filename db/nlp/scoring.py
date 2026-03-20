@@ -148,12 +148,9 @@ def apply_lexical_boost(
 
         # Direct table name match
         if any(
-            stem in meta.normalized_name or stem in table_lower
-            for stem in token_stems
+            stem in meta.normalized_name or stem in table_lower for stem in token_stems
         ):
-            table_scores[table_name] = (
-                table_scores.get(table_name, 0.0) + table_boost
-            )
+            table_scores[table_name] = table_scores.get(table_name, 0.0) + table_boost
 
         # Column name matches (capped at 2 per table)
         col_match_count = 0
@@ -239,9 +236,7 @@ def apply_glossary_boost(
         if matched:
             table_name = mapping.get("table")
             if table_name and table_name in table_metadata:
-                table_scores[table_name] = (
-                    table_scores.get(table_name, 0.0) + boost
-                )
+                table_scores[table_name] = table_scores.get(table_name, 0.0) + boost
                 logger.debug(f"Glossary boost: '{term}' -> {table_name} (+{boost})")
 
     return table_scores

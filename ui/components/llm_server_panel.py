@@ -59,7 +59,7 @@ class LLMServerPanel(QWidget):
 
         # Thread references kept alive so QThread isn't garbage-collected
         self._download_thread = None  # ModelDownloadThread
-        self._server_thread = None    # ServerStartThread
+        self._server_thread = None  # ServerStartThread
 
         # Catalog key list parallels combo items so we can resolve back
         self._catalog_keys: List[str] = []
@@ -175,7 +175,9 @@ class LLMServerPanel(QWidget):
         self.context_spin = QSpinBox()
         self.context_spin.setRange(512, 131072)
         self.context_spin.setSingleStep(512)
-        self.context_spin.setValue(hosted_cfg.get("hosted_context_size", HOSTED_LLM_CONTEXT_SIZE))
+        self.context_spin.setValue(
+            hosted_cfg.get("hosted_context_size", HOSTED_LLM_CONTEXT_SIZE)
+        )
         self.context_spin.setToolTip(
             "Maximum number of tokens the model can process in a single prompt/response.\n"
             "Higher values allow longer conversations but use more RAM/VRAM.\n"
@@ -185,7 +187,9 @@ class LLMServerPanel(QWidget):
 
         self.gpu_spin = QSpinBox()
         self.gpu_spin.setRange(0, 999)
-        self.gpu_spin.setValue(hosted_cfg.get("hosted_gpu_layers", HOSTED_LLM_GPU_LAYERS))
+        self.gpu_spin.setValue(
+            hosted_cfg.get("hosted_gpu_layers", HOSTED_LLM_GPU_LAYERS)
+        )
         self.gpu_spin.setToolTip(
             "Number of model layers to offload to the GPU for faster inference.\n"
             "Set to 0 for CPU-only mode. Higher values use more VRAM but run faster.\n"
@@ -323,9 +327,7 @@ class LLMServerPanel(QWidget):
         self.progress_bar.setValue(int(pct))
         dl_mb = downloaded / (1024 * 1024)
         tot_mb = total / (1024 * 1024)
-        self.progress_label.setText(
-            f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)"
-        )
+        self.progress_label.setText(f"{dl_mb:.0f} MB / {tot_mb:.0f} MB  ({pct:.1f}%)")
 
     def on_download_finished(self, success: bool, message: str):
         self.download_btn.setEnabled(True)

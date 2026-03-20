@@ -1,4 +1,5 @@
 """Application startup and initialization."""
+
 import sys
 import os
 import json
@@ -17,10 +18,13 @@ from ui.dialogs.interaction import InteractionModeDialog
 from ui.dialogs.settings import APIKeyDialog
 from ui.dialogs.llm_host import AIHostConfigDialog
 from ui.dialogs.data_source import (
-    DataSourceDialog, DatabaseConnectionDialog,
-    MultiDatabaseConnectionDialog, select_tables_with_method,
+    DataSourceDialog,
+    DatabaseConnectionDialog,
+    MultiDatabaseConnectionDialog,
+    select_tables_with_method,
 )
 from ui.dialogs.project import CreateProjectDialog
+
 logger = get_logger(__name__)
 
 
