@@ -47,6 +47,16 @@ class APIKeyDialog(QDialog):
 
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(["OpenAI", "Claude"])
+
+        current_default = ConfigManager.get_default_api()
+        default_map = {"openai": "OpenAI", "claude": "Claude"}
+        preselect = default_map.get(current_default)
+        if preselect:
+            idx = self.provider_combo.findText(preselect)
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+
+
         self.provider_combo.currentTextChanged.connect(self._load_existing_key)
         form_layout.addRow("Provider:", self.provider_combo)
 
