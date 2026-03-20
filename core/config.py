@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import re
 
-from constants import (
+from core.constants import (
     LOCAL_LLM_DEFAULT_URL,
     LOCAL_LLM_DEFAULT_MODEL,
     HOSTED_LLM_DEFAULT_PORT,
@@ -66,6 +66,10 @@ def _keyring_delete(key: str) -> bool:
         return False
 
 
+# Project root is one level up from this file (core/config.py → project root)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 class ConfigManager:
     """
     Manages application configuration including API keys and settings.
@@ -85,9 +89,7 @@ class ConfigManager:
         Returns:
             Absolute path to config file
         """
-        return os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), ConfigManager.CONFIG_FILE
-        )
+        return os.path.join(_PROJECT_ROOT, ConfigManager.CONFIG_FILE)
 
     @staticmethod
     def config_exists() -> bool:
@@ -611,7 +613,7 @@ class ConfigManager:
         Returns:
             Dict with keys 'openai', 'claude', 'local' mapping to model IDs
         """
-        from constants import LLM_MODELS
+        from core.constants import LLM_MODELS
 
         config = ConfigManager.load_config()
         model_defaults = config.get("model_defaults", {})

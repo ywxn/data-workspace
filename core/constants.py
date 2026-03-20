@@ -1,4 +1,4 @@
-﻿"""
+"""
 Application-wide constants and configuration.
 
 Centralizes constants used across modules for easier maintenance
@@ -36,7 +36,7 @@ HOSTED_LLM_CONTEXT_SIZE = 4096
 HOSTED_LLM_GPU_LAYERS = 0  # 0 = CPU-only by default; increase for GPU offload
 
 # Models directory (relative to project root)
-MODELS_DIR = Path(__file__).resolve().parent / "models"
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 # Recommended GGUF models for self-hosted inference
 HOSTED_MODEL_CATALOG = {
@@ -144,7 +144,7 @@ SQL_LARGE_TYPES = [
 ]
 
 # HTML/Markdown Conversion
-_CSS_DIR = Path(__file__).resolve().parent / "css"
+_CSS_DIR = Path(__file__).resolve().parent.parent / "css"
 
 
 def _read_css_file(filename: str) -> str:

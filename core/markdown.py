@@ -1,8 +1,8 @@
 import markdown
 import re
 
-from config import ConfigManager
-from constants import DARK_THEME_STYLESHEET, LIGHT_THEME_STYLESHEET
+from core.config import ConfigManager
+from core.constants import DARK_THEME_STYLESHEET, LIGHT_THEME_STYLESHEET
 
 
 def _extract_markdown_theme_colors(stylesheet: str, fallback: dict) -> dict:

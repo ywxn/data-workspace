@@ -19,8 +19,8 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
-from constants import DEFAULT_ACRONYMS
-from embedding_model_cache import get_sentence_transformer
+from core.constants import DEFAULT_ACRONYMS
+from db.embedding_cache import get_sentence_transformer
 
 import numpy as np
 

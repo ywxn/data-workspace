@@ -33,10 +33,10 @@ import os
 import sys
 sys.path.append(str(Path(__file__).parent.parent))  # to import from parent dir
 
-from connector import DatabaseConnector
-import processing
-from agent_orchestrator import AIAgent
-from logger import get_logger
+from db.connector import DatabaseConnector
+import db.processing as processing
+from agents import AIAgent
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 

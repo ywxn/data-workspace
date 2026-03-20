@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Optional, Tuple, Callable, Dict, Any, List
 from urllib.request import urlopen
 
-from logger import get_logger
-from constants import (
+from core.logger import get_logger
+from core.constants import (
     MODELS_DIR,
     HOSTED_MODEL_CATALOG,
     HOSTED_LLM_DEFAULT_PORT,

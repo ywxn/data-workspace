@@ -3,9 +3,9 @@
 import sys
 import types
 
-import embedding_model_cache as cache
+import db.embedding_cache as cache
 from memory.query_memory import UnifiedMemoryService
-from nlp_table_selector import NLPTableSelector
+from db.nlp_selector import NLPTableSelector
 
 
 def _reset_cache_state() -> None:
