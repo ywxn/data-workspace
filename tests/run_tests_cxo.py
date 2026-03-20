@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent))  # to import from parent dir
 
 from agents import AIAgent
 from db.connector import DatabaseConnector
-from db.nlp_selector import NLPTableSelector
+from db.nlp import NLPTableSelector
 from core.logger import get_logger
 
 logger = get_logger(__name__)

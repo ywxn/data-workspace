@@ -6,7 +6,7 @@ from core.config import ConfigManager
 from core.logger import get_logger
 from agents import AIAgent
 from db.connector import DatabaseConnector
-from db.nlp_selector import NLPTableSelector
+from db.nlp import NLPTableSelector
 from db.processing import load_data
 logger = get_logger(__name__)
 

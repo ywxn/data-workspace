@@ -11,7 +11,7 @@ from core.markdown import markdown_to_html
 from core.logger import get_logger
 from db.connector import DatabaseConnector
 from db.processing import load_data
-from db.nlp_selector import NLPTableSelector
+from db.nlp import NLPTableSelector
 from ui.main_window import DataWorkspaceGUI
 from ui.dialogs.interaction import InteractionModeDialog
 from ui.dialogs.settings import APIKeyDialog

@@ -15,7 +15,7 @@ from core.config import ConfigManager
 from core.constants import NLP_PLACEHOLDER_TEXT
 from core.logger import get_logger
 from db.connector import DatabaseConnector
-from db.nlp_selector import NLPTableSelector
+from db.nlp import NLPTableSelector
 from agents import AIAgent
 logger = get_logger(__name__)
 

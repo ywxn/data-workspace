@@ -5,7 +5,7 @@ import types
 
 import db.embedding_cache as cache
 from memory.query_memory import UnifiedMemoryService
-from db.nlp_selector import NLPTableSelector
+from db.nlp import NLPTableSelector
 
 
 def _reset_cache_state() -> None:
