@@ -157,17 +157,18 @@ def get_base_path():
 # def _read_css_file(filename: str) -> str: 17/03/26
 #     return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
 def _read_css_file(filename: str) -> str:
-    from logger import get_logger
-
-    logger = get_logger(__name__)
     try:
         path = _CSS_DIR / filename
 
         if not path.exists():
+            from logger import get_logger
+            logger = get_logger(__name__)
             logger.warning(f"CSS file missing: {path}")
             return ""
         return path.read_text(encoding="utf-8").strip()
     except Exception as e:
+        from logger import get_logger
+        logger = get_logger(__name__)
         logger.error(f"Failed to read CSS {filename}: {e}")
         return ""
 
