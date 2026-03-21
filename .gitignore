@@ -88,3 +88,4 @@ reports/
 
 # portable python runtime
 python/
+venv/
