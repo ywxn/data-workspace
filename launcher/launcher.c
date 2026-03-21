@@ -7,7 +7,7 @@
 #ifdef _WIN32
 #  include <windows.h>
 #  define SLEEP_SEC(s)  Sleep((DWORD)((s) * 1000))
-#  define PYTHON_RUNTIME ".\\python\\bin\\python.exe"
+#  define PYTHON_RUNTIME ".\\python\\python.exe"
 #  define VENV_PYTHON    "venv\\Scripts\\python.exe"
 #  define EXTRACT_CMD \
        "powershell -Command \"tar -xf runtime.tar.gz -C .\""
@@ -296,32 +296,50 @@ void ensure_runtime(void) {
     char url[MAX_URL_LEN], expected_sha[MAX_SHA_LEN];
     if (read_runtime_json(url, expected_sha) != 0) exit(1);
 
-    printf("Downloading Python runtime from:\n  %s\n", url);
-    if (download_file(url, RUNTIME_ARCHIVE) != 0) {
-        fprintf(stderr, "Failed to download runtime after %d attempts.\n", MAX_RETRIES);
-        exit(1);
+    int need_download = 1;
+
+    /* If the archive already exists, check its integrity before re-downloading */
+    if (file_exists(RUNTIME_ARCHIVE) && strcmp(expected_sha, "EXPECTED_SHA256") != 0) {
+        printf("Checking existing archive integrity...\n");
+        char existing_sha[MAX_SHA_LEN];
+        if (sha256_file(RUNTIME_ARCHIVE, existing_sha) == 0 &&
+            strcmp(existing_sha, expected_sha) == 0) {
+            printf("Existing archive is valid (SHA256 OK), skipping download.\n");
+            need_download = 0;
+        } else {
+            printf("Existing archive is invalid or incomplete, re-downloading...\n");
+            remove(RUNTIME_ARCHIVE);
+        }
     }
 
-    /* SHA-256 integrity check */
-    printf("Verifying download integrity...\n");
-    char actual_sha[MAX_SHA_LEN];
-    if (sha256_file(RUNTIME_ARCHIVE, actual_sha) != 0) {
-        remove(RUNTIME_ARCHIVE);
-        exit(1);
-    }
-    if (strcmp(expected_sha, "EXPECTED_SHA256") == 0) {
-        printf("Warning: SHA256 not configured in " RUNTIME_JSON
-               " — skipping verification.\n");
-    } else if (strcmp(actual_sha, expected_sha) != 0) {
-        fprintf(stderr,
-                "SHA256 mismatch — aborting.\n"
-                "  expected : %s\n"
-                "  actual   : %s\n",
-                expected_sha, actual_sha);
-        remove(RUNTIME_ARCHIVE);
-        exit(1);
-    } else {
-        printf("SHA256 OK: %s\n", actual_sha);
+    if (need_download) {
+        printf("Downloading Python runtime from:\n  %s\n", url);
+        if (download_file(url, RUNTIME_ARCHIVE) != 0) {
+            fprintf(stderr, "Failed to download runtime after %d attempts.\n", MAX_RETRIES);
+            exit(1);
+        }
+
+        /* SHA-256 integrity check */
+        printf("Verifying download integrity...\n");
+        char actual_sha[MAX_SHA_LEN];
+        if (sha256_file(RUNTIME_ARCHIVE, actual_sha) != 0) {
+            remove(RUNTIME_ARCHIVE);
+            exit(1);
+        }
+        if (strcmp(expected_sha, "EXPECTED_SHA256") == 0) {
+            printf("Warning: SHA256 not configured in " RUNTIME_JSON
+                   " — skipping verification.\n");
+        } else if (strcmp(actual_sha, expected_sha) != 0) {
+            fprintf(stderr,
+                    "SHA256 mismatch — aborting.\n"
+                    "  expected : %s\n"
+                    "  actual   : %s\n",
+                    expected_sha, actual_sha);
+            remove(RUNTIME_ARCHIVE);
+            exit(1);
+        } else {
+            printf("SHA256 OK: %s\n", actual_sha);
+        }
     }
 
     printf("Extracting runtime...\n");
@@ -371,13 +389,45 @@ void install_requirements(void) {
         printf("Dependencies already satisfied.\n");
         return;
     }
-    printf("Installing dependencies...\n");
-    char cmd[512];
+
+    printf("Installing dependencies (skipping cx_Oracle)...\n");
+
+    char cmd[1024];
+
+    // Upgrade pip first
     snprintf(cmd, sizeof(cmd), "%s -m pip install --upgrade pip", VENV_PYTHON);
     run_cmd(cmd);
-    snprintf(cmd, sizeof(cmd), "%s -m pip install -r requirements.txt", VENV_PYTHON);
+
+#ifdef _WIN32
+    // Windows: filter out cx_Oracle
+    snprintf(cmd, sizeof(cmd),
+             "findstr /V /C:\"cx_Oracle\" requirements.txt > temp_requirements.txt");
     run_cmd(cmd);
+
+    snprintf(cmd, sizeof(cmd),
+             "%s -m pip install -r temp_requirements.txt", VENV_PYTHON);
+    run_cmd(cmd);
+
+    snprintf(cmd, sizeof(cmd), "del temp_requirements.txt");
+    run_cmd(cmd);
+#else
+    // Linux/macOS: filter out cx_Oracle
+    snprintf(cmd, sizeof(cmd),
+             "grep -v '^cx_Oracle' requirements.txt > temp_requirements.txt");
+    run_cmd(cmd);
+
+    snprintf(cmd, sizeof(cmd),
+             "%s -m pip install -r temp_requirements.txt", VENV_PYTHON);
+    run_cmd(cmd);
+
+    snprintf(cmd, sizeof(cmd), "rm temp_requirements.txt");
+    run_cmd(cmd);
+#endif
+
+    // Save hash so we don’t reinstall next time
     save_requirements_hash();
+
+    printf("Dependencies installed (cx_Oracle skipped).\n");
 }
 
 void run_app(void) {
