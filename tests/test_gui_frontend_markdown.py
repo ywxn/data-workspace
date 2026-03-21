@@ -65,7 +65,9 @@ def gui_module(monkeypatch):
 @pytest.mark.regression
 def test_api_key_dialog_defaults_to_saved_provider(gui_module, qt_app):
     with (
-        patch.object(gui_module.ConfigManager, "get_default_api", return_value="claude"),
+        patch.object(
+            gui_module.ConfigManager, "get_default_api", return_value="claude"
+        ),
         patch.object(
             gui_module.ConfigManager,
             "get_api_key",

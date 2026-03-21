@@ -927,7 +927,8 @@ class AIAgent:
                     "from": relationship.get("from") or relationship.get("source"),
                     "to": relationship.get("to") or relationship.get("target"),
                     "type": relationship.get("type"),
-                    "join": relationship.get("join") or relationship.get("join_condition"),
+                    "join": relationship.get("join")
+                    or relationship.get("join_condition"),
                 }
             )
 

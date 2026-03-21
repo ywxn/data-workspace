@@ -492,9 +492,7 @@ class MemoryRetentionDialog(QDialog):
         self.ttl_days_spin = QSpinBox()
         self.ttl_days_spin.setRange(1, 36500)
         self.ttl_days_spin.setValue(int(retention.get("ttl_days", 90)))
-        self.ttl_days_spin.setToolTip(
-            "Delete query records older than this many days."
-        )
+        self.ttl_days_spin.setToolTip("Delete query records older than this many days.")
         form_layout.addRow("TTL Days:", self.ttl_days_spin)
 
         layout.addLayout(form_layout)
@@ -535,7 +533,9 @@ class MemoryRetentionDialog(QDialog):
         )
 
         if not success:
-            QMessageBox.warning(self, "Settings Error", f"Failed to save setting: {message}")
+            QMessageBox.warning(
+                self, "Settings Error", f"Failed to save setting: {message}"
+            )
             return
 
         logger.info(
@@ -3408,9 +3408,7 @@ class DataWorkspaceGUI(QMainWindow):
         settings_menu.addAction(model_settings_action)
 
         memory_retention_action = QAction("Memory Retention Policy", self)
-        memory_retention_action.triggered.connect(
-            self.change_memory_retention_settings
-        )
+        memory_retention_action.triggered.connect(self.change_memory_retention_settings)
         settings_menu.addAction(memory_retention_action)
 
         settings_menu.addSeparator()
@@ -3910,7 +3908,9 @@ class DataWorkspaceGUI(QMainWindow):
             elif saved_ratio is not None:
                 QTimer.singleShot(
                     0,
-                    lambda: scroll_bar.setValue(int(scroll_bar.maximum() * saved_ratio)),
+                    lambda: scroll_bar.setValue(
+                        int(scroll_bar.maximum() * saved_ratio)
+                    ),
                 )
 
     def _build_processing_block(self) -> str:
@@ -5376,9 +5376,7 @@ class DataWorkspaceGUI(QMainWindow):
                 )
         except Exception as e:
             logger.error(f"Failed to clear query cache: {e}", exc_info=True)
-            QMessageBox.critical(
-                self, "Error", f"Failed to clear query cache: {e}"
-            )
+            QMessageBox.critical(self, "Error", f"Failed to clear query cache: {e}")
 
     def toggle_prompt_expansion(self, checked: bool):
         """Toggle the prompt-expansion middleman agent on or off."""
