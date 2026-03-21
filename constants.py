@@ -6,7 +6,8 @@ and configuration changes.
 """
 
 from pathlib import Path
-import resolve_css
+import sys
+
 
 # LLM Configuration
 DEFAULT_LLM_PROVIDER = "openai"
@@ -144,25 +145,41 @@ SQL_LARGE_TYPES = [
     "geometry",
 ]
 
-_CSS_DIR = resolve_css.get_base_path() / "css"
+
+# HTML/Markdown Conversion
+# _CSS_DIR = Path(__file__).resolve().parent / "css" 17/03/26
+def get_base_path():
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
 
 
-MARKDOWN_CSS_TABLE_STYLE = resolve_css._read_css_file(
-    _CSS_DIR, "markdown_table_style.css"
-)
-MARKDOWN_CSS_TABLE_HEADER = resolve_css._read_css_file(
-    _CSS_DIR, "markdown_table_header.css"
-)
-MARKDOWN_CSS_TABLE_CELL = resolve_css._read_css_file(
-    _CSS_DIR, "markdown_table_cell.css"
-)
-MARKDOWN_CSS_TABLE_CELL_ALT = resolve_css._read_css_file(
-    _CSS_DIR, "markdown_table_cell_alt.css"
-)
+# def _read_css_file(filename: str) -> str: 17/03/26
+#     return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
+def _read_css_file(filename: str) -> str:
+    from logger import get_logger
 
-MARKDOWN_CSS_CODE_BLOCK = resolve_css._read_css_file(
-    _CSS_DIR, "markdown_code_block.css"
-)
+    logger = get_logger(__name__)
+    try:
+        path = _CSS_DIR / filename
+
+        if not path.exists():
+            logger.warning(f"CSS file missing: {path}")
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        logger.error(f"Failed to read CSS {filename}: {e}")
+        return ""
+
+
+_CSS_DIR = get_base_path() / "css"
+
+MARKDOWN_CSS_TABLE_STYLE = _read_css_file("markdown_table_style.css")
+MARKDOWN_CSS_TABLE_HEADER = _read_css_file("markdown_table_header.css")
+MARKDOWN_CSS_TABLE_CELL = _read_css_file("markdown_table_cell.css")
+MARKDOWN_CSS_TABLE_CELL_ALT = _read_css_file("markdown_table_cell_alt.css")
+
+MARKDOWN_CSS_CODE_BLOCK = _read_css_file("markdown_code_block.css")
 
 # Image Handling
 SUPPORTED_IMAGE_FORMATS = {
