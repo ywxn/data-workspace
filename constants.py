@@ -6,6 +6,8 @@ and configuration changes.
 """
 
 from pathlib import Path
+import os
+import sys
 
 # LLM Configuration
 DEFAULT_LLM_PROVIDER = "openai"
@@ -144,11 +146,29 @@ SQL_LARGE_TYPES = [
 ]
 
 # HTML/Markdown Conversion
-_CSS_DIR = Path(__file__).resolve().parent / "css"
+# _CSS_DIR = Path(__file__).resolve().parent / "css" 17/03/26
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+_CSS_DIR = get_base_path() / "css"
 
 
+
+
+# def _read_css_file(filename: str) -> str: 17/03/26
+#     return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
 def _read_css_file(filename: str) -> str:
-    return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
+    try:
+        path = _CSS_DIR / filename
+        if not path.exists():
+            print(f"[WARNING] CSS file missing: {path}")
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        print(f"[ERROR] Failed to read CSS {filename}: {e}")
+        return ""
 
 
 MARKDOWN_CSS_TABLE_STYLE = _read_css_file("markdown_table_style.css")
