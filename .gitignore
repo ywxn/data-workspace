@@ -89,3 +89,5 @@ reports/
 # portable python runtime
 python/
 venv/
+.req_hash
+runtime.tar.gz
