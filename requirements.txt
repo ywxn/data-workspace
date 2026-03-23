@@ -24,6 +24,7 @@ cx_Oracle>=8.3.0
 # Data Visualization
 altair>=5.0.0
 pandas>=2.0.0
+vl-convert-python>=1.9.0
 
 # Markdown/HTML Processing
 markdown>=3.4.0
