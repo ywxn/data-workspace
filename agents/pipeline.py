@@ -167,6 +167,7 @@ class AgentPipelineMixin(_AgentHostBase):
         user_query: str,
         context: Dict[str, Any],
         semantic_layer: Optional[Dict[str, Any]] = None,
+        interaction_mode: Optional[str] = None,
     ) -> Optional[str]:
         """
         Detect if the user query contains ambiguous business meaning that
@@ -178,6 +179,7 @@ class AgentPipelineMixin(_AgentHostBase):
             user_query: The user's data analysis question
             context: SQL context with schema metadata
             semantic_layer: Optional semantic layer for business context
+            interaction_mode: Optional explicit interaction mode ('cxo' or 'analyst')
 
         Returns:
             Clarification question string, or None if no clarification needed
@@ -186,6 +188,11 @@ class AgentPipelineMixin(_AgentHostBase):
         if not ConfigManager.get_clarification_enabled():
             logger.debug("Clarification flow disabled in config")
             return None
+
+        mode = (interaction_mode or ConfigManager.get_interaction_mode() or "analyst")
+        mode = mode.strip().lower()
+        if mode not in ("cxo", "analyst"):
+            mode = "analyst"
 
         schema_metadata = self._build_schema_metadata(context)
 
@@ -207,11 +214,30 @@ class AgentPipelineMixin(_AgentHostBase):
             ]
             glossary_terms = semantic_layer.get("term_glossary") or {}
 
+        mode_specific_rules = ""
+        if mode == "cxo":
+            mode_specific_rules = (
+                "MODE-SPECIFIC CLARIFICATION STYLE (CxO):\n"
+                "- Ask in plain business language only\n"
+                "- NEVER ask for table names, column names, schema fields, or SQL terms\n"
+                "- Prefer one concise choice-style business question when possible (for example: customer vs supplier, order date vs ship date)\n"
+                "- Keep the question non-technical and decision-oriented\n"
+            )
+        else:
+            mode_specific_rules = (
+                "MODE-SPECIFIC CLARIFICATION STYLE (Analyst):\n"
+                "- Technical precision is allowed when needed\n"
+                "- Asking for exact field names, table names, IDs, or codes is acceptable when it materially impacts SQL correctness\n"
+                "- Keep the clarification concise and specific\n"
+            )
+
         # Construct detection prompt
         system_message = (
             "You are an expert at detecting ambiguity in data analysis questions.\n\n"
             "Your task: Determine if the user's question contains ambiguous business terms, "
             "unclear ID codes, or references that cannot be resolved from the provided schema and glossary.\n\n"
+            f"INTERACTION MODE: {mode}\n"
+            f"{mode_specific_rules}\n"
             "SCHEMA CONTEXT:\n"
             f"Tables: {schema_metadata['tables']}\n"
             f"Columns: {schema_metadata['columns_by_table']}\n"

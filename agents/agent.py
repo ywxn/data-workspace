@@ -615,7 +615,7 @@ class AIAgent(AgentPipelineMixin):
             else:
                 semantic_layer = context.get("semantic_layer")
                 clarification_question = await self.clarification_detector(
-                    user_query, context, semantic_layer
+                    user_query, context, semantic_layer, mode
                 )
 
             if clarification_question:
