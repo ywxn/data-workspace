@@ -9,6 +9,7 @@ ifeq ($(OS),Windows_NT)
     CURL_PREFIX ?= C:/msys64/mingw64
     CFLAGS  += -I$(CURL_PREFIX)/include
     LDFLAGS := -L$(CURL_PREFIX)/lib -lcurl -lws2_32
+    BUNDLE_DLLS := 1
 else
     TARGET  := launcher
     # Uses pkg-config when available; falls back to plain -lcurl.
@@ -18,12 +19,31 @@ else
     LDFLAGS := $(CURL_LIBS)
 endif
 
-.PHONY: all clean
+.PHONY: all clean bundle-dlls
 
+ifeq ($(BUNDLE_DLLS),1)
+all: $(TARGET) bundle-dlls
+else
 all: $(TARGET)
+endif
 
 $(TARGET): launcher.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+bundle-dlls: $(TARGET)
+ifeq ($(BUNDLE_DLLS),1)
+	@echo Bundling runtime DLLs for $(TARGET) via ldd...
+	@ldd $(TARGET) | awk '/=>/ { print $$3 }' | grep -Ei '\.dll$$' | while read -r dll; do \
+		if [ -f "$$dll" ]; then \
+			case "$$dll" in \
+				*/Windows/*|*/WINDOWS/*|*\\Windows\\*|*\\WINDOWS\\*) ;; \
+				*) cp -f "$$dll" . ;; \
+			esac; \
+		fi; \
+	done
+else
+	@true
+endif
 
 clean:
 	$(RM) $(TARGET) launcher.exe
