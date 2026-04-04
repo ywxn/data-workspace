@@ -6,8 +6,6 @@ and configuration changes.
 """
 
 from pathlib import Path
-import sys
-
 
 # LLM Configuration
 DEFAULT_LLM_PROVIDER = "openai"
@@ -38,7 +36,7 @@ HOSTED_LLM_CONTEXT_SIZE = 4096
 HOSTED_LLM_GPU_LAYERS = 0  # 0 = CPU-only by default; increase for GPU offload
 
 # Models directory (relative to project root)
-MODELS_DIR = Path(__file__).resolve().parent / "models"
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 # Recommended GGUF models for self-hosted inference
 HOSTED_MODEL_CATALOG = {
@@ -145,35 +143,13 @@ SQL_LARGE_TYPES = [
     "geometry",
 ]
 
-
 # HTML/Markdown Conversion
-# _CSS_DIR = Path(__file__).resolve().parent / "css" 17/03/26
-def get_base_path():
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS)
-    return Path(__file__).resolve().parent
+_CSS_DIR = Path(__file__).resolve().parent.parent / "css"
 
 
-# def _read_css_file(filename: str) -> str: 17/03/26
-#     return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
 def _read_css_file(filename: str) -> str:
-    try:
-        path = _CSS_DIR / filename
+    return (_CSS_DIR / filename).read_text(encoding="utf-8").strip()
 
-        if not path.exists():
-            from logger import get_logger
-            logger = get_logger(__name__)
-            logger.warning(f"CSS file missing: {path}")
-            return ""
-        return path.read_text(encoding="utf-8").strip()
-    except Exception as e:
-        from logger import get_logger
-        logger = get_logger(__name__)
-        logger.error(f"Failed to read CSS {filename}: {e}")
-        return ""
-
-
-_CSS_DIR = get_base_path() / "css"
 
 MARKDOWN_CSS_TABLE_STYLE = _read_css_file("markdown_table_style.css")
 MARKDOWN_CSS_TABLE_HEADER = _read_css_file("markdown_table_header.css")
