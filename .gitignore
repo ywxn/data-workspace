@@ -86,8 +86,11 @@ plan-*.prompt.md
 
 reports/
 
-# portable python runtime
+# launcher artifacts
 python/
+venv/
+.req_hash
+runtime.tar.gz
 venv/
 .req_hash
 runtime.tar.gz
