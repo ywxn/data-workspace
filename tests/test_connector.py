@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch, call
 from typing import Dict, Any
 
-from db.connector import DatabaseConnector
+from connector import DatabaseConnector
 
 
 class TestDatabaseConnectorInitialization:
@@ -159,7 +159,7 @@ class TestConnectionManagement:
         assert hasattr(connector, "db_type")
         assert hasattr(connector, "library")
 
-    @patch("db.connector.DatabaseConnector.disconnect")
+    @patch("connector.DatabaseConnector.disconnect")
     def test_disconnect(self, mock_disconnect):
         """Test disconnecting from database."""
         connector = DatabaseConnector()
@@ -203,7 +203,7 @@ class TestQueryExecution:
 class TestSchemaDiscovery:
     """Test database schema discovery."""
 
-    @patch("db.connector.DatabaseConnector.get_tables")
+    @patch("connector.DatabaseConnector.get_tables")
     def test_get_tables(self, mock_get_tables):
         """Test retrieving list of tables."""
         mock_get_tables.return_value = ["users", "orders", "products"]
@@ -214,7 +214,7 @@ class TestSchemaDiscovery:
         assert len(result) == 3
         assert "users" in result
 
-    @patch("db.connector.DatabaseConnector.get_columns")
+    @patch("connector.DatabaseConnector.get_columns")
     def test_get_columns_for_table(self, mock_get_columns):
         """Test retrieving columns for a specific table."""
         mock_get_columns.return_value = [

@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional, Tuple
 import os
 from urllib.parse import quote_plus
 
-from core.security import validate_sql_security
+from security_validators import validate_sql_security
 
 
 class DatabaseConnector:

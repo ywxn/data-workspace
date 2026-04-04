@@ -11,7 +11,7 @@ Tests for:
 import pytest
 from unittest.mock import Mock, patch
 
-from core.security import validate_sql_security
+from security_validators import validate_sql_security
 
 
 class TestSQLInjectionDetection:

@@ -9,7 +9,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Optional
-from core.constants import LOG_DIR_NAME, LOG_FILE_NAME, LOG_LEVEL_DEFAULT
+from constants import LOG_DIR_NAME, LOG_FILE_NAME, LOG_LEVEL_DEFAULT
 
 # Create logs directory if it doesn't exist
 LOG_DIR = Path(LOG_DIR_NAME)
