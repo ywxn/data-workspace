@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from logger import get_logger
-from embedding_model_cache import get_sentence_transformer
+from core.logger import get_logger
+from db.embedding_cache import get_sentence_transformer
 
 logger = get_logger(__name__)
 

@@ -91,3 +91,6 @@ python/
 venv/
 .req_hash
 runtime.tar.gz
+venv/
+.req_hash
+runtime.tar.gz

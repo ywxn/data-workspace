@@ -14,10 +14,10 @@ import time
 
 sys.path.append(str(Path(__file__).parent.parent))  # to import from parent dir
 
-from agent_orchestrator import AIAgent
-from connector import DatabaseConnector
-from nlp_table_selector import NLPTableSelector
-from logger import get_logger
+from agents import AIAgent
+from db.connector import DatabaseConnector
+from db.nlp import NLPTableSelector
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 
