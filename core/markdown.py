@@ -4,6 +4,22 @@ import re
 from core.config import ConfigManager
 from core.constants import DARK_THEME_STYLESHEET, LIGHT_THEME_STYLESHEET
 
+_DARK_FALLBACK = {
+    "code_bg": "#3a3a3a",
+    "code_fg": "#ffffff",
+    "inline_bg": "#3a3a3a",
+    "text_color": "#f8fafc",
+}
+_LIGHT_FALLBACK = {
+    "code_bg": "#f6f8fa",
+    "code_fg": "#1f2328",
+    "inline_bg": "#eef2f7",
+    "text_color": "#1f2328",
+}
+
+# Module-level cache for the <style> block (invalidated on theme change).
+_style_cache: dict = {"theme": None, "html": ""}
+
 
 def _extract_markdown_theme_colors(stylesheet: str, fallback: dict) -> dict:
     """Extract markdown SQL color values from theme QSS metadata comments."""
@@ -21,57 +37,21 @@ def _extract_markdown_theme_colors(stylesheet: str, fallback: dict) -> dict:
     }
 
 
-def markdown_to_html(md: str) -> str:
-    """
-    Convert GitHub Flavored Markdown to styled HTML.
-
-    Includes support for:
-    - Tables with styling
-    - Fenced code blocks
-    - Lists
-
-    Args:
-        md: Markdown text string
-
-    Returns:
-        HTML string with embedded CSS for table styling
-    """
-    # Convert markdown to HTML with extensions for GitHub-flavored markdown
-    html_content = markdown.markdown(
-        md, extensions=["tables", "fenced_code", "sane_lists"]
-    )
-
-    config = ConfigManager.load_config()
-    theme = config.get("theme", "system")
-
-    dark_fallback = {
-        "code_bg": "#3a3a3a",
-        "code_fg": "#ffffff",
-        "inline_bg": "#3a3a3a",
-        "text_color": "#f8fafc",
-    }
-    light_fallback = {
-        "code_bg": "#f6f8fa",
-        "code_fg": "#1f2328",
-        "inline_bg": "#eef2f7",
-        "text_color": "#1f2328",
-    }
-
+def _resolve_theme_colors(theme: str) -> dict:
     if theme == "dark":
-        colors = _extract_markdown_theme_colors(DARK_THEME_STYLESHEET, dark_fallback)
+        return _extract_markdown_theme_colors(DARK_THEME_STYLESHEET, _DARK_FALLBACK)
     elif theme == "light":
-        colors = _extract_markdown_theme_colors(LIGHT_THEME_STYLESHEET, light_fallback)
+        return _extract_markdown_theme_colors(LIGHT_THEME_STYLESHEET, _LIGHT_FALLBACK)
     else:
-        # System mode has no dedicated QSS; use the light theme metadata.
-        colors = _extract_markdown_theme_colors(LIGHT_THEME_STYLESHEET, light_fallback)
+        return _extract_markdown_theme_colors(LIGHT_THEME_STYLESHEET, _LIGHT_FALLBACK)
 
+
+def _build_style_block(colors: dict) -> str:
     code_bg = colors["code_bg"]
     code_fg = colors["code_fg"]
     inline_bg = colors["inline_bg"]
     text_color = colors["text_color"]
-    # Add CSS styling for tables and other elements
-    styled_html = f"""
-<style>
+    return f"""<style>
     body {{
         color: {text_color};
     }}
@@ -120,8 +100,47 @@ def markdown_to_html(md: str) -> str:
     pre code * {{
         color: {code_fg} !important;
     }}
-</style>
-{html_content}
-"""
+</style>"""
 
-    return styled_html
+
+def invalidate_markdown_style_cache() -> None:
+    """Clear the cached style block (call after a theme change)."""
+    _style_cache["theme"] = None
+
+
+def markdown_style_html() -> str:
+    """Return the ``<style>`` block for the current theme, cached."""
+    config = ConfigManager.load_config()
+    theme = config.get("theme", "system")
+    if _style_cache["theme"] == theme:
+        return _style_cache["html"]
+    colors = _resolve_theme_colors(theme)
+    style = _build_style_block(colors)
+    _style_cache["theme"] = theme
+    _style_cache["html"] = style
+    return style
+
+
+def markdown_body_to_html(md: str) -> str:
+    """Convert markdown text to an HTML fragment (no ``<style>`` wrapper)."""
+    return markdown.markdown(
+        md, extensions=["tables", "fenced_code", "sane_lists"]
+    )
+
+
+def markdown_to_html(md: str) -> str:
+    """
+    Convert GitHub Flavored Markdown to styled HTML.
+
+    Includes support for:
+    - Tables with styling
+    - Fenced code blocks
+    - Lists
+
+    Args:
+        md: Markdown text string
+
+    Returns:
+        HTML string with embedded CSS for table styling
+    """
+    return markdown_style_html() + "\n" + markdown_body_to_html(md)

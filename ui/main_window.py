@@ -35,7 +35,7 @@ from core.constants import (
     DARK_THEME_STYLESHEET,
     LIGHT_THEME_STYLESHEET,
 )
-from core.markdown import markdown_to_html
+from core.markdown import markdown_to_html, markdown_style_html, markdown_body_to_html, invalidate_markdown_style_cache
 from core.logger import get_logger
 from db.connector import DatabaseConnector
 from db.processing import load_data, add_files_to_sqlite
@@ -381,8 +381,13 @@ class DataWorkspaceGUI(QMainWindow):
         self.animation_frames = [".", "..", "...", ".."]  # Pulsing dots
         self.processing_refresh_timer = QTimer(self)
         self.processing_refresh_timer.setSingleShot(True)
-        self.processing_refresh_timer.setInterval(120)
+        self.processing_refresh_timer.setInterval(200)
         self.processing_refresh_timer.timeout.connect(self._flush_processing_refresh)
+
+        # Incremental rendering state – avoids full markdown→HTML on each chunk
+        self._cached_prefix_md: Optional[str] = None
+        self._cached_prefix_html: Optional[str] = None
+        self._is_rendering: bool = False
 
         # Load saved theme preference or use system theme
         config = ConfigManager.load_config()
@@ -722,8 +727,9 @@ class DataWorkspaceGUI(QMainWindow):
         self.animation_frame = (self.animation_frame + 1) % len(self.animation_frames)
         # Only update if we have a processing block active
         if self.current_processing_block is not None:
-            # While stream text is arriving, avoid extra animation repaints.
-            if self.current_partial_response:
+            # While stream text is arriving or a render is in progress,
+            # skip the animation-only refresh to avoid extra repaints.
+            if self.current_partial_response or self._is_rendering:
                 return
             self._schedule_processing_refresh()
 
@@ -738,8 +744,16 @@ class DataWorkspaceGUI(QMainWindow):
         """Apply the latest processing block state in a single repaint."""
         if self.current_processing_block is None:
             return
-        new_block = self._build_processing_block()
-        self._set_processing_block(new_block)
+        if self._is_rendering:
+            # Previous render still running; reschedule so the update is not lost.
+            self._schedule_processing_refresh()
+            return
+        self._is_rendering = True
+        try:
+            new_block = self._build_processing_block()
+            self._set_processing_block(new_block)
+        finally:
+            self._is_rendering = False
 
     def _set_processing_block(self, new_block: str) -> None:
         current_md = self._get_current_markdown()
@@ -747,18 +761,61 @@ class DataWorkspaceGUI(QMainWindow):
         end_idx = current_md.find(self.processing_token_end, start_idx)
         if start_idx != -1 and end_idx != -1:
             end_idx += len(self.processing_token_end)
-            current_md = current_md[:start_idx] + new_block + current_md[end_idx:]
+            prefix_md = current_md[:start_idx]
+            suffix_md = current_md[end_idx:]
+            new_md = prefix_md + new_block + suffix_md
+            self._set_current_markdown_incremental(prefix_md, new_block, suffix_md, new_md)
         else:
             current_md = "\n\n".join(
                 [segment for segment in [current_md.strip(), new_block] if segment]
             )
-        self._set_current_markdown(current_md)
+            self._set_current_markdown(current_md)
         self.current_processing_block = new_block
+
+    def _set_current_markdown_incremental(
+        self, prefix_md: str, block_md: str, suffix_md: str, full_md: str
+    ) -> None:
+        """Fast-path update: only re-render the processing block, reuse cached prefix HTML."""
+        if prefix_md != self._cached_prefix_md:
+            self._cached_prefix_md = prefix_md
+            self._cached_prefix_html = markdown_body_to_html(prefix_md)
+
+        block_html = markdown_body_to_html(block_md)
+        suffix_html = markdown_body_to_html(suffix_md) if suffix_md else ""
+        prefix_html = self._cached_prefix_html or ""
+        full_html = markdown_style_html() + "\n" + prefix_html + block_html + suffix_html
+
+        scroll_bar = self.conversation_display.verticalScrollBar()
+        was_near_bottom = True
+        saved_ratio: Optional[float] = None
+        if scroll_bar:
+            old_max = scroll_bar.maximum()
+            old_value = scroll_bar.value()
+            was_near_bottom = (old_max - old_value) <= 24
+            if not was_near_bottom and old_max > 0:
+                saved_ratio = old_value / old_max
+
+        self.current_markdown = full_md
+
+        self.conversation_display.setUpdatesEnabled(False)
+        try:
+            self.conversation_display.setHtml(full_html)
+
+            if scroll_bar:
+                if was_near_bottom:
+                    scroll_bar.setValue(scroll_bar.maximum())
+                elif saved_ratio is not None:
+                    scroll_bar.setValue(int(scroll_bar.maximum() * saved_ratio))
+        finally:
+            self.conversation_display.setUpdatesEnabled(True)
 
     def _reset_processing_state(self) -> None:
         self.current_processing_status = ""
         self.current_partial_response = ""
         self.current_processing_block = None
+        self._cached_prefix_md = None
+        self._cached_prefix_html = None
+        self._is_rendering = False
         # Stop animation timer
         if self.animation_timer.isActive():
             self.animation_timer.stop()
@@ -849,11 +906,6 @@ class DataWorkspaceGUI(QMainWindow):
         )
         self._set_current_markdown(combined)
 
-        # Scroll to bottom
-        scroll_bar = self.conversation_display.verticalScrollBar()
-        if scroll_bar:
-            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
-
         self.query_input.clear()
 
         # Reset UI if we were in clarification mode
@@ -927,11 +979,6 @@ class DataWorkspaceGUI(QMainWindow):
 
         self._reset_processing_state()
 
-        # Scroll to bottom
-        scroll_bar = self.conversation_display.verticalScrollBar()
-        if scroll_bar:
-            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
-
         # Add to chat history
         self.add_message_to_chat("assistant", result)
 
@@ -994,11 +1041,6 @@ class DataWorkspaceGUI(QMainWindow):
         self.query_input.setPlaceholderText("Please provide the clarification...")
         self.submit_button.setText("Submit Clarification")
         self.is_running = False
-
-        # Scroll to bottom
-        scroll_bar = self.conversation_display.verticalScrollBar()
-        if scroll_bar:
-            QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
 
         self.query_input.setFocus()
 
@@ -2350,6 +2392,7 @@ class DataWorkspaceGUI(QMainWindow):
                 config = ConfigManager.load_config()
                 config["theme"] = theme
                 ConfigManager.save_config(config)
+                invalidate_markdown_style_cache()
                 self._refresh_conversation_after_theme_change()
                 logger.info(
                     f"Theme changed from '{old_theme}' to '{theme}' and saved to config"
