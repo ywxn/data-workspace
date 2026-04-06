@@ -720,13 +720,49 @@ class AgentPipelineMixin(_AgentHostBase):
             Path to saved chart file, or None if execution fails
         """
         try:
+            _ALLOWED_MODULES = frozenset({
+                "math", "datetime", "decimal", "fractions", "statistics",
+                "collections", "itertools", "functools", "operator",
+                "string", "re", "json", "copy", "textwrap",
+                "altair", "pandas", "numpy",
+            })
+
+            def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if level != 0:
+                    raise ImportError(f"Relative imports are not allowed")
+                top = name.split(".")[0]
+                if top not in _ALLOWED_MODULES:
+                    raise ImportError(
+                        f"Import of '{name}' is not allowed in visualization code"
+                    )
+                return __import__(name, globals, locals, fromlist, level)
+
+            _builtins_src = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
+            _safe_builtins = {
+                k: _builtins_src[k]
+                for k in (
+                    "True", "False", "None",
+                    "abs", "all", "any", "bin", "bool", "bytes", "chr",
+                    "dict", "divmod", "enumerate", "filter", "float",
+                    "format", "frozenset", "hasattr", "hash", "hex",
+                    "int", "isinstance", "issubclass", "iter", "len",
+                    "list", "map", "max", "min", "next", "oct", "ord",
+                    "pow", "print", "range", "repr", "reversed", "round",
+                    "set", "slice", "sorted", "str", "sum", "tuple",
+                    "type", "zip",
+                )
+                if k in _builtins_src
+            }
+            _safe_builtins["__import__"] = _safe_import
+
             namespace = {
+                "__builtins__": _safe_builtins,
                 "alt": alt,
                 "pd": pd,
                 "df": df,
             }
 
-            exec(viz_code, namespace)
+            exec(viz_code, namespace)  # nosec B102 — restricted builtins, LLM-generated Altair charts only
 
             chart = namespace.get("chart")
             if chart is None:

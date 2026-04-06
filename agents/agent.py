@@ -288,7 +288,7 @@ class AIAgent(AgentPipelineMixin):
             structure_parts.append(f"{col}:{col_type}")
 
         structure_str = "|".join(structure_parts)
-        cache_key = hashlib.md5(structure_str.encode()).hexdigest()
+        cache_key = hashlib.md5(structure_str.encode(), usedforsecurity=False).hexdigest()
 
         logger.debug(
             f"Generated visualization cache key: {cache_key} for columns: {columns}"
