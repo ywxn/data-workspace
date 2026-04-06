@@ -41,7 +41,6 @@ hiddenimports = [
     "pymysql",
     "psycopg2",
     "pyodbc",
-    "cx_Oracle",
     "oracledb",
     "sentence_transformers.SentenceTransformer",
     "transformers.models.auto.modeling_auto",

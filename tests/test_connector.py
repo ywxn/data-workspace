@@ -98,7 +98,7 @@ class TestSupportedDatabases:
             "mysql": "mysql+mysqlconnector",
             "postgresql": "postgresql+psycopg2",
             "sqlite": "sqlite",
-            "oracle": "oracle+cx_oracle",
+            "oracle": "oracle+oracledb",
             "sqlserver": "mssql+pyodbc",
         }
 

@@ -20,7 +20,7 @@ mysql-connector-python>=8.0.33
 psycopg2-binary>=2.9.0
 pyodbc>=5.0.0
 setuptools>=65.0.0  # Required for some database drivers
-cx_Oracle>=8.3.0
+oracledb>=2.0.0
 
 # Data Visualization
 altair>=5.0.0

@@ -469,17 +469,14 @@ void save_requirements_hash(void) {
     if (f) { fprintf(f, "%lu", h); fclose(f); }
 }
 
-/* Stage 3: Install pip dependencies if requirements.txt has changed.
- * cx_Oracle is filtered out on all platforms because it requires an Oracle
- * Instant Client SDK that most users won't have, and a failed build would
- * block the entire install.  See the TODO below for future plans. */
+/* Stage 3: Install pip dependencies if requirements.txt has changed. */
 void install_requirements(void) {
     if (!requirements_changed()) {
         printf("Dependencies already satisfied.\n");
         return;
     }
 
-    printf("Installing dependencies (skipping cx_Oracle)...\n");
+    printf("Installing dependencies...\n");
 
     char cmd[1024];
 
@@ -487,38 +484,14 @@ void install_requirements(void) {
     snprintf(cmd, sizeof(cmd), "%s -m pip install --upgrade pip", VENV_PYTHON);
     run_cmd(cmd);
 
-#ifdef _WIN32
-    // Windows: filter out cx_Oracle using findstr
-    // This is necessary, because it will break pip on Windows where cx_Oracle has no compatible wheel and building from source is not feasible for most users. On Linux/macOS we can just let it fail to install, which is less disruptive.
-    // TODO: Figure out how to allow oracle users to install cx_Oracle if they want to use it, without breaking everyone else on Windows. Maybe a separate requirements-oracle.txt that advanced users can install manually if they have the necessary setup?
     snprintf(cmd, sizeof(cmd),
-             "findstr /V /C:\"cx_Oracle\" requirements.txt > temp_requirements.txt"); // Piping would be trivial, but if requirements.txt is large then it can exceed Windows command length limits, so we write to a temp file instead
+             "%s -m pip install -r requirements.txt", VENV_PYTHON);
     run_cmd(cmd);
 
-    snprintf(cmd, sizeof(cmd),
-             "%s -m pip install -r temp_requirements.txt", VENV_PYTHON);
-    run_cmd(cmd);
-
-    snprintf(cmd, sizeof(cmd), "del temp_requirements.txt");
-    run_cmd(cmd);
-#else
-    // Linux/macOS: filter out cx_Oracle
-    snprintf(cmd, sizeof(cmd),
-             "grep -v '^cx_Oracle' requirements.txt > temp_requirements.txt");
-    run_cmd(cmd);
-
-    snprintf(cmd, sizeof(cmd),
-             "%s -m pip install -r temp_requirements.txt", VENV_PYTHON);
-    run_cmd(cmd);
-
-    snprintf(cmd, sizeof(cmd), "rm temp_requirements.txt");
-    run_cmd(cmd);
-#endif
-
-    // Save hash so we don’t reinstall next time
+    // Save hash so we don't reinstall next time
     save_requirements_hash();
 
-    printf("Dependencies installed (cx_Oracle skipped).\n");
+    printf("Dependencies installed.\n");
 }
 
 /* Stage 4: Launch the main Python application using the venv interpreter. */

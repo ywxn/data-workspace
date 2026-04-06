@@ -19,7 +19,7 @@ class DatabaseConnector:
         "postgres": "postgresql+psycopg2",
         "sqlserver": "mssql+pyodbc",
         "mssql": "mssql+pyodbc",
-        "oracle": "oracle+cx_oracle",
+        "oracle": "oracle+oracledb",
         "odbc": "odbc",
     }
 
