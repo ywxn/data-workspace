@@ -217,7 +217,9 @@ class NLPTestRunner:
                 match = "✓" if m.get("match") else "✗"
 
                 pred = (
-                    ", ".join(f"{t} ({r['conf'].get(t,0):.3f})" for t in r["predicted"])
+                    ", ".join(
+                        f"{t} ({r['conf'].get(t, 0):.3f})" for t in r["predicted"]
+                    )
                     or "(none)"
                 )
 
@@ -229,9 +231,9 @@ class NLPTestRunner:
                 md += [
                     f"- Expected: `{', '.join(r['expected'])}`",
                     f"- Predicted: `{pred}`",
-                    f"- Precision: {m.get('precision',0):.3f}  "
-                    f"Recall: {m.get('recall',0):.3f}  "
-                    f"F1: {m.get('f1',0):.3f}",
+                    f"- Precision: {m.get('precision', 0):.3f}  "
+                    f"Recall: {m.get('recall', 0):.3f}  "
+                    f"F1: {m.get('f1', 0):.3f}",
                     "",
                 ]
 

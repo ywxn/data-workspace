@@ -189,7 +189,7 @@ class AgentPipelineMixin(_AgentHostBase):
             logger.debug("Clarification flow disabled in config")
             return None
 
-        mode = (interaction_mode or ConfigManager.get_interaction_mode() or "analyst")
+        mode = interaction_mode or ConfigManager.get_interaction_mode() or "analyst"
         mode = mode.strip().lower()
         if mode not in ("cxo", "analyst"):
             mode = "analyst"

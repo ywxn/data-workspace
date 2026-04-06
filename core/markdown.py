@@ -123,9 +123,7 @@ def markdown_style_html() -> str:
 
 def markdown_body_to_html(md: str) -> str:
     """Convert markdown text to an HTML fragment (no ``<style>`` wrapper)."""
-    return markdown.markdown(
-        md, extensions=["tables", "fenced_code", "sane_lists"]
-    )
+    return markdown.markdown(md, extensions=["tables", "fenced_code", "sane_lists"])
 
 
 def markdown_to_html(md: str) -> str:

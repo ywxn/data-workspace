@@ -61,7 +61,7 @@ class InteractionModeDialog(QDialog):
         self.analyst_btn.setFont(QFont("Roboto", 11, QFont.Weight.Bold))
         self.analyst_btn.setMinimumHeight(60)
         self.analyst_btn.setToolTip(
-            "Full detail: SQL queries, intermediate results,\n" "and detailed analysis."
+            "Full detail: SQL queries, intermediate results,\nand detailed analysis."
         )
         self.analyst_btn.clicked.connect(self._select_analyst)
         layout.addWidget(self.analyst_btn)

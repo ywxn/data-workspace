@@ -1,4 +1,4 @@
-﻿"""
+"""
 Application-wide constants and configuration.
 
 Centralizes constants used across modules for easier maintenance

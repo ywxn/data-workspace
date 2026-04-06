@@ -50,7 +50,9 @@ def _run(coro):
 
 
 @patch("agents.pipeline.ConfigManager.get_clarification_enabled", return_value=True)
-@patch("agents.pipeline.AgentPipelineMixin._can_infer_query_meaning", return_value=False)
+@patch(
+    "agents.pipeline.AgentPipelineMixin._can_infer_query_meaning", return_value=False
+)
 def test_clarification_prompt_is_non_technical_in_cxo(
     _mock_infer,
     _mock_enabled,
@@ -75,7 +77,9 @@ def test_clarification_prompt_is_non_technical_in_cxo(
 
 
 @patch("agents.pipeline.ConfigManager.get_clarification_enabled", return_value=True)
-@patch("agents.pipeline.AgentPipelineMixin._can_infer_query_meaning", return_value=False)
+@patch(
+    "agents.pipeline.AgentPipelineMixin._can_infer_query_meaning", return_value=False
+)
 def test_clarification_prompt_allows_precision_in_analyst(
     _mock_infer,
     _mock_enabled,

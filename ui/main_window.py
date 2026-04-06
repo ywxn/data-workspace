@@ -35,7 +35,12 @@ from core.constants import (
     DARK_THEME_STYLESHEET,
     LIGHT_THEME_STYLESHEET,
 )
-from core.markdown import markdown_to_html, markdown_style_html, markdown_body_to_html, invalidate_markdown_style_cache
+from core.markdown import (
+    markdown_to_html,
+    markdown_style_html,
+    markdown_body_to_html,
+    invalidate_markdown_style_cache,
+)
 from core.logger import get_logger
 from db.connector import DatabaseConnector
 from db.processing import load_data, add_files_to_sqlite
@@ -764,7 +769,9 @@ class DataWorkspaceGUI(QMainWindow):
             prefix_md = current_md[:start_idx]
             suffix_md = current_md[end_idx:]
             new_md = prefix_md + new_block + suffix_md
-            self._set_current_markdown_incremental(prefix_md, new_block, suffix_md, new_md)
+            self._set_current_markdown_incremental(
+                prefix_md, new_block, suffix_md, new_md
+            )
         else:
             current_md = "\n\n".join(
                 [segment for segment in [current_md.strip(), new_block] if segment]
@@ -783,7 +790,9 @@ class DataWorkspaceGUI(QMainWindow):
         block_html = markdown_body_to_html(block_md)
         suffix_html = markdown_body_to_html(suffix_md) if suffix_md else ""
         prefix_html = self._cached_prefix_html or ""
-        full_html = markdown_style_html() + "\n" + prefix_html + block_html + suffix_html
+        full_html = (
+            markdown_style_html() + "\n" + prefix_html + block_html + suffix_html
+        )
 
         scroll_bar = self.conversation_display.verticalScrollBar()
         was_near_bottom = True
@@ -1533,9 +1542,7 @@ class DataWorkspaceGUI(QMainWindow):
                                             }
                                             # Store semantic layer on project, not in data_source
                                             if semantic_layer:
-                                                self.backend.active_project.semantic_layer = (
-                                                    semantic_layer
-                                                )
+                                                self.backend.active_project.semantic_layer = semantic_layer
                                         self._autosave_project()
                                         QMessageBox.information(
                                             self,

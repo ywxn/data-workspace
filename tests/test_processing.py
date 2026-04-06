@@ -381,7 +381,7 @@ class TestDataFormatting:
         data = {"ratio": [0.156, 0.842]}
 
         df = pd.DataFrame(data)
-        df["percentage"] = df["ratio"].apply(lambda x: f"{x*100:.1f}%")
+        df["percentage"] = df["ratio"].apply(lambda x: f"{x * 100:.1f}%")
 
         assert "%" in df["percentage"].iloc[0]
 

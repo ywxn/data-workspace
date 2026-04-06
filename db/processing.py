@@ -34,7 +34,7 @@ def _quote_identifier(connector: DatabaseConnector, name: str) -> str:
 
 
 def _quote_sqlite_identifier(name: str) -> str:
-    return f"\"{name.replace('"', '""')}\""
+    return f'"{name.replace('"', '""')}"'
 
 
 def _normalize_columns(raw_columns: List[Any]) -> List[str]:

@@ -89,8 +89,7 @@ class LLMClient:
 
                 delay_seconds = self._get_rate_limit_backoff_seconds(e, retry_index)
                 logger.warning(
-                    "Rate limit encountered from %s; retrying in %.2fs "
-                    "(attempt %d/%d)",
+                    "Rate limit encountered from %s; retrying in %.2fs (attempt %d/%d)",
                     self.api_provider,
                     delay_seconds,
                     retry_index + 1,

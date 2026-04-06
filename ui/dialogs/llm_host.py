@@ -236,7 +236,7 @@ class AIHostConfigDialog(QDialog):
             QMessageBox.information(
                 self,
                 "Success",
-                f"AI host set to {provider}.\n\n" "The existing API key will be used.",
+                f"AI host set to {provider}.\n\nThe existing API key will be used.",
             )
             self.accept()
             return
@@ -562,7 +562,7 @@ class LocalLLMSettingsDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Connection Failed",
-                f"Could not reach {url}:\n\n{e}\n\n" "Make sure the server is running.",
+                f"Could not reach {url}:\n\n{e}\n\nMake sure the server is running.",
             )
 
     # ------------------------------------------------------------------
