@@ -4,6 +4,14 @@
 # Agent Prompt Templates
 # ============================================================================
 
+# TODO: Update each prompt with security rules. As of now (2026-04-06), the code generation agent doesn't seem to be respecting the
+# security rules, which is a critical issue. Thankfully, the security rules scan the output for forbidden keywords, but this results
+# in the correction agent running multiple times, until it fails for the last time and returns the error message "FORBIDDEN keyword
+# detected in SQL output". This is a critical issue that needs to be fixed immediately. The correction agent should be updated to
+# understand the security rules and ensure that the generated SQL does not contain any forbidden keywords, rather than relying on the
+# security rules to catch these issues after the fact. This will improve the efficiency and reliability of the system, and prevent
+# unnecessary iterations of the correction agent.
+
 PLANNER_SYSTEM_PROMPT_TEMPLATE = """You are a senior data analysis planner responsible for translating a user's question into a precise, executable analysis plan based ONLY on the provided SQL schema and samples.
 
 You do NOT write SQL. You ONLY produce a structured plan.
