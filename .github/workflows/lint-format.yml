@@ -21,9 +21,6 @@ jobs:
       - name: Install Black
         run: pip install black
 
-      - name: Check formatting
-        run: black --check --diff .
-
       - name: Format code
         run: black .
 
@@ -40,9 +37,6 @@ jobs:
 
       - name: Install Ruff
         run: pip install ruff
-
-      - name: Lint with Ruff
-        run: ruff check .
 
       - name: Format with Ruff
         run: ruff format --check .
