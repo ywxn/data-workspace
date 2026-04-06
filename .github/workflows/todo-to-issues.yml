@@ -50,3 +50,4 @@ jobs:
             git push origin main
           else
             echo "No new issue URLs to commit"
+          fi
