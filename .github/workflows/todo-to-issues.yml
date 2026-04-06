@@ -10,7 +10,7 @@ on:
         description: "The SHA of the commit to get the diff for"
         required: true
       MANUAL_BASE_REF:
-        description: "By default, the commit entered above is compared to the one directly before it; to go back further, enter an earlier SHA here"
+        description: "Compare to an earlier commit SHA (optional)"
         required: false
 
 jobs:
@@ -19,32 +19,34 @@ jobs:
     permissions:
       contents: write
       issues: write
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Create issues from TODOs
+        id: todo
         uses: alstr/todo-to-issue-action@v5.1.14
         with:
           AUTO_P: true
           ESCAPE: true
-          CLOSE_ISSUES: true
+          CLOSE_ISSUES: false      # prevent auto-closing while testing
           INSERT_ISSUE_URLS: true
-        env:
-          MANUAL_COMMIT_REF: ${{ inputs.MANUAL_COMMIT_REF }}
-          MANUAL_BASE_REF: ${{ inputs.MANUAL_BASE_REF }}
+          MANUAL_COMMIT_REF: ${{ github.event.inputs.MANUAL_COMMIT_REF || github.sha }}
+          MANUAL_BASE_REF: ${{ github.event.inputs.MANUAL_BASE_REF || '' }}
 
       - name: Set Git user
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit and push issue URL changes
+      - name: Commit and push new issue URL changes
         run: |
-          git add -A
+          # Only commit if new issue URLs were inserted
           if [[ $(git status --porcelain) ]]; then
+            echo "New issue URLs inserted, committing..."
+            git add -A
             git commit -m "Automatically added GitHub issue links to TODOs"
             git push origin main
           else
-            echo "No changes to commit"
-          fi
+            echo "No new issue URLs to commit"
