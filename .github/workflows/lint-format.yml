@@ -41,5 +41,5 @@ jobs:
       - name: Lint with Ruff
         run: ruff check .
 
-      - name: Check for Ruff auto-fixable issues
-        run: ruff check --fix --diff .
+      - name: Format with Ruff
+        run: ruff format --check .

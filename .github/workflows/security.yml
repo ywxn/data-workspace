@@ -24,7 +24,7 @@ jobs:
         run: pip install bandit[toml]
 
       - name: Run Bandit
-        run: bandit -r agents/ core/ db/ memory/ ui/ -c pyproject.toml || bandit -r agents/ core/ db/ memory/ ui/ -ll
+        run: bandit -r agents/ core/ db/ memory/ ui/ -ll
 
   dependency-review:
     name: Dependency review
