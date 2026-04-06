@@ -258,9 +258,9 @@ API keys are stored using OS keyring via `keyring` when available. If keyring is
 - ✅ Repeated prompts produce memory cache hits
 - ✅ Retention policies prune correctly without data loss
 
-**Stage 5 (Future):** Enhanced visualization features
-- Interactive tables/graphs function without breaking static render/export
-
-**Stage 6 (Future):** Full refactor for separation of concerns
+**Stage 5 (Finished):** Full refactor for separation of concerns
 - No functional regressions in query generation, execution, or analysis
 - Separation of concerns improves testability and maintainability
+
+**Stage 6 (Future):** Enhanced visualization features
+- Interactive tables/graphs function without breaking static render/export
