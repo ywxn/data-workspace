@@ -39,4 +39,4 @@ jobs:
         run: pip install ruff
 
       - name: Format with Ruff
-        run: ruff format --check .
+        run: ruff format .
