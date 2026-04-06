@@ -24,6 +24,9 @@ jobs:
       - name: Check formatting
         run: black --check --diff .
 
+      - name: Format code
+        run: black .
+
   ruff:
     name: Ruff (linting)
     runs-on: ubuntu-latest
