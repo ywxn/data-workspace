@@ -690,18 +690,20 @@ class DataWorkspaceGUI(QMainWindow):
                 saved_ratio = old_value / old_max
 
         self.current_markdown = md
-        self.conversation_display.setHtml(markdown_to_html(md))
 
-        if scroll_bar:
-            if was_near_bottom:
-                QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_bar.maximum()))
-            elif saved_ratio is not None:
-                QTimer.singleShot(
-                    0,
-                    lambda: scroll_bar.setValue(
-                        int(scroll_bar.maximum() * saved_ratio)
-                    ),
-                )
+        # Suppress repaints while replacing HTML and restoring scroll
+        # to avoid the brief flash at scroll-position-0.
+        self.conversation_display.setUpdatesEnabled(False)
+        try:
+            self.conversation_display.setHtml(markdown_to_html(md))
+
+            if scroll_bar:
+                if was_near_bottom:
+                    scroll_bar.setValue(scroll_bar.maximum())
+                elif saved_ratio is not None:
+                    scroll_bar.setValue(int(scroll_bar.maximum() * saved_ratio))
+        finally:
+            self.conversation_display.setUpdatesEnabled(True)
 
     def _build_processing_block(self) -> str:
         # Animated dots for processing indicator
