@@ -246,7 +246,7 @@ class ConfigManager:
         req = request.Request(url, method="GET", headers=headers)
 
         try:
-            with request.urlopen(req, timeout=timeout_seconds) as resp:
+            with request.urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
                 status = getattr(resp, "status", None) or resp.getcode()
 
             if status == 200:

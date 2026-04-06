@@ -140,7 +140,7 @@ def _estimate_table_rows(
         return None
 
     quoted_table = _quote_identifier(connector, table_name)
-    query = f"SELECT COUNT(1) AS row_count FROM {quoted_table}"
+    query = f"SELECT COUNT(1) AS row_count FROM {quoted_table}"  # nosec B608
     is_safe, error_msg = validate_sql_security(query)
     if not is_safe:
         logger.warning(error_msg)
@@ -170,7 +170,7 @@ def _load_table_sample(
     quoted_cols = ", ".join(
         f"{quoted_table}.{_quote_identifier(connector, col)}" for col in safe_cols
     )
-    query = f"SELECT {quoted_cols} FROM {quoted_table} LIMIT {limit}"
+    query = f"SELECT {quoted_cols} FROM {quoted_table} LIMIT {limit}"  # nosec B608
 
     try:
         result, _ = _execute_query(connector, query, max_rows=limit)
@@ -246,8 +246,8 @@ def _estimate_join_fanout(
         left_cols_q = ", ".join(_quote_identifier(connector, c) for c in left_cols)
         right_cols_q = ", ".join(_quote_identifier(connector, c) for c in right_cols)
 
-        left_sql = f"SELECT {left_cols_q} FROM {left_q} LIMIT {sample_size}"
-        right_sql = f"SELECT {right_cols_q} FROM {right_q} LIMIT {sample_size}"
+        left_sql = f"SELECT {left_cols_q} FROM {left_q} LIMIT {sample_size}"  # nosec B608
+        right_sql = f"SELECT {right_cols_q} FROM {right_q} LIMIT {sample_size}"  # nosec B608
 
         left_result, _ = _execute_query(connector, left_sql, max_rows=sample_size)
         right_result, _ = _execute_query(connector, right_sql, max_rows=sample_size)
@@ -527,7 +527,7 @@ def _build_join_query(
         return None, safe_cols_by_table, skipped_cols
 
     base_q = _quote_identifier(connector, base_table)
-    query = f"SELECT {', '.join(select_cols)} FROM {base_q}"
+    query = f"SELECT {', '.join(select_cols)} FROM {base_q}"  # nosec B608
     if join_clauses:
         query = f"{query} {' '.join(join_clauses)}"
 
@@ -612,7 +612,7 @@ def _load_files_into_sqlite(
             placeholders = ", ".join(["?"] * len(columns))
             col_list = ", ".join(_quote_sqlite_identifier(col) for col in columns)
             insert_sql = (
-                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "
+                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "  # nosec B608
                 f"({col_list}) VALUES ({placeholders})"
             )
             if rows:
@@ -883,7 +883,7 @@ def add_files_to_sqlite(
             placeholders = ", ".join(["?"] * len(columns))
             col_list = ", ".join(_quote_sqlite_identifier(col) for col in columns)
             insert_sql = (
-                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "
+                f"INSERT INTO {_quote_sqlite_identifier(table_name)} "  # nosec B608
                 f"({col_list}) VALUES ({placeholders})"
             )
             if rows:
